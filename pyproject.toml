@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sigflow"
+version = "0.2.0"
+description = "Typed, functional, generator-based signal-processing graphs for Python"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+notebook = ["ipython", "jupyter", "ipywidgets"]
+test = ["pytest"]
+dev = ["pytest", "mypy", "ipywidgets", "jupyter", "nbconvert"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sigflow = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+# Block signatures are a runtime DSL (Sig["T", "N"], tuple returns) that static
+# checkers cannot read; those codes are disabled for the package itself.
+disable_error_code = ["name-defined", "valid-type", "misc", "type-arg", "syntax", "has-type"]
+
+[[tool.mypy.overrides]]
+# block bodies: parameters annotated with Sig[...] are arrays at runtime, SignalType to mypy
+module = ["sigflow.dsp", "sigflow.linalg", "sigflow.plot", "sigflow.io", "sigflow.draw"]
+disable_error_code = ["attr-defined", "operator", "return-value", "index", "assignment", "arg-type", "method-assign", "call-overload", "union-attr"]
