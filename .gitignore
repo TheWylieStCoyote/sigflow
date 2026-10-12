@@ -3,3 +3,7 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 *.gif
+.venv/
+venv/
+build/
+dist/
