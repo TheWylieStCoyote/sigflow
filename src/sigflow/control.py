@@ -11,6 +11,7 @@ Pausing gates the *sources*: in-flight frames drain through the graph and then
 everything idles until resumed. ``step()`` lets exactly one source frame
 through. ``stop()`` cancels the run; frames produced so far are kept.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,8 +30,15 @@ class Knob:
     while the graph runs. Stream blocks receive the Knob object itself and should read
     ``knob.value`` inside their loop (or just use ``float(knob)`` / ``knob()``)."""
 
-    def __init__(self, value: Any, name: str | None = None, min: float | None = None,
-                 max: float | None = None, step: float | None = None, choices: Any = None) -> None:
+    def __init__(
+        self,
+        value: Any,
+        name: str | None = None,
+        min: float | None = None,
+        max: float | None = None,
+        step: float | None = None,
+        choices: Any = None,
+    ) -> None:
         self._value = value
         self.name = name
         self.min, self.max, self.step = min, max, step
@@ -70,6 +78,7 @@ class Knob:
     def widget(self) -> Any:
         """The natural ipywidgets control for this knob (slider, toggle, dropdown or text)."""
         from .ui import knob_widget
+
         return knob_widget(self)
 
     def __call__(self) -> Any:
@@ -84,7 +93,12 @@ class Knob:
     def __repr__(self) -> str:
         return f"Knob({self.value!r}{', ' + self.name if self.name else ''})"
 
-    def slider(self, min: float | None = None, max: float | None = None, step: float | None = None) -> Any:
+    def slider(
+        self,
+        min: float | None = None,
+        max: float | None = None,
+        step: float | None = None,
+    ) -> Any:
         """An ipywidgets slider bound to this knob (both directions)."""
         if min is not None:
             self.min = min
@@ -111,7 +125,9 @@ class Control:
         self._paused = False
         self._steps = 0
         self.stop_requested = False
-        self.rate: float | None = None        # max source frames per second (None = unlimited)
+        self.rate: float | None = (
+            None  # max source frames per second (None = unlimited)
+        )
         self._last_release = 0.0
         self._lock = threading.Lock()
 
@@ -119,7 +135,9 @@ class Control:
     def attach(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
         self._gate = asyncio.Event()
-        if not self._paused or self._steps > 0:      # step() may have been called before attach
+        if (
+            not self._paused or self._steps > 0
+        ):  # step() may have been called before attach
             self._gate.set()
 
     async def wait(self) -> None:
@@ -180,22 +198,27 @@ class Control:
     def stop(self) -> None:
         self.stop_requested = True
         if self._gate is not None:
-            self._apply(self._gate.set)      # wake anything waiting so it can cancel
+            self._apply(self._gate.set)  # wake anything waiting so it can cancel
 
 
 class Run:
     """Handle on a graph running in a background thread with its own event loop."""
 
-    def __init__(self, graph: Any, paused: bool = False, keep: int | None = None, **options: Any) -> None:
+    def __init__(
+        self, graph: Any, paused: bool = False, keep: int | None = None, **options: Any
+    ) -> None:
         from .progress import Monitor
+
         self.graph = graph
-        self.keep = keep                     # max frames to retain (None = all)
+        self.keep = keep  # max frames to retain (None = all)
         self.control = Control()
         self.monitor: Monitor = options.pop("monitor", None) or Monitor()
         self.frames: list[Frame] = []
-        self.recording: list[Frame] = []     # frames collected while Record is on
+        self.recording: list[Frame] = []  # frames collected while Record is on
         self.recording_on = False
-        self.snapshots: list[Frame] = []     # frames kept with the Snapshot button / .snapshot()
+        self.snapshots: list[
+            Frame
+        ] = []  # frames kept with the Snapshot button / .snapshot()
         self.exception: BaseException | None = None
         self._options = options
         self._done = threading.Event()
@@ -203,7 +226,9 @@ class Run:
         self._ui: Any = None
         if paused:
             self.control.pause()
-        self._thread = threading.Thread(target=self._main, name="sigflow-run", daemon=True)
+        self._thread = threading.Thread(
+            target=self._main, name="sigflow-run", daemon=True
+        )
         self._thread.start()
 
     # -- execution --------------------------------------------------------- #
@@ -225,13 +250,19 @@ class Run:
                 if sink is not None:
                     sink(f)
 
-            await arun(self.graph, sink=collect, monitor=self.monitor, control=self.control, **opts)
+            await arun(
+                self.graph,
+                sink=collect,
+                monitor=self.monitor,
+                control=self.control,
+                **opts,
+            )
 
         try:
             asyncio.run(body())
         except asyncio.CancelledError:
             self._cancelled = True
-        except BaseException as e:   # noqa: BLE001 - surfaced via .exception
+        except BaseException as e:  # noqa: BLE001 - surfaced via .exception
             self.exception = e
         finally:
             self._done.set()
@@ -281,6 +312,7 @@ class Run:
         """Capture source positions and Stateful block states (pause first for a clean cut);
         ``g.start(resume=ckpt_or_path)`` / ``run(g, resume=...)`` continues from it."""
         from .persist import checkpoint
+
         return checkpoint(self.graph, self.monitor, path)
 
     def wait(self, timeout: float | None = None) -> list[Frame]:
@@ -324,8 +356,15 @@ class Run:
         return f"<Run {self.graph.name!r} {self.state}: {len(self.frames)} frames>"
 
     # -- notebook UI ------------------------------------------------------- #
-    def controls(self, plots: Any = (), knobs: Any = (), refresh: float = 0.4, table: bool = True,
-                 width: int = 520, title: str | None = None) -> Any:
+    def controls(
+        self,
+        plots: Any = (),
+        knobs: Any = (),
+        refresh: float = 0.4,
+        table: bool = True,
+        width: int = 520,
+        title: str | None = None,
+    ) -> Any:
         """Display an interactive panel for this run (kept as ``run.panel``):
 
         Pause / Resume / Step (with a frame count) / Stop, Snapshot and Record buttons,
@@ -335,11 +374,20 @@ class Run:
 
         Needs ``ipywidgets`` in the kernel; otherwise a status line and instructions appear."""
         from .ui import ControlPanel, have_widgets
+
         if not have_widgets():
             return self._html_controls(refresh)
         from IPython.display import display
-        self.panel = ControlPanel(self, plots=plots, knobs=knobs, refresh=refresh, table=table,
-                                  width=width, title=title)
+
+        self.panel = ControlPanel(
+            self,
+            plots=plots,
+            knobs=knobs,
+            refresh=refresh,
+            table=table,
+            width=width,
+            title=title,
+        )
         self.widget = self.panel.widget
         display(self.widget)
         return None
@@ -347,13 +395,18 @@ class Run:
     def _html_controls(self, refresh: float) -> Any:
         from IPython.display import HTML, display
         from .ui import _HELP
+
         handle = display(HTML(""), display_id=True)
 
         def render() -> None:
             from .notebook import monitor_html
-            handle.update(HTML(
-                f"<div style='font-family:monospace'><b>{self.state}</b> · {len(self.frames)} frames"
-                f"<div style='color:#dc2626;margin:4px 0'>{_HELP}</div>{monitor_html(self.monitor)}</div>"))
+
+            handle.update(
+                HTML(
+                    f"<div style='font-family:monospace'><b>{self.state}</b> · {len(self.frames)} frames"
+                    f"<div style='color:#dc2626;margin:4px 0'>{_HELP}</div>{monitor_html(self.monitor)}</div>"
+                )
+            )
 
         def ticker() -> None:
             while not self.finished:
@@ -371,5 +424,5 @@ class Run:
         if self._ui is not None:
             try:
                 self._ui()
-            except Exception:   # pragma: no cover
+            except Exception:  # pragma: no cover
                 pass

@@ -4,6 +4,7 @@ Most of these are thin, typed wrappers around NumPy / SciPy; they show how to
 reuse existing library code with ``block(fn, inputs=..., outputs=...)`` and how
 to write stateful stream blocks as plain generators.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,11 +22,43 @@ from .graph import Block
 from .types import Sig, StreamType as Stream
 
 __all__ = [
-    "sine", "noise", "chirp", "impulse", "from_array", "ticker",
-    "chunk", "overlap", "buffer", "decimate", "window", "fft", "rfft", "ifft",
-    "magnitude", "power_db", "phase", "real", "imag", "to_complex", "scale", "offset", "mix",
-    "lfilter", "fir", "hilbert", "resample", "energy", "rms", "peak", "running_mean",
-    "clip", "detect_clipping", "printer", "collect", "timestamp", "to_units",
+    "sine",
+    "noise",
+    "chirp",
+    "impulse",
+    "from_array",
+    "ticker",
+    "chunk",
+    "overlap",
+    "buffer",
+    "decimate",
+    "window",
+    "fft",
+    "rfft",
+    "ifft",
+    "magnitude",
+    "power_db",
+    "phase",
+    "real",
+    "imag",
+    "to_complex",
+    "scale",
+    "offset",
+    "mix",
+    "lfilter",
+    "fir",
+    "hilbert",
+    "resample",
+    "energy",
+    "rms",
+    "peak",
+    "running_mean",
+    "clip",
+    "detect_clipping",
+    "printer",
+    "collect",
+    "timestamp",
+    "to_units",
 ]
 
 Real = Sig[float, "N"]
@@ -36,22 +69,40 @@ Complex = Sig[complex, "N"]
 # Sources
 # --------------------------------------------------------------------------- #
 
+
 @source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
-def sine(freq: float = 1000.0, rate: float = 48_000.0, n: int = 1024, frames: int = 10,
-         amplitude: float = 1.0, phase: float = 0.0) -> Sig[float, "N"]:
+def sine(
+    freq: float = 1000.0,
+    rate: float = 48_000.0,
+    n: int = 1024,
+    frames: int = 10,
+    amplitude: float = 1.0,
+    phase: float = 0.0,
+) -> Sig[float, "N"]:
     """Continuous sine wave delivered in frames of ``n`` samples."""
     t0 = 0
     for i in range(frames):
         t = (np.arange(n) + t0) / rate
-        yield Frame(amplitude * np.sin(2 * np.pi * freq * t + phase),
-                    meta={"t0": t0 / rate, "seq": i}, stream={"rate": rate, "source": "sine"})
+        yield Frame(
+            amplitude * np.sin(2 * np.pi * freq * t + phase),
+            meta={"t0": t0 / rate, "seq": i},
+            stream={"rate": rate, "source": "sine"},
+        )
         t0 += n
 
 
-@source(refine=lambda n, complex, **_: Sig[complex_ if complex else float, (n,)],
-        total=lambda frames, **_: frames)
-def noise(n: int = 1024, frames: int = 10, sigma: float = 1.0, seed: int | None = None,
-          rate: float = 48_000.0, complex: bool = False) -> Sig[float, "N"]:
+@source(
+    refine=lambda n, complex, **_: Sig[complex_ if complex else float, (n,)],
+    total=lambda frames, **_: frames,
+)
+def noise(
+    n: int = 1024,
+    frames: int = 10,
+    sigma: float = 1.0,
+    seed: int | None = None,
+    rate: float = 48_000.0,
+    complex: bool = False,
+) -> Sig[float, "N"]:
     """White Gaussian noise frames."""
     rng = np.random.default_rng(seed)
     for i in range(frames):
@@ -62,14 +113,22 @@ def noise(n: int = 1024, frames: int = 10, sigma: float = 1.0, seed: int | None 
 
 
 @source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
-def chirp(f0: float = 100.0, f1: float = 5000.0, rate: float = 48_000.0, n: int = 1024,
-          frames: int = 10) -> Sig[float, "N"]:
+def chirp(
+    f0: float = 100.0,
+    f1: float = 5000.0,
+    rate: float = 48_000.0,
+    n: int = 1024,
+    frames: int = 10,
+) -> Sig[float, "N"]:
     """Linear chirp sweeping f0 -> f1 across all frames (computed lazily, frame by frame)."""
     t1 = n * frames / rate
     for i in range(frames):
         t = (np.arange(n) + i * n) / rate
-        yield Frame(ss.chirp(t, f0, t1, f1), meta={"seq": i, "t0": i * n / rate},
-                    stream={"rate": rate, "source": "chirp"})
+        yield Frame(
+            ss.chirp(t, f0, t1, f1),
+            meta={"seq": i, "t0": i * n / rate},
+            stream={"rate": rate, "source": "chirp"},
+        )
 
 
 @source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
@@ -82,7 +141,9 @@ def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Sig[float, "N"]:
 
 
 @source
-def from_array(x: Any, n: int | None = None, rate: float | None = None) -> Sig["T", "N"]:
+def from_array(
+    x: Any, n: int | None = None, rate: float | None = None
+) -> Sig["T", "N"]:
     """Emit an array as one frame, or sliced into frames of ``n`` samples."""
     x = np.asarray(x)
     stream = {"rate": rate} if rate else {}
@@ -90,7 +151,7 @@ def from_array(x: Any, n: int | None = None, rate: float | None = None) -> Sig["
         yield Frame(x, stream=stream)
         return
     for i in range(0, len(x) - n + 1, n):
-        yield Frame(x[i:i + n], meta={"seq": i // n, "offset": i}, stream=stream)
+        yield Frame(x[i : i + n], meta={"seq": i // n, "offset": i}, stream=stream)
 
 
 @source(total=lambda count, **_: count)
@@ -105,14 +166,15 @@ async def ticker(period: float = 0.1, count: int = 10) -> Sig[dict]:
 # Stream (stateful) blocks – plain generators
 # --------------------------------------------------------------------------- #
 
+
 class _Reframer:
     """Shared bookkeeping for re-framing stream blocks: absolute sample position and the
     time origin of the stream, so every output frame gets an exact ``t0``."""
 
     def __init__(self) -> None:
         self.buf = None
-        self.pos = 0            # absolute index of buf[0] in the stream
-        self.origin = None      # t0 of the first frame seen (its sample 0)
+        self.pos = 0  # absolute index of buf[0] in the stream
+        self.origin = None  # t0 of the first frame seen (its sample 0)
         self.rate = None
 
     def push(self, f: Frame) -> None:
@@ -120,7 +182,11 @@ class _Reframer:
         if self.origin is None:
             self.origin = f.meta.get("t0", 0.0) or 0.0
             self.rate = f.stream.get("rate")
-        self.buf = x if self.buf is None or self.buf.size == 0 else np.concatenate([self.buf, x])
+        self.buf = (
+            x
+            if self.buf is None or self.buf.size == 0
+            else np.concatenate([self.buf, x])
+        )
 
     def take(self, f: Frame, n: int, hop: int) -> Frame:
         """The next window of ``n`` samples as a frame stamped with its exact start time,
@@ -143,7 +209,9 @@ def chunk(xs: Stream[Framed[Sig["T", None]]], n: int = 256) -> Sig["T", "N"]:
 
 
 @block(refine=lambda n, **_: Sig["T", (n,)])
-def overlap(xs: Stream[Framed[Sig["T", "N"]]], n: int = 256, hop: int = 128) -> Sig["T", "M"]:
+def overlap(
+    xs: Stream[Framed[Sig["T", "N"]]], n: int = 256, hop: int = 128
+) -> Sig["T", "M"]:
     """Sliding windows of length ``n`` advanced by ``hop`` samples; each window's ``t0``
     is exact (computed from the sample position), not inherited from the input chunk."""
     r = _Reframer()
@@ -160,8 +228,10 @@ def buffer(xs: Stream[Framed[Sig["T", "N"]]], count: int = 8) -> Sig["T", ("K", 
     for f in xs:
         buf.append(f)
         if len(buf) == count:
-            yield f.evolve(data=np.stack([b.data for b in buf]), meta={"t0": buf[0].meta.get("t0")}
-                           if "t0" in buf[0].meta else {})
+            yield f.evolve(
+                data=np.stack([b.data for b in buf]),
+                meta={"t0": buf[0].meta.get("t0")} if "t0" in buf[0].meta else {},
+            )
             buf = []
 
 
@@ -179,7 +249,9 @@ def running_mean(xs: Stream[Sig[float, "N"]], alpha: float = 0.1) -> Sig[float, 
     """Exponential moving average across frames (stateful stream block)."""
     acc = None
     for x in xs:
-        acc = np.asarray(x, dtype=float) if acc is None else (1 - alpha) * acc + alpha * x
+        acc = (
+            np.asarray(x, dtype=float) if acc is None else (1 - alpha) * acc + alpha * x
+        )
         yield acc
 
 
@@ -202,6 +274,7 @@ def timestamp(xs: Stream[Frame]) -> Frame:
 # Map blocks – pure functions
 # --------------------------------------------------------------------------- #
 
+
 @block
 def window(x: Sig["T", "N"], kind: str = "hann") -> Sig["T", "N"]:
     """Multiply by a window (any name scipy.signal.get_window accepts)."""
@@ -209,10 +282,18 @@ def window(x: Sig["T", "N"], kind: str = "hann") -> Sig["T", "N"]:
 
 
 fft = block(np.fft.fft, name="fft", inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
-ifft = block(np.fft.ifft, name="ifft", inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
-rfft = block(np.fft.rfft, name="rfft", inputs=Sig[float, "N"], outputs=Sig[complex, "M"])
-hilbert = block(ss.hilbert, name="hilbert", inputs=Sig[float, "N"], outputs=Sig[complex, "N"])
-magnitude = block(np.abs, name="magnitude", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
+ifft = block(
+    np.fft.ifft, name="ifft", inputs=Sig[complex, "N"], outputs=Sig[complex, "N"]
+)
+rfft = block(
+    np.fft.rfft, name="rfft", inputs=Sig[float, "N"], outputs=Sig[complex, "M"]
+)
+hilbert = block(
+    ss.hilbert, name="hilbert", inputs=Sig[float, "N"], outputs=Sig[complex, "N"]
+)
+magnitude = block(
+    np.abs, name="magnitude", inputs=Sig[complex, "N"], outputs=Sig[float, "N"]
+)
 phase = block(np.angle, name="phase", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
 real = block(np.real, name="real", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
 imag = block(np.imag, name="imag", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
@@ -234,13 +315,18 @@ def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
 
 
 @block(refine=lambda to, **_: Sig["T", "N", None, to])
-def to_units(f: Framed[Sig["T", "N"]], to: str = "V", assume: str | None = None) -> Sig["T", "N", None, None]:
+def to_units(
+    f: Framed[Sig["T", "N"]], to: str = "V", assume: str | None = None
+) -> Sig["T", "N", None, None]:
     """Convert a stream to other units. The source units come from the frame's stream
     annotation ``units`` (or ``assume``); the output type and annotation carry ``to``."""
     from .units import factor
+
     src = assume or f.stream.get("units")
     if src is None:
-        raise ValueError("to_units: the stream carries no 'units' annotation; pass assume=...")
+        raise ValueError(
+            "to_units: the stream carries no 'units' annotation; pass assume=..."
+        )
     return f.evolve(data=f.data * factor(src, to), stream={"units": to})
 
 
@@ -250,7 +336,9 @@ def offset(x: Sig[float, "N"], value: float = 0.0) -> Sig[float, "N"]:
 
 
 @block
-def mix(x: Sig[complex, "N"], freq: float = 0.0, rate: float = 48_000.0) -> Sig[complex, "N"]:
+def mix(
+    x: Sig[complex, "N"], freq: float = 0.0, rate: float = 48_000.0
+) -> Sig[complex, "N"]:
     """Frequency-shift a complex frame by ``freq`` (stateless: phase restarts per frame)."""
     t = np.arange(len(x)) / rate
     return x * np.exp(2j * np.pi * freq * t)
@@ -276,8 +364,10 @@ def fir(xs: Stream[Sig[float, "N"]], taps: Any = (1.0,)) -> Sig[float, "N"]:
 def resample(f: Framed[Sig[float, "N"]], up: int = 1, down: int = 1) -> Sig[float, "M"]:
     """Rational resampling; the stream's ``rate`` annotation is scaled (time kept)."""
     rate = f.stream.get("rate")
-    return f.evolve(data=ss.resample_poly(f.data, up, down),
-                    stream={"rate": rate * up / down} if rate else {})
+    return f.evolve(
+        data=ss.resample_poly(f.data, up, down),
+        stream={"rate": rate * up / down} if rate else {},
+    )
 
 
 @block
@@ -307,13 +397,16 @@ def detect_clipping(f: Framed[Sig[float, "N"]], limit: float = 1.0) -> Sig[float
     mask = np.abs(f.data) >= limit
     out = f.annotate_samples(clipped=mask)
     if mask.any():
-        out = out.with_issue(f"{int(mask.sum())} samples clipped", "warning", "detect_clipping")
+        out = out.with_issue(
+            f"{int(mask.sum())} samples clipped", "warning", "detect_clipping"
+        )
     return out
 
 
 # --------------------------------------------------------------------------- #
 # Sinks / taps
 # --------------------------------------------------------------------------- #
+
 
 @tap
 def printer(x: Any, prefix: str = "") -> None:

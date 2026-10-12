@@ -18,6 +18,7 @@ Sinks (taps: the frame passes through unchanged):
 A sink object is a graph node; call ``sink.close()`` after the run (or use it as a
 context manager) to flush files.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -32,28 +33,49 @@ from .frame import Frame
 from .graph import Block
 from .types import Sig
 
-__all__ = ["wav", "raw", "npy", "csv_rows", "udp", "wav_sink", "npy_sink", "csv_log", "udp_sink"]
+__all__ = [
+    "wav",
+    "raw",
+    "npy",
+    "csv_rows",
+    "udp",
+    "wav_sink",
+    "npy_sink",
+    "csv_log",
+    "udp_sink",
+]
 
 
 # --------------------------------------------------------------------------- #
 # Sources
 # --------------------------------------------------------------------------- #
 
-def _frames_of(x: np.ndarray, n: int, rate: float | None, name: str, path: str) -> Iterator[Frame]:
+
+def _frames_of(
+    x: np.ndarray, n: int, rate: float | None, name: str, path: str
+) -> Iterator[Frame]:
     total = len(x)
     stream = {"source": name, "path": os.fspath(path)}
     if rate:
         stream["rate"] = rate
     for i in range(0, total - n + 1, n):
-        yield Frame(np.array(x[i:i + n]), meta={"seq": i // n, "offset": i,
-                                                 "t0": i / rate if rate else None},
-                    stream=stream)
+        yield Frame(
+            np.array(x[i : i + n]),
+            meta={"seq": i // n, "offset": i, "t0": i / rate if rate else None},
+            stream=stream,
+        )
 
 
-@source(total=lambda path, n, **_: _wav_frames(path, n), refine=lambda n, **_: Sig["T", (n,)])
-def wav(path: str, n: int = 1024, channel: int | None = None, float32: bool = True) -> Sig["T", "N"]:
+@source(
+    total=lambda path, n, **_: _wav_frames(path, n),
+    refine=lambda n, **_: Sig["T", (n,)],
+)
+def wav(
+    path: str, n: int = 1024, channel: int | None = None, float32: bool = True
+) -> Sig["T", "N"]:
     """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one."""
     from scipy.io import wavfile
+
     rate, data = wavfile.read(path)
     if float32 and data.dtype.kind in "iu":
         data = data.astype(np.float32) / np.iinfo(data.dtype).max
@@ -65,14 +87,20 @@ def wav(path: str, n: int = 1024, channel: int | None = None, float32: bool = Tr
 def _wav_frames(path: str, n: int) -> int | None:
     try:
         from scipy.io import wavfile
+
         rate, data = wavfile.read(path, mmap=True)
         return len(data) // n
     except Exception:
         return None
 
 
-@source(total=lambda path, dtype, n, **_: _raw_frames(path, dtype, n), refine=lambda n, dtype, **_: Sig[dtype, (n,)])
-def raw(path: str, dtype: Any = np.complex64, n: int = 1024, rate: float | None = None) -> Sig["T", "N"]:
+@source(
+    total=lambda path, dtype, n, **_: _raw_frames(path, dtype, n),
+    refine=lambda n, dtype, **_: Sig[dtype, (n,)],
+)
+def raw(
+    path: str, dtype: Any = np.complex64, n: int = 1024, rate: float | None = None
+) -> Sig["T", "N"]:
     """Stream a raw binary file (what a GNU Radio file sink writes), memory-mapped."""
     data = np.memmap(path, dtype=np.dtype(dtype), mode="r")
     yield from _frames_of(data, n, rate, "raw", path)
@@ -99,7 +127,9 @@ def csv_rows(path: str, numeric: bool = True) -> Sig[dict]:
         for i, row in enumerate(csv.DictReader(fh)):
             if numeric:
                 row = {k: _maybe_float(v) for k, v in row.items()}
-            yield Frame(row, meta={"seq": i}, stream={"source": "csv", "path": os.fspath(path)})
+            yield Frame(
+                row, meta={"seq": i}, stream={"source": "csv", "path": os.fspath(path)}
+            )
 
 
 def _maybe_float(v: Any) -> Any:
@@ -110,8 +140,13 @@ def _maybe_float(v: Any) -> Any:
 
 
 @source
-async def udp(port: int, dtype: Any = np.float32, host: str = "127.0.0.1", count: int | None = None,
-              timeout: float | None = None) -> Sig["T", None]:
+async def udp(
+    port: int,
+    dtype: Any = np.float32,
+    host: str = "127.0.0.1",
+    count: int | None = None,
+    timeout: float | None = None,
+) -> Sig["T", None]:
     """Asynchronous UDP receiver: each datagram becomes one frame (array of ``dtype``).
     Stops after ``count`` datagrams, or ``timeout`` seconds of silence."""
     loop = asyncio.get_running_loop()
@@ -129,8 +164,11 @@ async def udp(port: int, dtype: Any = np.float32, host: str = "127.0.0.1", count
                 data, addr = await asyncio.wait_for(q.get(), timeout)
             except asyncio.TimeoutError:
                 return
-            yield Frame(np.frombuffer(data, dtype=np.dtype(dtype)).copy(),
-                        meta={"seq": k, "from": f"{addr[0]}:{addr[1]}"}, stream={"source": f"udp:{port}"})
+            yield Frame(
+                np.frombuffer(data, dtype=np.dtype(dtype)).copy(),
+                meta={"seq": k, "from": f"{addr[0]}:{addr[1]}"},
+                stream={"source": f"udp:{port}"},
+            )
             k += 1
     finally:
         transport.close()
@@ -140,11 +178,12 @@ async def udp(port: int, dtype: Any = np.float32, host: str = "127.0.0.1", count
 # Sinks
 # --------------------------------------------------------------------------- #
 
+
 class _Sink(Block):
     def __init__(self, fn: Any, name: str) -> None:
         super().__init__(tap(fn, name=name, inputs=Frame))
 
-    def close(self) -> Any:   # pragma: no cover - overridden
+    def close(self) -> Any:  # pragma: no cover - overridden
         pass
 
     def __enter__(self) -> "_Sink":
@@ -157,7 +196,9 @@ class _Sink(Block):
 class wav_sink(_Sink):
     """Collect frames and write them as one WAV file on ``close()``."""
 
-    def __init__(self, path: str, rate: float | None = None, dtype: Any = np.int16) -> None:
+    def __init__(
+        self, path: str, rate: float | None = None, dtype: Any = np.int16
+    ) -> None:
         self.path, self.rate, self.dtype = path, rate, np.dtype(dtype)
         self.chunks: list[np.ndarray] = []
         super().__init__(self._add, "wav_sink")
@@ -169,6 +210,7 @@ class wav_sink(_Sink):
 
     def close(self) -> str:
         from scipy.io import wavfile
+
         if not self.chunks:
             return self.path
         x = np.concatenate(self.chunks)
@@ -226,9 +268,15 @@ class udp_sink(_Sink):
 
     def __init__(self, host: str = "127.0.0.1", port: int = 9999) -> None:
         import socket
+
         self.addr = (host, port)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        super().__init__(lambda f: self.sock.sendto(np.ascontiguousarray(f.data).tobytes(), self.addr), "udp_sink")
+        super().__init__(
+            lambda f: self.sock.sendto(
+                np.ascontiguousarray(f.data).tobytes(), self.addr
+            ),
+            "udp_sink",
+        )
 
     def close(self) -> None:
         self.sock.close()

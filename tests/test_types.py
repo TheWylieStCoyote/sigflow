@@ -10,7 +10,9 @@ def test_sig_construction_and_display():
     assert t.dtype == np.dtype("complex64")
     assert t.shape == ("N",)
     assert str(t) == "Sig[complex64, (N,)]"
-    assert str(Sig[float, ("M", "N"), 48000, "V"]) == "Sig[float64, (M, N), 48000Hz, 'V']"
+    assert (
+        str(Sig[float, ("M", "N"), 48000, "V"]) == "Sig[float64, (M, N), 48000Hz, 'V']"
+    )
     assert str(Sig[Any]) == "Sig[Any]"
     assert Sig[dict].dtype is dict
     assert isinstance(Sig["T", "N"].dtype, DVar)
@@ -30,8 +32,8 @@ def test_unify_conflicts():
     with pytest.raises(TypeMismatch):
         unify(Sig[float, "N"], Sig[float, ("M", "N")])
     with pytest.raises(TypeMismatch):
-        unify(Sig[complex, "N"], Sig[float, "N"])      # complex cannot feed float
-    unify(Sig[float, "N"], Sig[complex, "N"])          # float -> complex is a safe cast
+        unify(Sig[complex, "N"], Sig[float, "N"])  # complex cannot feed float
+    unify(Sig[float, "N"], Sig[complex, "N"])  # float -> complex is a safe cast
     with pytest.raises(TypeMismatch):
         unify(Sig[float, "N", 48000], Sig[float, "N", 44100])
     with pytest.raises(TypeMismatch):
@@ -50,7 +52,7 @@ def test_dtype_variables():
     env = unify(Sig[float, "N"], Sig["T", "N"])
     assert env.value("T") == np.dtype(float)
     with pytest.raises(TypeMismatch):
-        unify(Sig["T", "N"], Sig[int, "N"], env)       # T=float64 cannot feed int
+        unify(Sig["T", "N"], Sig[int, "N"], env)  # T=float64 cannot feed int
 
 
 def test_tuple_types():
@@ -68,7 +70,7 @@ def test_scoping_keeps_symbols_local():
     b = scoped(Sig[float, "N"], "2")
     env = Env()
     env.bind(a.shape[0], 10)
-    env.bind(b.shape[0], 20)          # different scopes: no conflict
+    env.bind(b.shape[0], 20)  # different scopes: no conflict
     assert str(a) == "Sig[float64, (N,)]"
 
 

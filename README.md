@@ -9,24 +9,38 @@ import numpy as np
 from sigflow import block, Sig, Stream, run
 from sigflow import dsp, plot
 
+
 @block
 def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
     return x * gain
 
+
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:   # a stateful stream block
+def pairs(
+    xs: Stream[Sig[float, "N"]],
+) -> Sig[float, (2, "N")]:  # a stateful stream block
     buf = []
     for x in xs:
         buf.append(x)
         if len(buf) == 2:
-            yield np.stack(buf); buf = []
+            yield np.stack(buf)
+            buf = []
+
 
 spec = plot.spectrum(title="1 kHz tone")
-g = dsp.sine(freq=1000, rate=48_000, n=1024, frames=50) >> scale(gain=0.5) >> spec >> dsp.to_complex >> dsp.fft
+g = (
+    dsp.sine(freq=1000, rate=48_000, n=1024, frames=50)
+    >> scale(gain=0.5)
+    >> spec
+    >> dsp.to_complex
+    >> dsp.fft
+)
 
-frames = run(g, progress=True)          # or: await g.arun(),  for f in g: ...,  async for f in g: ...
-frames[-1].trace()                      # full lineage back to the source frame
-spec.save("tone.gif")                   # the plot remembered every frame -> animation
+frames = run(
+    g, progress=True
+)  # or: await g.arun(),  for f in g: ...,  async for f in g: ...
+frames[-1].trace()  # full lineage back to the source frame
+spec.save("tone.gif")  # the plot remembered every frame -> animation
 ```
 
 ```
@@ -180,10 +194,12 @@ number of consumers, and multi-input members receive their inputs zipped.
 ```python
 g = Graph("diamond")
 cov = g.add(src >> linalg.covariance, "cov")
-e   = g.add(eigh)                                   # named ports vals / vecs
-s   = g.add(summarize)                              # takes (vals, vecs, raw)
-g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(cov, s, "raw")
-g.output(s)                                         # several outputs -> a tuple
+e = g.add(eigh)  # named ports vals / vecs
+s = g.add(summarize)  # takes (vals, vecs, raw)
+g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(
+    cov, s, "raw"
+)
+g.output(s)  # several outputs -> a tuple
 ```
 
 A graph with `g.input(type)` instead of sources is a reusable node; `g.draw()`
@@ -238,12 +254,15 @@ A node with a tuple output — a fan-out, a zip, or a block that returns several
 signals — exposes **output ports**, selected with the subscript operator:
 
 ```python
-cov >> linalg.eigh[0] >> plot.line()              # eigenvalues only
-src >> (fft >> power_db | rms | peak)["rms"]      # a fan-out branch by name
-src >> (fft >> power_db | rms | peak)[0, 2]       # a tuple of two ports; [1:] also works
-eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-             outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
-mats >> eigh["vecs"]                              # named ports on a wrapped library function
+cov >> linalg.eigh[0] >> plot.line()  # eigenvalues only
+src >> (fft >> power_db | rms | peak)["rms"]  # a fan-out branch by name
+src >> (fft >> power_db | rms | peak)[0, 2]  # a tuple of two ports; [1:] also works
+eigh = block(
+    np.linalg.eigh,
+    inputs=Sig["T", ("N", "N")],
+    outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+)
+mats >> eigh["vecs"]  # named ports on a wrapped library function
 ```
 
 When several ports of one producer must reach *different* consumers, fan out
@@ -251,7 +270,9 @@ port selectors — `port(key)` is a selection that resolves to a typed `Select`
 once it is placed after a tuple-typed node, including inside a branch:
 
 ```python
-eigh >> (port("vecs") | port("vals") >> model_order) >> noise_subspace    # (vecs, order) -> block
+(
+    eigh >> (port("vecs") | port("vals") >> model_order) >> noise_subspace
+)  # (vecs, order) -> block
 (a & b & c) >> (port(0) >> validate | port(1) >> validate | port(2) >> validate)
 ```
 
@@ -264,12 +285,14 @@ no ports and `[]` raises, which keeps the door open for data slicing later.
 The same operator reads frames and lineage:
 
 ```python
-f["rate"]            # annotation lookup: frame-level, then stream-level, then sample-level
-f.get("snr", None)   # with a default;  "rate" in f
-f[1]                 # part 1 of a tuple frame (from a fan-out / zip), with its own provenance
-f.prov[0]            # this node;  f.prov[2] two steps upstream;  f.prov[-1] the root
-f.prov["fft"]        # nearest ancestor produced by a block called fft (its params, seq, parents)
-f.prov[1:3]          # nodes along the main line of descent;  "fft" in f.prov
+f["rate"]  # annotation lookup: frame-level, then stream-level, then sample-level
+f.get("snr", None)  # with a default;  "rate" in f
+f[1]  # part 1 of a tuple frame (from a fan-out / zip), with its own provenance
+f.prov[0]  # this node;  f.prov[2] two steps upstream;  f.prov[-1] the root
+f.prov[
+    "fft"
+]  # nearest ancestor produced by a block called fft (its params, seq, parents)
+f.prov[1:3]  # nodes along the main line of descent;  "fft" in f.prov
 ```
 
 ### Functional by construction — graphs connect to graphs
@@ -278,13 +301,13 @@ Graphs are immutable values built from operators, and a graph is a node like
 any other, so graphs connect exactly the way blocks do:
 
 ```python
-front = dsp.window >> dsp.to_complex >> dsp.fft      # no source: a reusable sub-graph
-back  = dsp.power_db >> dsp.rms
+front = dsp.window >> dsp.to_complex >> dsp.fft  # no source: a reusable sub-graph
+back = dsp.power_db >> dsp.rms
 
-dsp.sine(n=256) >> front >> back                     # chain graphs
-(rx >> front) & (ref >> front) >> compare            # zip two graphs
-src >> (front | front >> back)                       # a graph as a fan-out branch
-from_iterable(g1, type=g1.out_type) >> g2            # feed one run's output into another
+dsp.sine(n=256) >> front >> back  # chain graphs
+(rx >> front) & (ref >> front) >> compare  # zip two graphs
+src >> (front | front >> back)  # a graph as a fan-out branch
+from_iterable(g1, type=g1.out_type) >> g2  # feed one run's output into another
 ```
 
 The join is type-checked like any edge. A sub-graph may be used several times

@@ -3,14 +3,27 @@ import asyncio
 import numpy as np
 import pytest
 
-from sigflow import (MISSING, Frame, Framed, Sig, Stream, TypeMismatch, block, from_iterable,
-                     merge, run, source, tap)
+from sigflow import (
+    MISSING,
+    Frame,
+    Framed,
+    Sig,
+    Stream,
+    TypeMismatch,
+    block,
+    from_iterable,
+    merge,
+    run,
+    source,
+    tap,
+)
 from sigflow import dsp
 
 
 # --------------------------------------------------------------------------- #
 # Blocks used by the tests
 # --------------------------------------------------------------------------- #
+
 
 @block
 def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
@@ -59,6 +72,7 @@ async def aramp(count: int = 4, n: int = 3) -> Sig[float, "N"]:
 # Block definitions behave like functions
 # --------------------------------------------------------------------------- #
 
+
 def test_block_is_still_a_function():
     assert np.array_equal(scale(np.ones(3), gain=2), np.full(3, 2.0))
     assert scale.kind == "map" and pairs.kind == "stream" and ramp.kind == "source"
@@ -71,12 +85,13 @@ def test_wrapping_library_functions():
     out = run(ramp(count=1) >> dsp.to_complex >> fft)
     assert out[0].data.shape == (3,)
     with pytest.raises(TypeError):
-        scale(gainz=2)          # unknown configuration is rejected when placing a node
+        scale(gainz=2)  # unknown configuration is rejected when placing a node
 
 
 # --------------------------------------------------------------------------- #
 # Composition and static validation
 # --------------------------------------------------------------------------- #
+
 
 def test_pipeline_runs_and_carries_provenance():
     out = run(ramp(count=3) >> scale(gain=2) >> energy)
@@ -92,7 +107,7 @@ def test_type_mismatch_is_raised_at_build_time():
     with pytest.raises(TypeMismatch, match="rank"):
         ramp() >> energy >> scale
     with pytest.raises(TypeMismatch):
-        ramp() >> pairs >> scale            # (2, N) cannot feed (N,)
+        ramp() >> pairs >> scale  # (2, N) cannot feed (N,)
     with pytest.raises(TypeMismatch, match="source"):
         ramp() >> ramp()
 
@@ -134,7 +149,9 @@ def test_zip_and_merge_mix_sync_and_async_sources():
 
 
 def test_from_iterable_and_plain_functions():
-    g = from_iterable([np.ones(2), np.ones(2) * 2], Sig[float, "N"]) >> (lambda x: x.sum())
+    g = from_iterable([np.ones(2), np.ones(2) * 2], Sig[float, "N"]) >> (
+        lambda x: x.sum()
+    )
     assert [f.data for f in run(g)] == [2.0, 4.0]
 
 
@@ -151,8 +168,11 @@ def test_runtime_check_catches_lying_blocks():
 # Annotations, issues and error propagation
 # --------------------------------------------------------------------------- #
 
+
 def test_annotations_propagate_through_blocks():
-    src = from_iterable([Frame(np.ones(4), meta={"seq": 7}, stream={"rate": 100.0})], Sig[float, "N"])
+    src = from_iterable(
+        [Frame(np.ones(4), meta={"seq": 7}, stream={"rate": 100.0})], Sig[float, "N"]
+    )
     out = run(src >> scale(gain=2) >> scale(gain=2))
     assert out[0].meta["seq"] == 7 and out[0].stream["rate"] == 100.0
 
@@ -162,9 +182,9 @@ def test_sample_annotations_follow_the_leading_axis():
     def mark(f: Framed[Sig[float, "N"]]) -> Sig[float, "N"]:
         return f.annotate_samples(flag=f.data > 1)
 
-    out = run(ramp(count=3) >> mark >> scale(gain=2))      # N -> N keeps samples
+    out = run(ramp(count=3) >> mark >> scale(gain=2))  # N -> N keeps samples
     assert "flag" in out[2].samples
-    out = run(ramp(count=3) >> mark >> energy)             # N -> () drops them
+    out = run(ramp(count=3) >> mark >> energy)  # N -> () drops them
     assert not out[2].samples
 
 
@@ -188,7 +208,11 @@ def test_error_policies():
 
 
 def test_warnings_do_not_stop_computation():
-    out = run(dsp.sine(frames=1, n=64, amplitude=2.0) >> dsp.detect_clipping(limit=1.0) >> dsp.rms)
+    out = run(
+        dsp.sine(frames=1, n=64, amplitude=2.0)
+        >> dsp.detect_clipping(limit=1.0)
+        >> dsp.rms
+    )
     assert out[0].ok and out[0].warnings and out[0].samples == {}
 
 
@@ -204,7 +228,7 @@ def test_failed_frames_bypass_stream_blocks():
     good = [f for f in out if f.ok]
     assert len(failed) == 1 and len(good) == 2
     assert good[0].data.shape == (2, 3)
-    assert len(good[0].prov.parents) == 2          # provenance: the two frames consumed
+    assert len(good[0].prov.parents) == 2  # provenance: the two frames consumed
 
 
 def test_filter_by_returning_none_and_taps():
@@ -222,6 +246,7 @@ def test_filter_by_returning_none_and_taps():
 # Iteration APIs and progress
 # --------------------------------------------------------------------------- #
 
+
 def test_sync_and_async_iteration():
     g = ramp(count=3) >> scale(gain=2)
     assert [f.data[0] for f in g] == [0.0, 2.0, 4.0]
@@ -238,7 +263,7 @@ def test_arun_inside_running_loop_and_sync_run_from_loop():
     async def main():
         out = await g.arun()
         assert len(out) == 2
-        assert len(g.run()) == 2    # run() from within a loop uses a helper thread
+        assert len(g.run()) == 2  # run() from within a loop uses a helper thread
 
     asyncio.run(main())
 
@@ -269,14 +294,17 @@ def test_fanout_validates_every_branch():
         return 0.0
 
     with pytest.raises(TypeMismatch):
-        ramp() >> (energy | wants_matrix)            # second branch must be checked too
+        ramp() >> (energy | wants_matrix)  # second branch must be checked too
     g = dsp.sine(n=5, frames=2) >> (scale(gain=2) | pairs)
     env = g.validate()
-    assert g.stages[-1].branches[1].out_type.resolve(env).shape == (2, 5)   # pairs' N bound too
+    assert g.stages[-1].branches[1].out_type.resolve(env).shape == (
+        2,
+        5,
+    )  # pairs' N bound too
 
 
 def test_subgraphs_compose_and_can_be_reused():
-    front = dsp.window >> dsp.to_complex >> dsp.fft           # sourceless sub-graph
+    front = dsp.window >> dsp.to_complex >> dsp.fft  # sourceless sub-graph
     back = dsp.power_db >> dsp.rms
     assert len(run(dsp.sine(n=32, frames=2) >> front >> back)) == 2
     # the same sub-graph instance twice, with different sizes, in one graph
@@ -291,6 +319,7 @@ def test_subgraphs_compose_and_can_be_reused():
 
 def test_background_run_pause_step_stop():
     import time
+
     g = dsp.ticker(period=0.02, count=200) >> (lambda d: d["tick"])
     r = g.start(paused=True)
     time.sleep(0.15)
@@ -305,7 +334,9 @@ def test_background_run_pause_step_stop():
     time.sleep(0.1)
     n = len(r.frames)
     r.stop()
-    assert r.state == "stopped" and r.finished and len(r.frames) == n   # stop lets nothing more through
+    assert (
+        r.state == "stopped" and r.finished and len(r.frames) == n
+    )  # stop lets nothing more through
     done = (ramp(count=3) >> energy).start()
     assert len(done.wait()) == 3 and done.state == "done"
     bad = (ramp(count=2) >> boom).start(on_error="raise")
@@ -322,7 +353,7 @@ def test_source_exception_is_attributed_to_the_source():
                 raise RuntimeError("sensor unplugged")
             yield np.ones(2)
 
-    out = run(broken() >> pairs)                 # a stream block downstream must not get the blame
+    out = run(broken() >> pairs)  # a stream block downstream must not get the blame
     assert len(out) == 1 and out[0].failed and out[0].errors[0].origin == "broken"
     with pytest.raises(RuntimeError):
         run(broken() >> scale, on_error="raise")
@@ -331,7 +362,7 @@ def test_source_exception_is_attributed_to_the_source():
 def test_stream_outputs_without_new_input_inherit_parents():
     out = run(dsp.from_array(np.arange(8.0), n=4, rate=10.0) >> dsp.overlap(n=2, hop=1))
     assert len(out) == 7
-    assert all(f.prov.parents for f in out)                   # every window has provenance
+    assert all(f.prov.parents for f in out)  # every window has provenance
     assert all(f.stream["rate"] == 10.0 and "offset" in f.meta for f in out)
 
 
@@ -343,23 +374,32 @@ def test_port_selection():
         yield np.diag([1.0, 2.0, 3.0])
 
     vals = run(mats() >> linalg.eigh[0])[0]
-    assert np.allclose(vals.data, [1, 2, 3]) and vals.prov.op == "[0]" and vals.prov[1].op == "eigh"
+    assert (
+        np.allclose(vals.data, [1, 2, 3])
+        and vals.prov.op == "[0]"
+        and vals.prov[1].op == "eigh"
+    )
     with pytest.raises(TypeMismatch):
-        mats() >> linalg.eigh[0] >> linalg.transpose          # selected port is typed
+        mats() >> linalg.eigh[0] >> linalg.transpose  # selected port is typed
     with pytest.raises(TypeError):
-        energy[0]                                           # single-output block has no ports
+        energy[0]  # single-output block has no ports
     # fan-out branches by name, index, negative index, multi-select and slice
     fan = ramp(count=1) >> (scale(gain=2) | energy | scale(gain=3))
     assert run(fan["energy"])[0].data == 0.0
     assert run(fan[-1])[0].data.tolist() == [0.0, 0.0, 0.0]
     both = run(fan[0, 2])[0]
     assert len(both.data) == 2 and both.parts[1].prov.op == "scale"
-    assert run(fan[1:])[0].prov.op == "[energy, 2]"            # duplicate names fall back to indices
+    assert (
+        run(fan[1:])[0].prov.op == "[energy, 2]"
+    )  # duplicate names fall back to indices
     with pytest.raises(KeyError):
-        fan["scale"]                                          # ambiguous: two branches share the name
+        fan["scale"]  # ambiguous: two branches share the name
     # named output ports on a wrapped library function
-    eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-                 outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
+    eigh = block(
+        np.linalg.eigh,
+        inputs=Sig["T", ("N", "N")],
+        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+    )
     assert run(mats() >> eigh["vecs"] >> linalg.transpose)[0].data.shape == (3, 3)
     assert run(mats() >> eigh["vals"])[0].prov.op == "[vals]"
 
@@ -367,13 +407,21 @@ def test_port_selection():
 def test_frame_and_provenance_selection():
     out = run(dsp.sine(n=16, frames=2) >> dsp.window >> dsp.to_complex >> dsp.fft)
     f = out[1]
-    assert f["rate"] == 48000.0 and f["seq"] == 1 and "rate" in f and f.get("nope", 0) == 0
+    assert (
+        f["rate"] == 48000.0 and f["seq"] == 1 and "rate" in f and f.get("nope", 0) == 0
+    )
     with pytest.raises(KeyError):
         f["nope"]
     p = f.prov
     assert [n.op for n in p.chain()] == ["fft", "to_complex", "window", "sine"]
-    assert p[0] is p and p[2].op == "window" and p[-1].op == "sine" and p["sine"].seq == 1
-    assert [n.op for n in p[1:3]] == ["to_complex", "window"] and "window" in p and "nope" not in p
+    assert (
+        p[0] is p and p[2].op == "window" and p[-1].op == "sine" and p["sine"].seq == 1
+    )
+    assert (
+        [n.op for n in p[1:3]] == ["to_complex", "window"]
+        and "window" in p
+        and "nope" not in p
+    )
     with pytest.raises(KeyError):
         p["nope"]
     t = run(ramp(count=1) >> (scale(gain=2) | energy))[0]
@@ -381,27 +429,38 @@ def test_frame_and_provenance_selection():
 
 
 def test_selected_port_lineage_follows_the_branch():
-    post = block(lambda e: e + 1.0, name="post", inputs=Sig[float, ()], outputs=Sig[float, ()])
+    post = block(
+        lambda e: e + 1.0, name="post", inputs=Sig[float, ()], outputs=Sig[float, ()]
+    )
     f = run(ramp(count=1) >> (scale(gain=2) | energy >> post)["post"])[0]
     assert [n.op for n in f.prov.chain()] == ["[post]", "post", "energy", "ramp"]
-    assert "fanout" in f.prov                      # the tuple node is still in the lineage
+    assert "fanout" in f.prov  # the tuple node is still in the lineage
 
 
 def test_multi_input_framed_block_skips_failed_parts():
     @block
-    def combine(a: Framed[Sig[float, "N"]], b: Framed[Sig[float, "N"]]) -> Sig[float, ()]:
+    def combine(
+        a: Framed[Sig[float, "N"]], b: Framed[Sig[float, "N"]]
+    ) -> Sig[float, ()]:
         return float(a.data.sum() + b.data.sum())
 
     out = run(ramp(count=3) >> (scale(gain=1) | boom) >> combine)
-    assert all(f.failed for f in out) and all(len(f.errors) == 1 for f in out)   # no second error from combine
+    assert all(f.failed for f in out) and all(
+        len(f.errors) == 1 for f in out
+    )  # no second error from combine
     assert out[0].errors[0].origin == "boom"
 
 
 def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
     import time
     from sigflow import Knob
+
     gain = Knob(1.0, "gain")
-    g = dsp.ticker(period=0.01, count=10**6) >> (lambda d: np.ones(2)) >> scale(gain=gain)
+    g = (
+        dsp.ticker(period=0.01, count=10**6)
+        >> (lambda d: np.ones(2))
+        >> scale(gain=gain)
+    )
     r = g.start(keep=5)
     time.sleep(0.15)
     assert r.latest.data[0] == 1.0
@@ -411,6 +470,7 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
     batch = r.drain()
     assert batch and r.frames == [] or len(r.frames) < 5
     r.stop()
+
     # a source reads the knob itself
     @source
     def tone(level: Knob, frames: int = 10**6) -> Sig[float, ()]:
@@ -419,7 +479,9 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 
     lvl = Knob(2.0)
     r = (tone(level=lvl) >> (lambda x: x)).start(keep=3)
-    time.sleep(0.05); lvl.value = 7.0; time.sleep(0.05)
+    time.sleep(0.05)
+    lvl.value = 7.0
+    time.sleep(0.05)
     assert r.latest.data == 7.0
     r.stop()
 
@@ -427,23 +489,30 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 def test_throttle_record_snapshot_and_knob_kinds():
     import time
     from sigflow import Knob
+
     win = Knob("hann", "window", choices=["hann", "hamming"])
     r = (dsp.sine(n=64, frames=10**6) >> dsp.window(kind=win)).start(keep=3)
     r.set_rate(20)
     time.sleep(0.5)
     n0 = r.monitor.produced
     time.sleep(1.0)
-    assert 10 <= r.monitor.produced - n0 <= 40          # throttled to ~20 fps
-    r.set_recording(True); time.sleep(0.3); r.set_recording(False)
+    assert 10 <= r.monitor.produced - n0 <= 40  # throttled to ~20 fps
+    r.set_recording(True)
+    time.sleep(0.3)
+    r.set_recording(False)
     assert 2 <= len(r.recording) <= 12
-    win.value = "hamming"; time.sleep(0.2)
-    assert r.snapshot().prov["window"].params["kind"] == "hamming"   # provenance holds the value used
+    win.value = "hamming"
+    time.sleep(0.2)
+    assert (
+        r.snapshot().prov["window"].params["kind"] == "hamming"
+    )  # provenance holds the value used
     assert len(r.snapshots) == 1
     r.stop()
 
 
 def test_knob_listeners_and_plot_options():
     from sigflow import Knob, plot
+
     seen = []
     k = Knob(1.0, "k").on_change(seen.append)
     k.value = 2.0

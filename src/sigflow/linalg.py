@@ -8,6 +8,7 @@ construction::
 
 so ``(a & b) >> matmul`` fails to build if the inner dimensions cannot agree.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,9 +18,28 @@ import numpy as np
 from .block import block
 from .types import Sig
 
-__all__ = ["matmul", "matvec", "dot", "outer", "transpose", "inv", "solve", "lstsq", "eig", "eigh",
-           "svd", "norm", "normalize", "project", "covariance", "gram", "hermitian",
-           "Vector", "Matrix", "Square"]
+__all__ = [
+    "matmul",
+    "matvec",
+    "dot",
+    "outer",
+    "transpose",
+    "inv",
+    "solve",
+    "lstsq",
+    "eig",
+    "eigh",
+    "svd",
+    "norm",
+    "normalize",
+    "project",
+    "covariance",
+    "gram",
+    "hermitian",
+    "Vector",
+    "Matrix",
+    "Square",
+]
 
 Vector = Sig["T", ("N",)]
 Matrix = Sig["T", ("M", "N")]
@@ -84,7 +104,9 @@ def eigh(a: Sig["T", ("N", "N")]) -> (Sig[float, ("N",)], Sig["T", ("N", "N")]):
 
 
 @block
-def svd(a: Sig["T", ("M", "N")], full: bool = False) -> (Sig["T", ("M", "K")], Sig[float, ("K",)], Sig["T", ("K", "N")]):
+def svd(
+    a: Sig["T", ("M", "N")], full: bool = False
+) -> (Sig["T", ("M", "K")], Sig[float, ("K",)], Sig["T", ("K", "N")]):
     return np.linalg.svd(a, full_matrices=full)
 
 

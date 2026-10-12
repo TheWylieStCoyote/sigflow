@@ -1,4 +1,5 @@
 """Run monitoring: per-block counters, percent complete, terminal and Jupyter display."""
+
 from __future__ import annotations
 
 import sys
@@ -15,8 +16,8 @@ class Stats:
     inp: int = 0
     out: int = 0
     errors: int = 0
-    time: float = 0.0          # seconds spent inside the block function
-    total: int | None = None   # expected number of items (sources only, when known)
+    time: float = 0.0  # seconds spent inside the block function
+    total: int | None = None  # expected number of items (sources only, when known)
 
 
 @dataclass
@@ -32,7 +33,7 @@ class Monitor:
 
     def stats(self, name: str, node: Any = None) -> Stats:
         """Stats for a node; nodes sharing a name get distinct rows (``fft``, ``fft#2``)."""
-        if node is None:                       # lookup by displayed name
+        if node is None:  # lookup by displayed name
             s = self._stats.get(name)
             if s is None:
                 s = self._stats[name] = Stats(name)
@@ -105,11 +106,14 @@ class Monitor:
     def table(self) -> str:
         rows = [f"{'block':24} {'in':>8} {'out':>8} {'err':>5} {'time':>9}"]
         for s in self._stats.values():
-            rows.append(f"{s.name[:24]:24} {s.inp:>8} {s.out:>8} {s.errors:>5} {s.time*1000:>7.1f}ms")
+            rows.append(
+                f"{s.name[:24]:24} {s.inp:>8} {s.out:>8} {s.errors:>5} {s.time * 1000:>7.1f}ms"
+            )
         return "\n".join(rows)
 
     def _repr_html_(self) -> str:
         from .notebook import monitor_html
+
         return monitor_html(self)
 
     def __repr__(self) -> str:
@@ -119,12 +123,18 @@ class Monitor:
 class Reporter:
     """Periodically renders the monitor while a run is in progress."""
 
-    def __init__(self, mon: Monitor, graph: Any, mode: bool | str = True, interval: float = 0.2) -> None:
+    def __init__(
+        self, mon: Monitor, graph: Any, mode: bool | str = True, interval: float = 0.2
+    ) -> None:
         self.mon = mon
         self.graph = graph
         self.interval = interval
         self.last = 0.0
-        self.mode = mode if isinstance(mode, str) else ("notebook" if _in_notebook() else "text")
+        self.mode = (
+            mode
+            if isinstance(mode, str)
+            else ("notebook" if _in_notebook() else "text")
+        )
         self._handle: Any = None
 
     def tick(self) -> None:
@@ -145,13 +155,14 @@ class Reporter:
             try:
                 from IPython.display import HTML, display
                 from .notebook import monitor_html
+
                 html = HTML(monitor_html(self.mon))
                 if self._handle is None:
                     self._handle = display(html, display_id=True)
                 else:
                     self._handle.update(html)
                 return
-            except Exception:   # pragma: no cover - fall back to text
+            except Exception:  # pragma: no cover - fall back to text
                 self.mode = "text"
         pct = self.mon.percent
         bar = ""
@@ -165,6 +176,7 @@ class Reporter:
 def _in_notebook() -> bool:
     try:
         from IPython import get_ipython
+
         ip = get_ipython()
         return ip is not None and "IPKernelApp" in ip.config
     except Exception:

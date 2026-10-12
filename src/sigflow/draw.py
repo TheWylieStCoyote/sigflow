@@ -10,6 +10,7 @@ stack their members vertically and converge on a small join node.  Boxes are
 coloured by kind (source, map, stream, tap/plot), and edges are labelled with
 the type that flows along them.
 """
+
 from __future__ import annotations
 
 import html
@@ -21,15 +22,27 @@ from .types import describe
 __all__ = ["Diagram", "draw", "to_dot"]
 
 # geometry (px)
-_PAD_X, _PAD_Y = 28, 18        # gap between columns / rows
-_H = 40                        # box height
-_CHAR = 7.2                    # approx. width of a character at 12px monospace
-_JOIN_W = 34                   # width of join nodes (fan-out / zip / merge)
+_PAD_X, _PAD_Y = 28, 18  # gap between columns / rows
+_H = 40  # box height
+_CHAR = 7.2  # approx. width of a character at 12px monospace
+_JOIN_W = 34  # width of join nodes (fan-out / zip / merge)
 
-_FILL = {"source": "#dbeafe", "map": "#dcfce7", "stream": "#fef3c7", "tap": "#ede9fe",
-         "plot": "#ede9fe", "join": "#e5e7eb"}
-_STROKE = {"source": "#2563eb", "map": "#16a34a", "stream": "#d97706", "tap": "#7c3aed",
-           "plot": "#7c3aed", "join": "#6b7280"}
+_FILL = {
+    "source": "#dbeafe",
+    "map": "#dcfce7",
+    "stream": "#fef3c7",
+    "tap": "#ede9fe",
+    "plot": "#ede9fe",
+    "join": "#e5e7eb",
+}
+_STROKE = {
+    "source": "#2563eb",
+    "map": "#16a34a",
+    "stream": "#d97706",
+    "tap": "#7c3aed",
+    "plot": "#7c3aed",
+    "join": "#6b7280",
+}
 
 
 @dataclass
@@ -49,12 +62,15 @@ class _Box:
 @dataclass
 class _Cell:
     """Laid-out sub-graph: boxes with positions relative to the cell's origin."""
+
     w: float
     h: float
     boxes: list[_Box] = field(default_factory=list)
-    edges: list[tuple[int, int, str]] = field(default_factory=list)   # (from id, to id, label)
-    entries: list[int] = field(default_factory=list)                  # box ids that receive input
-    exits: list[int] = field(default_factory=list)                    # box ids that emit output
+    edges: list[tuple[int, int, str]] = field(
+        default_factory=list
+    )  # (from id, to id, label)
+    entries: list[int] = field(default_factory=list)  # box ids that receive input
+    exits: list[int] = field(default_factory=list)  # box ids that emit output
 
     def shift(self, dx: float, dy: float) -> "_Cell":
         for b in self.boxes:
@@ -77,6 +93,7 @@ class _Layout:
         from .graph import Block, Source
         from .plot import PlotBlock
         import inspect
+
         if isinstance(node, PlotBlock):
             kind = "plot"
         elif isinstance(node, Block):
@@ -86,37 +103,63 @@ class _Layout:
         else:
             kind = "map"
         config = dict(getattr(node, "config", {}))
-        defaults = {k: p.default for k, p in getattr(getattr(node, "defn", None), "config", {}).items()
-                    if p.default is not inspect.Parameter.empty}
-        changed = {k: v for k, v in config.items() if k not in defaults or defaults[k] != v}
+        defaults = {
+            k: p.default
+            for k, p in getattr(getattr(node, "defn", None), "config", {}).items()
+            if p.default is not inspect.Parameter.empty
+        }
+        changed = {
+            k: v for k, v in config.items() if k not in defaults or defaults[k] != v
+        }
         sub = ", ".join(f"{k}={_short(v)}" for k, v in changed.items())
-        typ = describe(node.out_type.resolve(self.env)) if self.env is not None else describe(node.out_type)
+        typ = (
+            describe(node.out_type.resolve(self.env))
+            if self.env is not None
+            else describe(node.out_type)
+        )
         if self.types:
             typ = "→ " + typ
         else:
             typ = ""
-        tip = node.describe() + ("\nconfig: " + ", ".join(f"{k}={v!r}" for k, v in config.items())
-                                 if config else "")
+        tip = node.describe() + (
+            "\nconfig: " + ", ".join(f"{k}={v!r}" for k, v in config.items())
+            if config
+            else ""
+        )
         w = max(len(node.name) * 1.15, len(sub), len(typ) * 0.9) * _CHAR + 24
         h = _H + (12 if sub else 0) + (12 if typ else 0)
         b = _Box(self._id(), node.name, sub, kind, typ, tip, w=max(w, 70), h=h)
-        return _Cell(b.w, b.h, [b], [], [b.id] if node.in_type is not None else [], [b.id])
+        return _Cell(
+            b.w, b.h, [b], [], [b.id] if node.in_type is not None else [], [b.id]
+        )
 
     def join(self, label: str) -> _Box:
         return _Box(self._id(), label, "", "join", w=_JOIN_W, h=26)
 
     def layout(self, node: Any) -> _Cell:
         from .graph import Fanout, Feedback, Merge, Pipeline, Select, When, Zip
+
         if isinstance(node, Pipeline):
             return self.row([self.layout(s) for s in node.stages], node)
         if isinstance(node, Fanout):
-            return self.column([self.layout(b) for b in node.branches], "fan-out", node, broadcast=True)
+            return self.column(
+                [self.layout(b) for b in node.branches], "fan-out", node, broadcast=True
+            )
         if isinstance(node, Zip):
-            return self.column([self.layout(p) for p in node.parts], "zip", node, broadcast=node.in_type is not None)
+            return self.column(
+                [self.layout(p) for p in node.parts],
+                "zip",
+                node,
+                broadcast=node.in_type is not None,
+            )
         if isinstance(node, Merge):
-            return self.column([self.layout(p) for p in node.parts], "merge", node, broadcast=False)
+            return self.column(
+                [self.layout(p) for p in node.parts], "merge", node, broadcast=False
+            )
         if type(node).__name__ == "Align":
-            return self.column([self.layout(p) for p in node.parts], "align", node, broadcast=False)
+            return self.column(
+                [self.layout(p) for p in node.parts], "align", node, broadcast=False
+            )
         if type(node).__name__ == "Graph":
             return self.dag(node)
         if isinstance(node, Feedback):
@@ -130,9 +173,15 @@ class _Layout:
             inner.exits = [j.id]
             return inner
         if isinstance(node, When):
-            cells = [self.layout(node.then)] + ([self.layout(node.otherwise)] if node.otherwise is not None else [])
+            cells = [self.layout(node.then)] + (
+                [self.layout(node.otherwise)] if node.otherwise is not None else []
+            )
             return self.column(cells, "when", node, broadcast=True)
-        if isinstance(node, Select) or type(node).__name__ in ("PortRef", "Slice", "StreamSlice"):
+        if isinstance(node, Select) or type(node).__name__ in (
+            "PortRef",
+            "Slice",
+            "StreamSlice",
+        ):
             b = self.join(node.name)
             b.w = max(_JOIN_W, len(node.name) * _CHAR + 14)
             return _Cell(b.w, b.h, [b], [], [b.id], [b.id])
@@ -141,6 +190,7 @@ class _Layout:
     def dag(self, g: Any) -> _Cell:
         """Layered layout of a builder Graph: column = longest path from a source."""
         from .builder import _Input
+
         order = g.order()
         depth: dict[str, int] = {}
         for name in order:
@@ -155,7 +205,9 @@ class _Layout:
             else:
                 c = self.layout(node)
                 if len(c.boxes) == 1 and c.boxes[0].kind != "join":
-                    c.boxes[0].label = name if name != c.boxes[0].label else c.boxes[0].label
+                    c.boxes[0].label = (
+                        name if name != c.boxes[0].label else c.boxes[0].label
+                    )
                 cells[name] = c
         columns: dict[int, list[str]] = {}
         for name, d in depth.items():
@@ -179,7 +231,12 @@ class _Layout:
             for a in cells[src.name].exits:
                 for b in cells[dst].entries:
                     out.edges.append((a, b, label))
-        out.entries = [e for n, node in g.members.items() if isinstance(node, _Input) for e in cells[n].exits]
+        out.entries = [
+            e
+            for n, node in g.members.items()
+            if isinstance(node, _Input)
+            for e in cells[n].exits
+        ]
         out.exits = [e for r in g.outputs for e in cells[r.name].exits]
         return out
 
@@ -193,7 +250,7 @@ class _Layout:
             out.boxes += c.boxes
             out.edges += c.edges
             if prev is not None:
-                label = describe(prev_stage.out_type)      # type: ignore[name-defined]
+                label = describe(prev_stage.out_type)  # type: ignore[name-defined]
                 for a in prev.exits:
                     for b in c.entries:
                         out.edges.append((a, b, label))
@@ -204,7 +261,9 @@ class _Layout:
         out.exits = cells[-1].exits
         return out
 
-    def column(self, cells: list[_Cell], label: str, node: Any, broadcast: bool) -> _Cell:
+    def column(
+        self, cells: list[_Cell], label: str, node: Any, broadcast: bool
+    ) -> _Cell:
         y = 0.0
         w = max(c.w for c in cells)
         out = _Cell(0, 0)
@@ -246,7 +305,7 @@ class Diagram:
         env = None
         try:
             env = node.validate()
-        except Exception:        # pragma: no cover - drawing must never fail on a bad graph
+        except Exception:  # pragma: no cover - drawing must never fail on a bad graph
             pass
         self.cell = _Layout(env, types).layout(node)
         self.svg = self._render()
@@ -261,45 +320,67 @@ class Diagram:
             c.h += 40
         W, H = c.w + 2 * m, c.h + 2 * m
         boxes = {b.id: b for b in c.boxes}
-        parts = [f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
-                 f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
-                 f"font-size='12'>",
-                 "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
-                 "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
-                 "</marker></defs>"]
+        parts = [
+            f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
+            f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
+            f"font-size='12'>",
+            "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
+            "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
+            "</marker></defs>",
+        ]
         for a, b, label in c.edges:
             A, B = boxes[a], boxes[b]
             x1, y1 = A.x + A.w + m, A.y + A.h / 2 + m
             x2, y2 = B.x + m, B.y + B.h / 2 + m
             cx = (x1 + x2) / 2
             dx = x2 - x1
-            crosses = any(bx.x + m > x1 + 4 and bx.x + m + bx.w < x2 - 4 and
-                          bx.y + m < max(y1, y2) + 4 and bx.y + m + bx.h > min(y1, y2) - 4
-                          for bx in c.boxes if bx.id not in (a, b))
+            crosses = any(
+                bx.x + m > x1 + 4
+                and bx.x + m + bx.w < x2 - 4
+                and bx.y + m < max(y1, y2) + 4
+                and bx.y + m + bx.h > min(y1, y2) - 4
+                for bx in c.boxes
+                if bx.id not in (a, b)
+            )
             if crosses:
                 # a long edge over other boxes: arc above the row so it stays readable
-                top = min(bx.y for bx in c.boxes if bx.x + m > x1 - 4 and bx.x + m < x2 + 4) + m
+                top = (
+                    min(
+                        bx.y
+                        for bx in c.boxes
+                        if bx.x + m > x1 - 4 and bx.x + m < x2 + 4
+                    )
+                    + m
+                )
                 bump = top - 18 - dx / 40
                 d = f"M{x1:.1f},{y1:.1f} C{x1 + dx * 0.2:.1f},{bump:.1f} {x2 - dx * 0.2:.1f},{bump:.1f} {x2:.1f},{y2:.1f}"
                 ly = bump + 2
             else:
                 d = f"M{x1:.1f},{y1:.1f} C{cx:.1f},{y1:.1f} {cx:.1f},{y2:.1f} {x2:.1f},{y2:.1f}"
                 ly = (y1 + y2) / 2 - 4
-            parts.append(f"<path d='{d}' fill='none' stroke='#6b7280' stroke-width='1.4' marker-end='url(#sf-arrow)'/>")
+            parts.append(
+                f"<path d='{d}' fill='none' stroke='#6b7280' stroke-width='1.4' marker-end='url(#sf-arrow)'/>"
+            )
             if label.startswith("["):
-                parts.append(f"<text x='{cx:.1f}' y='{ly:.1f}' text-anchor='middle' font-size='9' "
-                             f"fill='#6b7280'>{html.escape(label)}</text>")
+                parts.append(
+                    f"<text x='{cx:.1f}' y='{ly:.1f}' text-anchor='middle' font-size='9' "
+                    f"fill='#6b7280'>{html.escape(label)}</text>"
+                )
         for b in c.boxes:
             x, y = b.x + m, b.y + m
             if b.kind == "join":
-                parts.append(f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w}' height='{b.h}' rx='13' "
-                             f"fill='{_FILL['join']}' stroke='{_STROKE['join']}' stroke-width='1.2'/>"
-                             f"<text x='{x + b.w / 2:.1f}' y='{y + b.h / 2 + 4:.1f}' text-anchor='middle' "
-                             f"font-size='9' fill='#111827'>{html.escape(b.label)}</text>")
+                parts.append(
+                    f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w}' height='{b.h}' rx='13' "
+                    f"fill='{_FILL['join']}' stroke='{_STROKE['join']}' stroke-width='1.2'/>"
+                    f"<text x='{x + b.w / 2:.1f}' y='{y + b.h / 2 + 4:.1f}' text-anchor='middle' "
+                    f"font-size='9' fill='#111827'>{html.escape(b.label)}</text>"
+                )
                 continue
-            parts.append(f"<g><title>{html.escape(b.tip)}</title>"
-                         f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
-                         f"fill='{_FILL[b.kind]}' stroke='{_STROKE[b.kind]}' stroke-width='1.4'/>")
+            parts.append(
+                f"<g><title>{html.escape(b.tip)}</title>"
+                f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
+                f"fill='{_FILL[b.kind]}' stroke='{_STROKE[b.kind]}' stroke-width='1.4'/>"
+            )
             lines = [(b.label, 12, "#111827", "600")]
             if b.sub:
                 lines.append((b.sub, 10, "#374151", "400"))
@@ -307,8 +388,10 @@ class Diagram:
                 lines.append((b.typ, 9.5, "#4b5563", "400"))
             step = b.h / (len(lines) + 1)
             for i, (text, size, color, weight) in enumerate(lines):
-                parts.append(f"<text x='{x + b.w / 2:.1f}' y='{y + step * (i + 1) + 4:.1f}' text-anchor='middle' "
-                             f"font-size='{size}' fill='{color}' font-weight='{weight}'>{html.escape(text)}</text>")
+                parts.append(
+                    f"<text x='{x + b.w / 2:.1f}' y='{y + step * (i + 1) + 4:.1f}' text-anchor='middle' "
+                    f"font-size='{size}' fill='{color}' font-weight='{weight}'>{html.escape(text)}</text>"
+                )
             parts.append("</g>")
         parts.append("</svg>")
         return "".join(parts)
@@ -335,15 +418,26 @@ def draw(node: Any, types: bool = True) -> Diagram:
 def to_dot(node: Any, types: bool = True) -> str:
     """Graphviz DOT source for the graph (left-to-right)."""
     cell = _Layout(node.validate(), types).layout(node)
-    lines = ["digraph sigflow {", "  rankdir=LR; node [fontname=monospace fontsize=11 style=filled];"]
+    lines = [
+        "digraph sigflow {",
+        "  rankdir=LR; node [fontname=monospace fontsize=11 style=filled];",
+    ]
     for b in cell.boxes:
         if b.kind == "join":
-            lines.append(f'  n{b.id} [label="{b.label}" shape=circle fillcolor="{_FILL["join"]}" '
-                         f'color="{_STROKE["join"]}" fontsize=8 width=0.4 fixedsize=true];')
+            lines.append(
+                f'  n{b.id} [label="{b.label}" shape=circle fillcolor="{_FILL["join"]}" '
+                f'color="{_STROKE["join"]}" fontsize=8 width=0.4 fixedsize=true];'
+            )
         else:
-            label = b.label + (f"\\n{b.sub}" if b.sub else "") + (f"\\n{b.typ}" if b.typ else "")
-            lines.append(f'  n{b.id} [label="{label}" shape=box fillcolor="{_FILL[b.kind]}" '
-                         f'color="{_STROKE[b.kind]}"];')
+            label = (
+                b.label
+                + (f"\\n{b.sub}" if b.sub else "")
+                + (f"\\n{b.typ}" if b.typ else "")
+            )
+            lines.append(
+                f'  n{b.id} [label="{label}" shape=box fillcolor="{_FILL[b.kind]}" '
+                f'color="{_STROKE[b.kind]}"];'
+            )
     for a, b, label in cell.edges:
         lines.append(f"  n{a} -> n{b};")
     lines.append("}")

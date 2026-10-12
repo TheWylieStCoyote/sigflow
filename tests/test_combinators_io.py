@@ -3,7 +3,19 @@ import os
 import numpy as np
 import pytest
 
-from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, feedback, from_iterable, run, source, when
+from sigflow import (
+    Frame,
+    Framed,
+    Sig,
+    Stream,
+    TypeMismatch,
+    block,
+    feedback,
+    from_iterable,
+    run,
+    source,
+    when,
+)
 from sigflow import dsp, io
 
 
@@ -14,7 +26,9 @@ def ramp(count: int = 6, n: int = 3) -> Sig[float, "N"]:
 
 
 @block
-def accumulate(x: Sig[float, "N"], total: Sig[float, "N"]) -> (Sig[float, "N"], Sig[float, "N"]):
+def accumulate(
+    x: Sig[float, "N"], total: Sig[float, "N"]
+) -> (Sig[float, "N"], Sig[float, "N"]):
     s = x + total
     return s, s
 
@@ -25,12 +39,14 @@ def test_feedback_carries_state_between_frames():
     assert [f.data[0] for f in out] == [0.0, 1.0, 3.0, 6.0, 10.0, 15.0]
     assert "loop" in out[-1].prov and out[-1].prov[-1].op == "ramp"
     with pytest.raises(TypeMismatch):
-        feedback(dsp.scale(gain=2), init=0.0)                  # body must take (x, state)
+        feedback(dsp.scale(gain=2), init=0.0)  # body must take (x, state)
 
 
 def test_feedback_body_can_span_blocks():
     @block
-    def step(x: Sig[float, "N"], s: Sig[float, ()]) -> (Sig[float, "N"], Sig[float, ()]):
+    def step(
+        x: Sig[float, "N"], s: Sig[float, ()]
+    ) -> (Sig[float, "N"], Sig[float, ()]):
         return x * s, float(s + 1)
 
     @block
@@ -48,7 +64,10 @@ def test_when_routes_and_can_drop():
 
     g = ramp() >> when(lambda f: f.data[0] < 4, odd_only, otherwise=dsp.scale(gain=10))
     assert [f.data[0] for f in run(g)] == [1.0, 3.0, 40.0, 50.0]
-    nested = ramp() >> when(lambda f: True, when(lambda f: f.data[0] < 4, odd_only, otherwise=dsp.scale(gain=10)))
+    nested = ramp() >> when(
+        lambda f: True,
+        when(lambda f: f.data[0] < 4, odd_only, otherwise=dsp.scale(gain=10)),
+    )
     assert [f.data[0] for f in run(nested)] == [1.0, 3.0, 40.0, 50.0]
     assert run(nested)[0].prov.op.startswith("when")
 
@@ -75,11 +94,12 @@ def test_graphs_and_blocks_apply_to_memory():
     frames = [Frame(np.ones(4), meta={"k": 1})]
     assert dsp.rms.apply(frames)[0]["k"] == 1
     with pytest.raises(TypeError):
-        (ramp() >> dsp.rms)([np.ones(3)])                       # has its own source
+        (ramp() >> dsp.rms)([np.ones(3)])  # has its own source
 
 
 def test_file_io_roundtrips(tmp_path):
     from scipy.io import wavfile
+
     wav = tmp_path / "t.wav"
     wavfile.write(wav, 8000, (np.sin(np.arange(4000) * 0.1) * 32000).astype(np.int16))
     out = run(io.wav(str(wav), n=1000) >> dsp.rms)
@@ -103,18 +123,27 @@ def test_file_io_roundtrips(tmp_path):
 
 def test_udp_source_and_sink():
     import time
+
     rx = (io.udp(port=9931, dtype=np.float32, count=3) >> dsp.rms).start()
     time.sleep(0.2)
     run(ramp(count=3) >> (lambda x: x.astype(np.float32)) >> io.udp_sink(port=9931))
     out = rx.wait(timeout=5)
-    assert [round(f.data, 1) for f in out] == [0.0, 1.0, 2.0] and out[0]["from"].startswith("127.0.0.1")
+    assert [round(f.data, 1) for f in out] == [0.0, 1.0, 2.0] and out[0][
+        "from"
+    ].startswith("127.0.0.1")
 
 
 def test_report_and_string_annotation_guard():
     g = ramp() >> dsp.scale(gain=2) >> dsp.rms
     html, md = g.report("t"), g.report("t", fmt="md")
-    assert "<svg" in html and "scale" in html and md.startswith("# t") and "| `rms` |" in md
+    assert (
+        "<svg" in html
+        and "scale" in html
+        and md.startswith("# t")
+        and "| `rms` |" in md
+    )
     with pytest.raises(TypeError, match="could not be evaluated"):
+
         @block
         def bad(f: "Framedd[Sig[float, 'N']]") -> Sig[float, "N"]:
             return f

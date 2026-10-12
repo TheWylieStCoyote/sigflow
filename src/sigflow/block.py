@@ -28,6 +28,7 @@ Existing library functions are reused without modification::
 
     fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
 """
+
 from __future__ import annotations
 
 import functools
@@ -57,18 +58,22 @@ class Framed:
 @dataclass(frozen=True)
 class InputSpec:
     name: str
-    type: Any                 # SignalType | TupleType
-    framed: bool = False      # pass the Frame object instead of its data
-    stream: bool = False      # receives the whole stream (stream blocks only)
+    type: Any  # SignalType | TupleType
+    framed: bool = False  # pass the Frame object instead of its data
+    stream: bool = False  # receives the whole stream (stream blocks only)
 
 
 def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
     """Return (type, framed, stream) if the annotation marks a signal input."""
     if annotation is inspect.Parameter.empty:
         return None
-    if isinstance(annotation, str) and any(tok in annotation for tok in ("Sig[", "Framed[", "Stream[", "Frame")):
-        raise TypeError(f"annotation {annotation!r} is a string that could not be evaluated; import the "
-                        f"names it uses at module level (or avoid quoting signal-type annotations)")
+    if isinstance(annotation, str) and any(
+        tok in annotation for tok in ("Sig[", "Framed[", "Stream[", "Frame")
+    ):
+        raise TypeError(
+            f"annotation {annotation!r} is a string that could not be evaluated; import the "
+            f"names it uses at module level (or avoid quoting signal-type annotations)"
+        )
     if annotation is Frame:
         return SignalType(), True, False
     if isinstance(annotation, Framed):
@@ -82,10 +87,18 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
         return inner, False, True
     if is_signal_type(annotation):
         return annotation, False, False
-    if isinstance(annotation, tuple) and annotation and all(
-        is_signal_type(a) or isinstance(a, Framed) for a in annotation
+    if (
+        isinstance(annotation, tuple)
+        and annotation
+        and all(is_signal_type(a) or isinstance(a, Framed) for a in annotation)
     ):
-        return TupleType(tuple(a.item if isinstance(a, Framed) else a for a in annotation)), False, False
+        return (
+            TupleType(
+                tuple(a.item if isinstance(a, Framed) else a for a in annotation)
+            ),
+            False,
+            False,
+        )
     return None
 
 
@@ -107,12 +120,23 @@ class BlockDef:
     """A reusable block definition. Call it with config to make a graph node,
     or with data to run the function directly."""
 
-    def __init__(self, fn: Callable[..., Any], *, name: str | None = None,
-                 inputs: Any = None, outputs: Any = None, kind: str | None = None,
-                 framed: bool = False, on_error: str = "propagate",
-                 keep_samples: bool | None = None, tap: bool = False,
-                 doc: str | None = None, refine: Callable[..., Any] | None = None,
-                 total: Callable[..., int] | None = None, threaded: bool = False) -> None:
+    def __init__(
+        self,
+        fn: Callable[..., Any],
+        *,
+        name: str | None = None,
+        inputs: Any = None,
+        outputs: Any = None,
+        kind: str | None = None,
+        framed: bool = False,
+        on_error: str = "propagate",
+        keep_samples: bool | None = None,
+        tap: bool = False,
+        doc: str | None = None,
+        refine: Callable[..., Any] | None = None,
+        total: Callable[..., int] | None = None,
+        threaded: bool = False,
+    ) -> None:
         self.fn = fn
         self.refine = refine
         self.total = total
@@ -124,7 +148,9 @@ class BlockDef:
         functools.update_wrapper(self, fn, updated=())
 
         try:
-            sig = inspect.signature(fn, eval_str=True)   # resolve `from __future__ import annotations`
+            sig = inspect.signature(
+                fn, eval_str=True
+            )  # resolve `from __future__ import annotations`
         except (TypeError, ValueError, NameError):
             try:
                 sig = inspect.signature(fn)
@@ -137,7 +163,9 @@ class BlockDef:
         self._parse_inputs(sig, inputs, framed, kind)
 
         is_gen = inspect.isgeneratorfunction(fn) or inspect.isasyncgenfunction(fn)
-        self.is_async = inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(fn)
+        self.is_async = inspect.iscoroutinefunction(fn) or inspect.isasyncgenfunction(
+            fn
+        )
         if kind is None:
             if not self.inputs:
                 kind = "source"
@@ -151,13 +179,15 @@ class BlockDef:
             pass
 
         self.port_names: tuple[str | None, ...] = ()
-        if isinstance(outputs, Mapping):                # named output ports
+        if isinstance(outputs, Mapping):  # named output ports
             self.port_names = tuple(outputs)
             outputs = tuple(outputs.values())
         if outputs is not None:
             self.out_type = _output_type(outputs)
         else:
-            self.out_type = _output_type(sig.return_annotation if sig else inspect.Signature.empty)
+            self.out_type = _output_type(
+                sig.return_annotation if sig else inspect.Signature.empty
+            )
         if tap:
             self.out_type = self.in_type
 
@@ -168,17 +198,29 @@ class BlockDef:
         self.keep_samples = keep_samples
 
     # -- input parsing ----------------------------------------------------- #
-    def _parse_inputs(self, sig: inspect.Signature | None, inputs: Any, framed: bool,
-                      kind: str | None) -> None:
+    def _parse_inputs(
+        self, sig: inspect.Signature | None, inputs: Any, framed: bool, kind: str | None
+    ) -> None:
         params = list(sig.parameters.values()) if sig else []
         if inputs is not None:
             # explicit: a single type, a tuple of types, or {param: type}
             if isinstance(inputs, Mapping):
                 spec = dict(inputs)
             else:
-                types_ = list(inputs) if isinstance(inputs, (list, tuple)) and not isinstance(inputs, TupleType) else [inputs]
-                positional = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
-                names = [p.name for p in positional[:len(types_)]] or [f"in{i}" for i in range(len(types_))]
+                types_ = (
+                    list(inputs)
+                    if isinstance(inputs, (list, tuple))
+                    and not isinstance(inputs, TupleType)
+                    else [inputs]
+                )
+                positional = [
+                    p
+                    for p in params
+                    if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                ]
+                names = [p.name for p in positional[: len(types_)]] or [
+                    f"in{i}" for i in range(len(types_))
+                ]
                 if len(names) < len(types_):
                     names += [f"in{i}" for i in range(len(names), len(types_))]
                 spec = dict(zip(names, types_))
@@ -186,8 +228,18 @@ class BlockDef:
                 if isinstance(t, StreamType):
                     inner = t.item
                     fr = isinstance(inner, Framed) or inner is Frame
-                    self.inputs.append(InputSpec(pname, inner.item if isinstance(inner, Framed) else
-                                                 SignalType() if inner is Frame else inner, fr, True))
+                    self.inputs.append(
+                        InputSpec(
+                            pname,
+                            inner.item
+                            if isinstance(inner, Framed)
+                            else SignalType()
+                            if inner is Frame
+                            else inner,
+                            fr,
+                            True,
+                        )
+                    )
                 elif isinstance(t, Framed):
                     self.inputs.append(InputSpec(pname, t.item, True, False))
                 elif t is Frame:
@@ -195,7 +247,10 @@ class BlockDef:
                 else:
                     self.inputs.append(InputSpec(pname, as_type(t), framed, False))
             for p in params:
-                if p.name not in spec and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
+                if p.name not in spec and p.kind not in (
+                    p.VAR_POSITIONAL,
+                    p.VAR_KEYWORD,
+                ):
                     self.config[p.name] = p
             return
 
@@ -208,11 +263,21 @@ class BlockDef:
                 self.inputs.append(InputSpec(p.name, t, fr or framed, st))
             else:
                 self.config[p.name] = p
-        if not self.inputs and params and kind != "source" \
-                and not (inspect.isgeneratorfunction(self.fn) or inspect.isasyncgenfunction(self.fn)):
+        if (
+            not self.inputs
+            and params
+            and kind != "source"
+            and not (
+                inspect.isgeneratorfunction(self.fn)
+                or inspect.isasyncgenfunction(self.fn)
+            )
+        ):
             # Untyped first positional argument (no default) of a plain function: an Any input.
             first = params[0]
-            if first.default is inspect.Parameter.empty and first.kind in (first.POSITIONAL_ONLY, first.POSITIONAL_OR_KEYWORD):
+            if first.default is inspect.Parameter.empty and first.kind in (
+                first.POSITIONAL_ONLY,
+                first.POSITIONAL_OR_KEYWORD,
+            ):
                 self.inputs.append(InputSpec(first.name, SignalType(), framed, False))
                 self.config.pop(first.name, None)
 
@@ -242,9 +307,11 @@ class BlockDef:
         are configuration in signature order (``to_units("V")``, ``io.wav("x.wav", n=512)``
         make nodes). ``blockdef.fn(...)`` always calls the function directly."""
         if args and not _looks_like_data(args[0]):
-            names = [k for k in self.config][:len(args)]
+            names = [k for k in self.config][: len(args)]
             if len(names) < len(args):
-                raise TypeError(f"{self.name} takes at most {len(self.config)} configuration arguments")
+                raise TypeError(
+                    f"{self.name} takes at most {len(self.config)} configuration arguments"
+                )
             return self.node(**{**dict(zip(names, args)), **kwargs})
         if args:
             return self.fn(*args, **kwargs)
@@ -262,15 +329,25 @@ class BlockDef:
 
     def node(self, **config: Any) -> "Block":
         from .graph import Block
+
         return Block(self, config)
 
     def bind(self, **config: Any) -> "BlockDef":
         """Return a new definition with some configuration baked in."""
-        new = BlockDef(functools.partial(self.fn, **config), name=self.name,
-                       inputs={i.name: (_respec(i)) for i in self.inputs} or None,
-                       outputs=self.out_type, kind=self.kind, on_error=self.on_error,
-                       keep_samples=self.keep_samples, tap=self.tap, doc=self.__doc__,
-                       refine=self.refine, total=self.total, threaded=self.threaded)
+        new = BlockDef(
+            functools.partial(self.fn, **config),
+            name=self.name,
+            inputs={i.name: (_respec(i)) for i in self.inputs} or None,
+            outputs=self.out_type,
+            kind=self.kind,
+            on_error=self.on_error,
+            keep_samples=self.keep_samples,
+            tap=self.tap,
+            doc=self.__doc__,
+            refine=self.refine,
+            total=self.total,
+            threaded=self.threaded,
+        )
         new.config = {k: v for k, v in self.config.items() if k not in config}
         new.is_async = self.is_async
         new.port_names = self.port_names
@@ -278,15 +355,26 @@ class BlockDef:
 
     def check_config(self, config: Mapping[str, Any]) -> dict[str, Any]:
         unknown = set(config) - set(self.config)
-        if unknown and not (self.signature and any(
-                p.kind == p.VAR_KEYWORD for p in self.signature.parameters.values())):
-            raise TypeError(f"{self.name}: unknown configuration {sorted(unknown)}; "
-                            f"accepts {sorted(self.config)}")
-        missing = [k for k, p in self.config.items()
-                   if p.default is inspect.Parameter.empty and k not in config]
+        if unknown and not (
+            self.signature
+            and any(p.kind == p.VAR_KEYWORD for p in self.signature.parameters.values())
+        ):
+            raise TypeError(
+                f"{self.name}: unknown configuration {sorted(unknown)}; "
+                f"accepts {sorted(self.config)}"
+            )
+        missing = [
+            k
+            for k, p in self.config.items()
+            if p.default is inspect.Parameter.empty and k not in config
+        ]
         if missing:
             raise TypeError(f"{self.name}: missing required configuration {missing}")
-        full = {k: p.default for k, p in self.config.items() if p.default is not inspect.Parameter.empty}
+        full = {
+            k: p.default
+            for k, p in self.config.items()
+            if p.default is not inspect.Parameter.empty
+        }
         full.update(config)
         return full
 
@@ -299,6 +387,7 @@ class BlockDef:
 
     def __rrshift__(self, other: Any) -> Any:
         from .graph import as_node
+
         return as_node(other) >> self.node()
 
     def __or__(self, other: Any) -> Any:
@@ -306,6 +395,7 @@ class BlockDef:
 
     def __ror__(self, other: Any) -> Any:
         from .graph import as_node
+
         return as_node(other) | self.node()
 
     def __and__(self, other: Any) -> Any:
@@ -313,11 +403,14 @@ class BlockDef:
 
     def __rand__(self, other: Any) -> Any:
         from .graph import as_node
+
         return as_node(other) & self.node()
 
     def __repr__(self) -> str:
-        ins = ", ".join(f"{i.name}: {'Stream[' if i.stream else ''}{i.type}{']' if i.stream else ''}"
-                        for i in self.inputs)
+        ins = ", ".join(
+            f"{i.name}: {'Stream[' if i.stream else ''}{i.type}{']' if i.stream else ''}"
+            for i in self.inputs
+        )
         cfg = ", ".join(self.config)
         return f"<{self.kind} block {self.name}({ins}{', ' if ins and cfg else ''}{cfg}) -> {self.out_type}>"
 
@@ -325,10 +418,15 @@ class BlockDef:
 def _looks_like_data(x: Any) -> bool:
     """Arrays, frames, containers and iterators are data; strings, numbers, Knobs, callables are config."""
     import numpy as _np
+
     if isinstance(x, (str, bytes)) or callable(x) and not hasattr(x, "__next__"):
         return False
-    return (isinstance(x, (_np.ndarray, _np.generic, Frame, list, tuple, dict)) or hasattr(x, "__array__")
-            or hasattr(x, "__iter__") or hasattr(x, "__next__"))
+    return (
+        isinstance(x, (_np.ndarray, _np.generic, Frame, list, tuple, dict))
+        or hasattr(x, "__array__")
+        or hasattr(x, "__iter__")
+        or hasattr(x, "__next__")
+    )
 
 
 def _respec(i: InputSpec) -> Any:
@@ -347,6 +445,7 @@ def _same_leading(in_t: Any, out_t: Any) -> bool:
 # --------------------------------------------------------------------------- #
 # Decorators
 # --------------------------------------------------------------------------- #
+
 
 def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
     """Declare a block.

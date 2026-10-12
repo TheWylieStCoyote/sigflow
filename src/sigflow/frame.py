@@ -16,6 +16,7 @@ return plain data and the runtime builds the new frame, carrying annotations,
 issues and provenance forward automatically.  A block that needs control can
 accept a ``Frame`` and return ``frame.evolve(data=...)``.
 """
+
 from __future__ import annotations
 
 import itertools
@@ -25,7 +26,16 @@ from typing import Any, Iterable, Iterator, Mapping
 
 import numpy as np
 
-__all__ = ["Frame", "Issue", "Provenance", "Missing", "MISSING", "frozen", "as_frame", "TimeSpan"]
+__all__ = [
+    "Frame",
+    "Issue",
+    "Provenance",
+    "Missing",
+    "MISSING",
+    "frozen",
+    "as_frame",
+    "TimeSpan",
+]
 
 
 @dataclass(frozen=True)
@@ -49,7 +59,9 @@ class TimeSpan:
 
     def stamps(self) -> np.ndarray:
         """Per-sample timestamps."""
-        return self.t0 + (np.arange(self.n) / self.rate if self.rate else np.zeros(self.n))
+        return self.t0 + (
+            np.arange(self.n) / self.rate if self.rate else np.zeros(self.n)
+        )
 
     def index(self, t: float) -> int:
         """Sample index at absolute time ``t`` (clipped to the frame)."""
@@ -62,6 +74,7 @@ class TimeSpan:
 
     def __repr__(self) -> str:
         return f"TimeSpan(t0={self.t0:.6g}s, rate={self.rate}, n={self.n})"
+
 
 _ids = itertools.count(1)
 
@@ -97,6 +110,7 @@ MISSING = Missing()
 # Provenance
 # --------------------------------------------------------------------------- #
 
+
 @dataclass(frozen=True)
 class Provenance:
     """One node of the lineage DAG: *op* applied with *params* to *parents*."""
@@ -104,7 +118,7 @@ class Provenance:
     op: str
     params: Mapping[str, Any] = field(default_factory=frozen)
     parents: tuple["Provenance", ...] = ()
-    seq: int | None = None            # ordinal within the producing stream
+    seq: int | None = None  # ordinal within the producing stream
     id: int = field(default_factory=lambda: next(_ids))
 
     def walk(self) -> Iterator["Provenance"]:
@@ -137,14 +151,18 @@ class Provenance:
             for node in self.walk():
                 if node.op == key:
                     return node
-            raise KeyError(f"no ancestor named {key!r}; lineage: {' <- '.join(n.op for n in chain)}")
+            raise KeyError(
+                f"no ancestor named {key!r}; lineage: {' <- '.join(n.op for n in chain)}"
+            )
         if isinstance(key, slice):
             return chain[key]
         if isinstance(key, int):
             try:
                 return chain[key]
             except IndexError:
-                raise IndexError(f"lineage has {len(chain)} nodes; index {key} is out of range") from None
+                raise IndexError(
+                    f"lineage has {len(chain)} nodes; index {key} is out of range"
+                ) from None
         raise TypeError("provenance keys are ints, block names or slices")
 
     def __len__(self) -> int:
@@ -184,13 +202,14 @@ class Provenance:
 # Issues (errors / warnings that travel with data)
 # --------------------------------------------------------------------------- #
 
+
 @dataclass(frozen=True)
 class Issue:
     """An error or warning attached to a frame."""
 
     message: str
-    level: str = "error"              # "error" | "warning" | "info"
-    origin: str = ""                  # block name that raised it
+    level: str = "error"  # "error" | "warning" | "info"
+    origin: str = ""  # block name that raised it
     exc: BaseException | None = None
     prov: Provenance | None = None
 
@@ -207,15 +226,16 @@ class Issue:
 # Frame
 # --------------------------------------------------------------------------- #
 
+
 @dataclass(frozen=True)
 class Frame:
     data: Any = MISSING
-    meta: Mapping[str, Any] = field(default_factory=frozen)      # frame-level
-    stream: Mapping[str, Any] = field(default_factory=frozen)    # stream-level
-    samples: Mapping[str, Any] = field(default_factory=frozen)   # sample-level
+    meta: Mapping[str, Any] = field(default_factory=frozen)  # frame-level
+    stream: Mapping[str, Any] = field(default_factory=frozen)  # stream-level
+    samples: Mapping[str, Any] = field(default_factory=frozen)  # sample-level
     issues: tuple[Issue, ...] = ()
     prov: Provenance | None = None
-    parts: tuple["Frame", ...] = ()   # sub-frames of a tuple frame (fan-out / zip)
+    parts: tuple["Frame", ...] = ()  # sub-frames of a tuple frame (fan-out / zip)
 
     # -- construction / evolution ------------------------------------------ #
     def __post_init__(self) -> None:
@@ -230,6 +250,7 @@ class Frame:
             if level in changes and changes[level] is not None:
                 changes[level] = frozen(getattr(self, level), **dict(changes[level]))
         from dataclasses import replace
+
         return replace(self, **changes)
 
     def annotate(self, **meta: Any) -> "Frame":
@@ -243,11 +264,18 @@ class Frame:
         n = self._leading()
         for k, v in samples.items():
             if n is not None and np.shape(v)[:1] != (n,):
-                raise ValueError(f"sample annotation {k!r} has length {np.shape(v)[:1]}, data has {n}")
+                raise ValueError(
+                    f"sample annotation {k!r} has length {np.shape(v)[:1]}, data has {n}"
+                )
         return self.evolve(samples=samples)
 
-    def with_issue(self, message: str, level: str = "warning", origin: str = "",
-                   exc: BaseException | None = None) -> "Frame":
+    def with_issue(
+        self,
+        message: str,
+        level: str = "warning",
+        origin: str = "",
+        exc: BaseException | None = None,
+    ) -> "Frame":
         issue = Issue(message, level, origin, exc, self.prov)
         return self.evolve(issues=self.issues + (issue,))
 
@@ -255,6 +283,7 @@ class Frame:
         """Drop frame-level annotation keys."""
         meta = {k: v for k, v in self.meta.items() if k not in keys}
         from dataclasses import replace
+
         return replace(self, meta=frozen(meta))
 
     # -- state ------------------------------------------------------------- #
@@ -330,15 +359,19 @@ class Frame:
             for level in (self.meta, self.stream, self.samples):
                 if key in level:
                     return level[key]
-            raise KeyError(f"no annotation {key!r}; have meta={list(self.meta)}, "
-                           f"stream={list(self.stream)}, samples={list(self.samples)}")
+            raise KeyError(
+                f"no annotation {key!r}; have meta={list(self.meta)}, "
+                f"stream={list(self.stream)}, samples={list(self.samples)}"
+            )
         if isinstance(key, int) and (self.parts or isinstance(self.data, tuple)):
             if self.parts:
                 return self.parts[key]
             return self.evolve(data=self.data[key], parts=())
         if isinstance(key, (int, slice, tuple)) or key is Ellipsis:
             return self.slice(key)
-        raise TypeError("frame keys are annotation names (str), part indices (int) or data slices")
+        raise TypeError(
+            "frame keys are annotation names (str), part indices (int) or data slices"
+        )
 
     def slice(self, key: Any) -> "Frame":
         """Slice the data; sample-level annotations are sliced along the leading axis in
@@ -356,7 +389,14 @@ class Frame:
         elif lead is Ellipsis or lead is None:
             samples = dict(self.samples)
         from dataclasses import replace
-        return replace(self, data=data, samples=frozen(samples), meta=frozen(self.meta, **meta), parts=())
+
+        return replace(
+            self,
+            data=data,
+            samples=frozen(samples),
+            meta=frozen(self.meta, **meta),
+            parts=(),
+        )
 
     def __contains__(self, key: object) -> bool:
         return key in self.meta or key in self.stream or key in self.samples
@@ -381,6 +421,7 @@ class Frame:
 
     def _repr_html_(self) -> str:
         from .notebook import frame_html
+
         return frame_html(self)
 
     def __repr__(self) -> str:

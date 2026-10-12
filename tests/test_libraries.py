@@ -8,7 +8,13 @@ from sigflow import dsp, linalg, plot
 
 
 def test_dsp_chain_types_and_metadata():
-    g = dsp.sine(freq=1000, rate=8000, n=256, frames=3) >> dsp.window >> dsp.to_complex >> dsp.fft >> dsp.power_db
+    g = (
+        dsp.sine(freq=1000, rate=8000, n=256, frames=3)
+        >> dsp.window
+        >> dsp.to_complex
+        >> dsp.fft
+        >> dsp.power_db
+    )
     out = run(g)
     assert out[0].data.shape == (256,)
     assert out[0].stream["rate"] == 8000 and out[2].meta["seq"] == 2
@@ -56,11 +62,12 @@ def test_linalg_shape_contracts():
     w, v = run(g)[0].data
     assert w.shape == (4,) and v.shape == (4, 4)
     with pytest.raises(TypeMismatch):
-        A() >> linalg.inv            # 3x4 is not square
+        A() >> linalg.inv  # 3x4 is not square
 
 
 def test_plot_blocks_record_frames_and_animate(tmp_path):
     import matplotlib
+
     matplotlib.use("Agg")
     p = plot.line(title="t")
     s = plot.spectrum()
@@ -82,7 +89,11 @@ def test_graph_and_frame_html():
 
 
 def test_draw_and_dot():
-    g = (dsp.sine(n=64, frames=2) & dsp.noise(n=64, frames=2)) >> (lambda ab: ab[0]) >> (dsp.rms | dsp.energy)
+    g = (
+        (dsp.sine(n=64, frames=2) & dsp.noise(n=64, frames=2))
+        >> (lambda ab: ab[0])
+        >> (dsp.rms | dsp.energy)
+    )
     d = g.draw()
     assert d._repr_svg_().startswith("<svg") and "fan-out" in d.svg and "zip" in d.svg
     assert "digraph" in g.to_dot() and "->" in g.to_dot()

@@ -16,6 +16,7 @@ Compatibility between a producer's output type and a consumer's input type is
 decided by :func:`unify`, which binds symbolic dimensions in an environment so
 that ``"N"`` means the same thing everywhere in a graph.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -24,9 +25,26 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 __all__ = [
-    "Any", "Sig", "SignalType", "DVar", "TupleType", "StreamType", "TypeMismatch",
-    "unify", "Env", "Dim", "scoped", "slice_shape", "Scalar", "Vector", "Matrix", "Tensor",
-    "CVector", "CMatrix", "is_signal_type", "describe",
+    "Any",
+    "Sig",
+    "SignalType",
+    "DVar",
+    "TupleType",
+    "StreamType",
+    "TypeMismatch",
+    "unify",
+    "Env",
+    "Dim",
+    "scoped",
+    "slice_shape",
+    "Scalar",
+    "Vector",
+    "Matrix",
+    "Tensor",
+    "CVector",
+    "CMatrix",
+    "is_signal_type",
+    "describe",
 ]
 
 # A dimension is a fixed int, a symbolic name (str), or None (= any length).
@@ -51,6 +69,7 @@ class DVar:
 # Environment for symbolic dimensions
 # --------------------------------------------------------------------------- #
 
+
 class Env:
     """Union-find over symbolic dimensions and dtype variables.
 
@@ -62,7 +81,7 @@ class Env:
 
     def __init__(self) -> None:
         self._parent: dict[str, str] = {}
-        self._value: dict[str, Any] = {}       # root -> int (dims) or dtype (dtype vars)
+        self._value: dict[str, Any] = {}  # root -> int (dims) or dtype (dtype vars)
 
     # -- union-find --------------------------------------------------------- #
     def find(self, name: str) -> str:
@@ -80,7 +99,8 @@ class Env:
         prev = self._value.get(root)
         if prev is not None and prev != value:
             raise TypeMismatch(
-                f"{where or 'edge'}: dimension {_plain(name)!r} is {prev} but here needs {value}")
+                f"{where or 'edge'}: dimension {_plain(name)!r} is {prev} but here needs {value}"
+            )
         self._value[root] = value
 
     def union(self, a: str, b: str, where: str = "") -> None:
@@ -90,7 +110,8 @@ class Env:
         va, vb = self._value.get(ra), self._value.get(rb)
         if va is not None and vb is not None and va != vb:
             raise TypeMismatch(
-                f"{where or 'edge'}: dimension {_plain(a)!r}={va} cannot equal {_plain(b)!r}={vb}")
+                f"{where or 'edge'}: dimension {_plain(a)!r}={va} cannot equal {_plain(b)!r}={vb}"
+            )
         self._parent[rb] = ra
         if va is None and vb is not None:
             self._value[ra] = vb
@@ -102,7 +123,8 @@ class Env:
             self._value[root] = dt
         elif prev != dt and not _dtype_ok(dt, prev):
             raise TypeMismatch(
-                f"{where or 'edge'}: dtype variable {_plain(name)!r} is {_dn(prev)} but here needs {_dn(dt)}")
+                f"{where or 'edge'}: dtype variable {_plain(name)!r} is {_dn(prev)} but here needs {_dn(dt)}"
+            )
 
     def union_dtype(self, a: str, b: str, where: str = "") -> None:
         ra, rb = self.find(a), self.find(b)
@@ -110,7 +132,9 @@ class Env:
             return
         va, vb = self._value.get(ra), self._value.get(rb)
         if va is not None and vb is not None and va != vb and not _dtype_ok(vb, va):
-            raise TypeMismatch(f"{where or 'edge'}: dtype {_dn(va)} cannot equal {_dn(vb)}")
+            raise TypeMismatch(
+                f"{where or 'edge'}: dtype {_dn(va)} cannot equal {_dn(vb)}"
+            )
         self._parent[rb] = ra
         if va is None and vb is not None:
             self._value[ra] = vb
@@ -127,8 +151,14 @@ class Env:
         return out
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
-        return "Env(" + ", ".join(f"{k}={_dn(v) if not isinstance(v, int) else v}"
-                                  for k, v in self.bindings.items()) + ")"
+        return (
+            "Env("
+            + ", ".join(
+                f"{k}={_dn(v) if not isinstance(v, int) else v}"
+                for k, v in self.bindings.items()
+            )
+            + ")"
+        )
 
 
 def _plain(sym: str) -> str:
@@ -148,13 +178,16 @@ def scoped(t: Any, scope: str) -> Any:
         dtype = DVar(f"{dtype.name}#{scope}")
     shape = t.shape
     if shape is not None:
-        shape = tuple(f"{d}#{scope}" if isinstance(d, str) and "#" not in d else d for d in shape)
+        shape = tuple(
+            f"{d}#{scope}" if isinstance(d, str) and "#" not in d else d for d in shape
+        )
     return t.with_(dtype=dtype, shape=shape)
 
 
 # --------------------------------------------------------------------------- #
 # SignalType
 # --------------------------------------------------------------------------- #
+
 
 def _norm_dtype(dt: Any) -> Any:
     """Normalise a dtype spec: NumPy dtypes stay dtypes, Python types stay types."""
@@ -227,7 +260,9 @@ class SignalType:
         rate = params[2] if len(params) > 2 else None
         units = params[3] if len(params) > 3 else None
         if len(params) > 4:
-            raise TypeError("Sig[dtype, shape, rate, units] takes at most four parameters")
+            raise TypeError(
+                "Sig[dtype, shape, rate, units] takes at most four parameters"
+            )
         return cls(_norm_dtype(dtype), _norm_shape(shape), rate, units)
 
     def __post_init__(self) -> None:
@@ -241,7 +276,12 @@ class SignalType:
 
     @property
     def is_any(self) -> bool:
-        return self.dtype is Any and self.shape is None and self.rate is None and self.units is None
+        return (
+            self.dtype is Any
+            and self.shape is None
+            and self.rate is None
+            and self.units is None
+        )
 
     @property
     def ndim(self) -> int | None:
@@ -253,6 +293,7 @@ class SignalType:
     def with_(self, **changes: Any) -> "SignalType":
         """Return a copy with some fields replaced (``shape`` is re-normalised)."""
         from dataclasses import replace
+
         return replace(self, **changes)
 
     def requires(self, *keys: str) -> "SignalType":
@@ -266,8 +307,12 @@ class SignalType:
             t = t.with_(dtype=env.value(self.dtype.name))
         if self.shape is None:
             return t
-        shape = tuple((env.value(d) if env.value(d) is not None else d) if isinstance(d, str) else d
-                      for d in self.shape)
+        shape = tuple(
+            (env.value(d) if env.value(d) is not None else d)
+            if isinstance(d, str)
+            else d
+            for d in self.shape
+        )
         return t.with_(shape=shape)
 
     # -- runtime check ----------------------------------------------------- #
@@ -285,7 +330,9 @@ class SignalType:
         if self.is_array:
             arr = np.asarray(value)
             if not np.can_cast(arr.dtype, self.dtype, casting="same_kind"):
-                raise TypeMismatch(f"{where}: value dtype {arr.dtype} is not {self.dtype}")
+                raise TypeMismatch(
+                    f"{where}: value dtype {arr.dtype} is not {self.dtype}"
+                )
             if self.shape is not None:
                 if arr.ndim != len(self.shape):
                     raise TypeMismatch(
@@ -293,7 +340,9 @@ class SignalType:
                     )
                 for i, (d, n) in enumerate(zip(self.shape, arr.shape)):
                     if isinstance(d, int) and d != n:
-                        raise TypeMismatch(f"{where}: axis {i} has length {n}, expected {d}")
+                        raise TypeMismatch(
+                            f"{where}: axis {i} has length {n}, expected {d}"
+                        )
                     if isinstance(d, str):
                         env.bind(d, int(n), where)
         elif isinstance(self.dtype, type):
@@ -312,8 +361,14 @@ class SignalType:
             if self.shape is None:
                 parts.append("*")
             else:
-                parts.append("(" + ", ".join("?" if d is None else _plain(str(d)) for d in self.shape) +
-                             ("," if len(self.shape) == 1 else "") + ")")
+                parts.append(
+                    "("
+                    + ", ".join(
+                        "?" if d is None else _plain(str(d)) for d in self.shape
+                    )
+                    + ("," if len(self.shape) == 1 else "")
+                    + ")"
+                )
         if self.rate is not None or self.units is not None:
             parts.append(f"{self.rate}Hz" if self.rate is not None else "_")
         if self.units is not None:
@@ -329,6 +384,7 @@ Sig = SignalType
 # --------------------------------------------------------------------------- #
 # Composite types
 # --------------------------------------------------------------------------- #
+
 
 @dataclass(frozen=True)
 class TupleType:
@@ -376,7 +432,11 @@ class StreamType:
 
     def __class_getitem__(cls, item: Any) -> "StreamType":
         # Stream[Framed[...]] and Stream[Frame] deliver whole frames; keep those markers as-is
-        if isinstance(item, type) and item.__name__ == "Frame" or type(item).__name__ == "Framed":
+        if (
+            isinstance(item, type)
+            and item.__name__ == "Frame"
+            or type(item).__name__ == "Framed"
+        ):
             return cls(item)
         return cls(_as_type(item))
 
@@ -410,6 +470,7 @@ as_type = _as_type
 # Unification
 # --------------------------------------------------------------------------- #
 
+
 def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
     if isinstance(produced, DVar) and isinstance(required, DVar):
         env.union_dtype(produced.name, required.name, where)
@@ -421,16 +482,20 @@ def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
     if isinstance(produced, DVar):
         v = env.value(produced.name)
         if v is None:
-            env.bind_dtype(produced.name, required, where)   # the only thing known about it
+            env.bind_dtype(
+                produced.name, required, where
+            )  # the only thing known about it
             return
         produced = v
     if not _dtype_ok(produced, required):
-        raise TypeMismatch(f"{where}: dtype {_dn(produced)} cannot feed {_dn(required)}")
+        raise TypeMismatch(
+            f"{where}: dtype {_dn(produced)} cannot feed {_dn(required)}"
+        )
 
 
 def _dtype_ok(produced: Any, required: Any) -> bool:
     if required is Any or produced is Any:
-        return True          # gradual typing: Any is compatible both ways (checked at runtime)
+        return True  # gradual typing: Any is compatible both ways (checked at runtime)
     if isinstance(required, np.dtype):
         if not isinstance(produced, np.dtype):
             return False
@@ -468,7 +533,7 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
 
     if required.shape is not None:
         if produced.shape is None:
-            return env           # gradual: unknown shape is checked at runtime
+            return env  # gradual: unknown shape is checked at runtime
         if len(produced.shape) != len(required.shape):
             raise TypeMismatch(
                 f"{where}: rank {len(produced.shape)} produced, rank {len(required.shape)} required "
@@ -477,13 +542,29 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
         for i, (p, r) in enumerate(zip(produced.shape, required.shape)):
             _unify_dim(p, r, env, f"{where} axis {i}")
 
-    if required.rate is not None and produced.rate is not None and produced.rate != required.rate:
-        raise TypeMismatch(f"{where}: rate {produced.rate} Hz produced, {required.rate} Hz required")
-    if required.units is not None and produced.units is not None and produced.units != required.units:
+    if (
+        required.rate is not None
+        and produced.rate is not None
+        and produced.rate != required.rate
+    ):
+        raise TypeMismatch(
+            f"{where}: rate {produced.rate} Hz produced, {required.rate} Hz required"
+        )
+    if (
+        required.units is not None
+        and produced.units is not None
+        and produced.units != required.units
+    ):
         from .units import compatible
-        hint = (f" (convertible: insert dsp.to_units({required.units!r}))"
-                if compatible(produced.units, required.units) else " (different dimensions)")
-        raise TypeMismatch(f"{where}: units {produced.units!r} produced, {required.units!r} required{hint}")
+
+        hint = (
+            f" (convertible: insert dsp.to_units({required.units!r}))"
+            if compatible(produced.units, required.units)
+            else " (different dimensions)"
+        )
+        raise TypeMismatch(
+            f"{where}: units {produced.units!r} produced, {required.units!r} required{hint}"
+        )
     return env
 
 
@@ -518,32 +599,50 @@ def slice_shape(shape: tuple | None, key: Any) -> tuple | None:
     i = 0
     for k in keys:
         if k is Ellipsis:
-            rest = len(shape) - i - sum(1 for kk in keys[keys.index(k) + 1:] if kk is not None)
-            out.extend(shape[i:i + rest])
+            rest = (
+                len(shape)
+                - i
+                - sum(1 for kk in keys[keys.index(k) + 1 :] if kk is not None)
+            )
+            out.extend(shape[i : i + rest])
             i += rest
             continue
         if k is None:
             out.append(1)
             continue
         if i >= len(shape):
-            raise TypeMismatch(f"too many indices for shape {tuple(_plain(str(x)) if isinstance(x, str) else x for x in shape)}")
+            raise TypeMismatch(
+                f"too many indices for shape {tuple(_plain(str(x)) if isinstance(x, str) else x for x in shape)}"
+            )
         d = shape[i]
         i += 1
         if isinstance(k, int):
             if isinstance(d, int) and not -d <= k < d:
-                raise TypeMismatch(f"index {k} out of range for dimension of length {d}")
-            continue                                        # axis removed
+                raise TypeMismatch(
+                    f"index {k} out of range for dimension of length {d}"
+                )
+            continue  # axis removed
         if isinstance(k, slice):
             if k == slice(None):
                 out.append(d)
             elif isinstance(d, int):
                 out.append(len(range(*k.indices(d))))
-            elif (isinstance(d, str) and k.start is not None and k.stop is not None
-                  and k.start >= 0 and k.stop >= 0 and (k.step or 1) > 0):
-                out.append(len(range(k.start, k.stop, k.step or 1)))   # explicit bounds: known length
+            elif (
+                isinstance(d, str)
+                and k.start is not None
+                and k.stop is not None
+                and k.start >= 0
+                and k.stop >= 0
+                and (k.step or 1) > 0
+            ):
+                out.append(
+                    len(range(k.start, k.stop, k.step or 1))
+                )  # explicit bounds: known length
             elif isinstance(d, str):
                 name, _, scope = d.partition("#")
-                out.append(f"{name}'#{scope}" if scope else name + "'")   # a new, unrelated symbol
+                out.append(
+                    f"{name}'#{scope}" if scope else name + "'"
+                )  # a new, unrelated symbol
             else:
                 out.append(None)
             continue

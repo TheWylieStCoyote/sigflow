@@ -16,6 +16,7 @@ Set ``live=True`` for a plot that updates in the notebook while running
 
 Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one frame.
 """
+
 from __future__ import annotations
 
 from typing import Any, Callable
@@ -27,37 +28,65 @@ from .frame import Frame
 from .graph import Block
 from .types import Sig
 
-__all__ = ["PlotBlock", "line", "spectrum", "waterfall", "constellation", "custom", "animate",
-           "history", "multi", "Multi"]
+__all__ = [
+    "PlotBlock",
+    "line",
+    "spectrum",
+    "waterfall",
+    "constellation",
+    "custom",
+    "animate",
+    "history",
+    "multi",
+    "Multi",
+]
 
 
 def _matplotlib() -> Any:
     import matplotlib
     import matplotlib.pyplot as plt
+
     return plt
 
 
 class PlotBlock(Block):
     """Base class: a tap that draws frames with ``draw(ax, data, frame)``."""
 
-    def __init__(self, draw: Callable[[Any, Any, Frame], None], *, name: str = "plot",
-                 in_type: Any = None, title: str | None = None, figsize: tuple[float, float] = (7, 3.2),
-                 keep: int | None = None, live: bool = False, every: int = 1) -> None:
+    def __init__(
+        self,
+        draw: Callable[[Any, Any, Frame], None],
+        *,
+        name: str = "plot",
+        in_type: Any = None,
+        title: str | None = None,
+        figsize: tuple[float, float] = (7, 3.2),
+        keep: int | None = None,
+        live: bool = False,
+        every: int = 1,
+    ) -> None:
         self.draw_fn = draw
         self.title = title
         self.figsize = figsize
-        self.keep = keep                 # how many frames to remember for animation (None = all)
+        self.keep = keep  # how many frames to remember for animation (None = all)
         self.live = live
         self.every = every
         self.frames: list[Frame] = []
         import threading
-        self.lock = threading.Lock()      # matplotlib is not thread-safe: redraw vs. rasterise
+
+        self.lock = (
+            threading.Lock()
+        )  # matplotlib is not thread-safe: redraw vs. rasterise
         self._fig = None
         self._ax = None
         self._handle = None
         self._count = 0
-        super().__init__(tap(self._on_frame, name=name, inputs={"f": Frame} if in_type is None
-                             else {"f": _framed(in_type)}))
+        super().__init__(
+            tap(
+                self._on_frame,
+                name=name,
+                inputs={"f": Frame} if in_type is None else {"f": _framed(in_type)},
+            )
+        )
 
     # -- drawing ----------------------------------------------------------- #
     @property
@@ -103,6 +132,7 @@ class PlotBlock(Block):
     def png(self, dpi: int = 100) -> bytes:
         """The current figure as PNG bytes (safe to call from another thread)."""
         import io
+
         buf = io.BytesIO()
         with self.lock:
             self.figure.savefig(buf, format="png", dpi=dpi, bbox_inches="tight")
@@ -110,7 +140,11 @@ class PlotBlock(Block):
 
     def _update_live(self) -> None:
         import matplotlib
-        if "ipympl" in matplotlib.get_backend().lower() or "widget" in matplotlib.get_backend().lower():
+
+        if (
+            "ipympl" in matplotlib.get_backend().lower()
+            or "widget" in matplotlib.get_backend().lower()
+        ):
             # ipympl: the figure is an interactive widget; it redraws itself (zoom/pan keep working).
             try:
                 self.figure.canvas.draw_idle()
@@ -120,7 +154,7 @@ class PlotBlock(Block):
             return
         try:
             from IPython.display import display
-        except ImportError:   # pragma: no cover
+        except ImportError:  # pragma: no cover
             return
         if self._handle is None:
             self._handle = display(self.figure, display_id=True)
@@ -130,12 +164,14 @@ class PlotBlock(Block):
     def show(self) -> Any:
         """Display the figure (in ipympl mode this is the live, interactive canvas)."""
         from IPython.display import display
+
         return display(self.figure)
 
     # -- animation --------------------------------------------------------- #
     def animate(self, interval: int = 100, repeat: bool = True) -> Any:
         """A ``FuncAnimation`` replaying every recorded frame."""
         from matplotlib.animation import FuncAnimation
+
         frames = [f for f in self.frames if not f.failed]
         if not frames:
             raise ValueError("no frames to animate")
@@ -145,7 +181,14 @@ class PlotBlock(Block):
             self.redraw(frames[i])
             return []
 
-        return FuncAnimation(fig, update, frames=len(frames), interval=interval, repeat=repeat, blit=False)
+        return FuncAnimation(
+            fig,
+            update,
+            frames=len(frames),
+            interval=interval,
+            repeat=repeat,
+            blit=False,
+        )
 
     def save(self, path: str, interval: int = 100, **kw: Any) -> str:
         """Save the animation (``.gif`` via Pillow, ``.mp4`` via ffmpeg when available)."""
@@ -157,10 +200,12 @@ class PlotBlock(Block):
     def html(self, interval: int = 100) -> Any:
         """Animation as HTML (JavaScript player) for Jupyter."""
         from IPython.display import HTML
+
         return HTML(self.animate(interval=interval).to_jshtml())
 
     def _repr_html_(self) -> str:
         import base64
+
         if not self.frames:
             return f"<i>{self.name}: no frames yet</i>"
         data = base64.b64encode(self.png()).decode()
@@ -174,6 +219,7 @@ def _v(x: Any) -> Any:
 
 def _framed(t: Any) -> Any:
     from .block import Framed
+
     return Framed(t)
 
 
@@ -181,8 +227,14 @@ def _framed(t: Any) -> Any:
 # Ready-made plots
 # --------------------------------------------------------------------------- #
 
-def line(title: str | None = None, xlabel: str = "sample", ylabel: str = "", ylim: Any = None,
-         **kw: Any) -> PlotBlock:
+
+def line(
+    title: str | None = None,
+    xlabel: str = "sample",
+    ylabel: str = "",
+    ylim: Any = None,
+    **kw: Any,
+) -> PlotBlock:
     """Plot each 1-D frame as a line (complex frames show real and imaginary parts)."""
 
     def draw(ax: Any, x: Any, f: Frame) -> None:
@@ -204,8 +256,13 @@ def line(title: str | None = None, xlabel: str = "sample", ylabel: str = "", yli
     return PlotBlock(draw, name="line", in_type=Sig["T", "N"], title=title, **kw)
 
 
-def spectrum(title: str | None = None, db: bool = True, centered: bool = True, ylim: Any = None,
-             **kw: Any) -> PlotBlock:
+def spectrum(
+    title: str | None = None,
+    db: bool = True,
+    centered: bool = True,
+    ylim: Any = None,
+    **kw: Any,
+) -> PlotBlock:
     """Plot the magnitude spectrum of a complex (or real) frame, with a Hz axis when
     the stream carries ``rate``."""
 
@@ -229,7 +286,9 @@ def spectrum(title: str | None = None, db: bool = True, centered: bool = True, y
     return PlotBlock(draw, name="spectrum", in_type=Sig["T", "N"], title=title, **kw)
 
 
-def waterfall(title: str | None = None, rows: int = 64, db: bool = True, **kw: Any) -> PlotBlock:
+def waterfall(
+    title: str | None = None, rows: int = 64, db: bool = True, **kw: Any
+) -> PlotBlock:
     """Scrolling spectrogram: each incoming frame becomes one row."""
     history: list[np.ndarray] = []
 
@@ -250,7 +309,9 @@ def waterfall(title: str | None = None, rows: int = 64, db: bool = True, **kw: A
     return PlotBlock(draw, name="waterfall", in_type=Sig["T", "N"], title=title, **kw)
 
 
-def constellation(title: str | None = None, lim: float | None = None, **kw: Any) -> PlotBlock:
+def constellation(
+    title: str | None = None, lim: float | None = None, **kw: Any
+) -> PlotBlock:
     """Scatter plot of complex samples (I/Q)."""
 
     def draw(ax: Any, x: Any, f: Frame) -> None:
@@ -264,18 +325,32 @@ def constellation(title: str | None = None, lim: float | None = None, **kw: Any)
             ax.set_ylim(-_v(lim), _v(lim))
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="constellation", in_type=Sig[complex, "N"], title=title,
-                     figsize=kw.pop("figsize", (4, 4)), **kw)
+    return PlotBlock(
+        draw,
+        name="constellation",
+        in_type=Sig[complex, "N"],
+        title=title,
+        figsize=kw.pop("figsize", (4, 4)),
+        **kw,
+    )
 
 
-def custom(draw: Callable[[Any, Any, Frame], None], name: str = "plot", in_type: Any = None,
-           **kw: Any) -> PlotBlock:
+def custom(
+    draw: Callable[[Any, Any, Frame], None],
+    name: str = "plot",
+    in_type: Any = None,
+    **kw: Any,
+) -> PlotBlock:
     """Make a plot block from ``draw(ax, data, frame)``."""
     return PlotBlock(draw, name=name, in_type=in_type, **kw)
 
 
-def animate(frames: list[Frame] | list[Any], draw: Callable[[Any, Any, Frame], None] | None = None,
-            interval: int = 100, figsize: tuple[float, float] = (7, 3.2)) -> Any:
+def animate(
+    frames: list[Frame] | list[Any],
+    draw: Callable[[Any, Any, Frame], None] | None = None,
+    interval: int = 100,
+    figsize: tuple[float, float] = (7, 3.2),
+) -> Any:
     """Animate any sequence of frames / arrays after the fact (default: line plot)."""
     frames = [f if isinstance(f, Frame) else Frame(f) for f in frames]
     p = line(figsize=figsize) if draw is None else custom(draw, figsize=figsize)
@@ -284,8 +359,14 @@ def animate(frames: list[Frame] | list[Any], draw: Callable[[Any, Any, Frame], N
     return p.animate(interval=interval)
 
 
-def history(key: Any = None, title: str | None = None, window: int = 200, ylabel: str = "",
-            ylim: Any = None, **kw: Any) -> PlotBlock:
+def history(
+    key: Any = None,
+    title: str | None = None,
+    window: int = 200,
+    ylabel: str = "",
+    ylim: Any = None,
+    **kw: Any,
+) -> PlotBlock:
     """A scalar over frames: the frame's data (a number), ``key="snr_db"`` an annotation, or
     ``key=callable(frame)``; the last ``window`` values are drawn against time (``t0``) when
     the frames carry it, else against frame index."""
@@ -311,30 +392,45 @@ def history(key: Any = None, title: str | None = None, window: int = 200, ylabel
             ax.set_ylim(*_v(ylim))
         ax.grid(True, alpha=0.3)
 
-    return PlotBlock(draw, name=f"history({key if isinstance(key, str) else ''})", in_type=None,
-                     title=title, **kw)
+    return PlotBlock(
+        draw,
+        name=f"history({key if isinstance(key, str) else ''})",
+        in_type=None,
+        title=title,
+        **kw,
+    )
 
 
 class Multi(PlotBlock):
     """Several plot blocks tiled in one figure (``plot.multi([...], cols=2)``): one tap that
     draws all panels from the same frame, for `controls(plots=[m])`, `animate()` and `save()`."""
 
-    def __init__(self, panels: list, cols: int = 2, title: str | None = None,
-                 figsize: tuple[float, float] | None = None, **kw: Any) -> None:
+    def __init__(
+        self,
+        panels: list,
+        cols: int = 2,
+        title: str | None = None,
+        figsize: tuple[float, float] | None = None,
+        **kw: Any,
+    ) -> None:
         self.panels = list(panels)
         self.cols = max(1, min(cols, len(self.panels)))
         self.rows = -(-len(self.panels) // self.cols)
         fs = figsize or (5.0 * self.cols, 2.8 * self.rows)
-        super().__init__(self._draw_all, name="multi", in_type=None, title=title, figsize=fs, **kw)
+        super().__init__(
+            self._draw_all, name="multi", in_type=None, title=title, figsize=fs, **kw
+        )
         self._axes: list = []
 
     @property
     def figure(self) -> Any:
         if self._fig is None:
             plt = _matplotlib()
-            self._fig, axes = plt.subplots(self.rows, self.cols, figsize=self.figsize, squeeze=False)
+            self._fig, axes = plt.subplots(
+                self.rows, self.cols, figsize=self.figsize, squeeze=False
+            )
             self._axes = [a for row in axes for a in row]
-            for a in self._axes[len(self.panels):]:
+            for a in self._axes[len(self.panels) :]:
                 a.set_axis_off()
             self._ax = self._axes[0]
             if self.title:
@@ -351,11 +447,21 @@ class Multi(PlotBlock):
                     ax.set_title(p.title)
                 try:
                     p.draw_fn(ax, f.data, f)
-                except Exception as e:                      # a panel that does not fit this frame
-                    ax.text(0.5, 0.5, f"{p.name}: {e}", ha="center", va="center", fontsize=8, transform=ax.transAxes)
+                except Exception as e:  # a panel that does not fit this frame
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"{p.name}: {e}",
+                        ha="center",
+                        va="center",
+                        fontsize=8,
+                        transform=ax.transAxes,
+                    )
             fig.canvas.draw_idle()
 
-    def _draw_all(self, ax: Any, x: Any, f: Frame) -> None:   # pragma: no cover - redraw() overrides
+    def _draw_all(
+        self, ax: Any, x: Any, f: Frame
+    ) -> None:  # pragma: no cover - redraw() overrides
         pass
 
 
@@ -373,5 +479,13 @@ def _annotate(ax: Any, f: Frame) -> None:
     if f.warnings:
         bits.append(f"⚠ {len(f.warnings)}")
     if bits:
-        ax.text(0.99, 0.95, "  ".join(bits), transform=ax.transAxes, ha="right", va="top",
-                fontsize=8, alpha=0.7)
+        ax.text(
+            0.99,
+            0.95,
+            "  ".join(bits),
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
+            alpha=0.7,
+        )

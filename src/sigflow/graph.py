@@ -11,6 +11,7 @@ Types are checked **when the graph is built** – a mismatch raises
 :class:`~sigflow.types.TypeMismatch` immediately, with the names of the
 offending nodes, before any data flows.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -21,19 +22,53 @@ from .block import BlockDef
 from .frame import Frame, frozen
 import itertools
 
-from .types import Any as _Any, DVar, Env, SignalType, TupleType, TypeMismatch, as_type, describe, scoped, slice_shape, unify
+from .types import (
+    Any as _Any,
+    DVar,
+    Env,
+    SignalType,
+    TupleType,
+    TypeMismatch,
+    as_type,
+    describe,
+    scoped,
+    slice_shape,
+    unify,
+)
 
 _ids = itertools.count(1)
 
-__all__ = ["Node", "Block", "Source", "Pipeline", "Fanout", "Zip", "Merge",
-           "Select", "Slice", "StreamSlice", "PortRef", "port", "Align", "align", "Feedback", "feedback", "When", "when",
-           "merge", "as_node", "from_iterable", "validate", "fresh"]
+__all__ = [
+    "Node",
+    "Block",
+    "Source",
+    "Pipeline",
+    "Fanout",
+    "Zip",
+    "Merge",
+    "Select",
+    "Slice",
+    "StreamSlice",
+    "PortRef",
+    "port",
+    "Align",
+    "align",
+    "Feedback",
+    "feedback",
+    "When",
+    "when",
+    "merge",
+    "as_node",
+    "from_iterable",
+    "validate",
+    "fresh",
+]
 
 
 class Node:
     """Base class of everything that can be placed in a graph."""
 
-    in_type: Any = None          # None => source
+    in_type: Any = None  # None => source
     out_type: Any = SignalType()
     name: str = "node"
 
@@ -49,10 +84,15 @@ class Node:
         ``iq[::4]`` — with the shape tracked statically and sample annotations sliced in step."""
         if isinstance(self.out_type, TupleType):
             return Pipeline([self, Select(self, key)])
-        if isinstance(self.out_type, SignalType) and (self.out_type.is_array or self.out_type.dtype is Any
-                                                       or isinstance(self.out_type.dtype, DVar)):
+        if isinstance(self.out_type, SignalType) and (
+            self.out_type.is_array
+            or self.out_type.dtype is Any
+            or isinstance(self.out_type.dtype, DVar)
+        ):
             return Pipeline([self, Slice(self, key)])
-        raise TypeError(f"{self.name} produces {describe(self.out_type)}: [] slices arrays or selects ports")
+        raise TypeError(
+            f"{self.name} produces {describe(self.out_type)}: [] slices arrays or selects ports"
+        )
 
     # -- stream slicing ----------------------------------------------------- #
     def take(self, n: int) -> "Pipeline":
@@ -115,18 +155,21 @@ class Node:
     def run(self, **kw: Any) -> list:
         """Run synchronously; returns the list of output frames (see :func:`sigflow.runtime.run`)."""
         from .runtime import run
+
         return run(self, **kw)
 
     async def arun(self, **kw: Any) -> list:
         from .runtime import arun
+
         return await arun(self, **kw)
 
     def start(self, paused: bool = False, **kw: Any) -> Any:
         """Run in the background and return a :class:`~sigflow.control.Run` handle
         with ``pause() / resume() / step() / stop() / wait()`` and ``controls()`` for notebooks."""
         from .control import Run
+
         run = Run(self, paused=paused, **kw)
-        self.last_monitor = run.monitor      # type: ignore[attr-defined]
+        self.last_monitor = run.monitor  # type: ignore[attr-defined]
         return run
 
     def __call__(self, items: Any, **kw: Any) -> list:
@@ -136,19 +179,29 @@ class Node:
         if self.in_type is None:
             raise TypeError(f"{self.name} has its own source; call run() instead")
         import numpy as _np
-        if isinstance(items, (_np.ndarray,)) or not hasattr(items, "__iter__") or isinstance(items, (str, bytes, dict)):
+
+        if (
+            isinstance(items, (_np.ndarray,))
+            or not hasattr(items, "__iter__")
+            or isinstance(items, (str, bytes, dict))
+        ):
             items = [items]
         from .runtime import run as _run
-        return _run(from_iterable(list(items), type=self.in_type, name="input") >> self, **kw)
+
+        return _run(
+            from_iterable(list(items), type=self.in_type, name="input") >> self, **kw
+        )
 
     apply = __call__
 
     def __aiter__(self):
         from .runtime import iterate
+
         return iterate(self)
 
     def __iter__(self):
         from .runtime import iterate_sync
+
         return iterate_sync(self)
 
     def describe(self, indent: str = "") -> str:
@@ -157,22 +210,26 @@ class Node:
 
     def _repr_html_(self) -> str:
         from .notebook import graph_html
+
         return graph_html(self)
 
     def draw(self, types: bool = True) -> Any:
         """SVG diagram of the graph (displays inline in Jupyter; ``.save(path)`` to write it)."""
         from .draw import Diagram
+
         return Diagram(self, types=types)
 
     def report(self, title: str | None = None, fmt: str = "html") -> str:
         """Documentation of this graph (diagram + typed table + block docstrings); see
         :func:`sigflow.notebook.report`."""
         from .notebook import report
+
         return report(self, title, fmt)
 
     def to_dot(self, types: bool = True) -> str:
         """Graphviz DOT source for the graph."""
         from .draw import to_dot
+
         return to_dot(self, types=types)
 
     def __repr__(self) -> str:
@@ -182,12 +239,21 @@ class Node:
 class Block(Node):
     """A :class:`BlockDef` placed in a graph with a fixed configuration."""
 
-    def __init__(self, defn: BlockDef, config: Mapping[str, Any] | None = None,
-                 label: str | None = None) -> None:
+    def __init__(
+        self,
+        defn: BlockDef,
+        config: Mapping[str, Any] | None = None,
+        label: str | None = None,
+    ) -> None:
         self.defn = defn
-        self.config = frozen(defn.check_config(config or {}))     # full (defaults filled): display, provenance
-        self.given = frozen(dict(config or {}))                  # what the caller passed: used for the call
+        self.config = frozen(
+            defn.check_config(config or {})
+        )  # full (defaults filled): display, provenance
+        self.given = frozen(
+            dict(config or {})
+        )  # what the caller passed: used for the call
         from .control import Knob
+
         self.live = any(isinstance(v, Knob) for v in self.config.values())
         self.label = label
         self.name = str(label or defn.name)
@@ -195,9 +261,17 @@ class Block(Node):
         in_t, out_t = defn.in_type, defn.out_type
         if defn.refine is not None:
             from .control import live as _live
+
             refined = defn.refine(**_live(self.config))
-            if isinstance(refined, tuple) and len(refined) == 2 and not isinstance(refined, TupleType):
-                in_t, out_t = (as_type(refined[0]) if refined[0] is not None else None), as_type(refined[1])
+            if (
+                isinstance(refined, tuple)
+                and len(refined) == 2
+                and not isinstance(refined, TupleType)
+            ):
+                in_t, out_t = (
+                    (as_type(refined[0]) if refined[0] is not None else None),
+                    as_type(refined[1]),
+                )
             else:
                 out_t = as_type(refined)
         self.in_type = scoped(in_t, str(self.id))
@@ -214,10 +288,14 @@ class Block(Node):
     def clone(self) -> "Block":
         """A copy with a fresh identity (new symbol scope); stateful subclasses share state."""
         import copy
+
         new = copy.copy(self)
         new.given = self.given
         new.id = next(_ids)
-        new.in_type = scoped(self.defn.in_type if self.defn.refine is None else _unscope(self.in_type), str(new.id))
+        new.in_type = scoped(
+            self.defn.in_type if self.defn.refine is None else _unscope(self.in_type),
+            str(new.id),
+        )
         new.out_type = scoped(_unscope(self.out_type), str(new.id))
         return new
 
@@ -235,7 +313,9 @@ class Source(Node):
     def __init__(self, obj: Any, type: Any = None, name: str | None = None) -> None:
         self.obj = obj
         self.id = next(_ids)
-        self.out_type = scoped(as_type(type) if type is not None else SignalType(), str(self.id))
+        self.out_type = scoped(
+            as_type(type) if type is not None else SignalType(), str(self.id)
+        )
         self.name = str(name or getattr(obj, "__name__", type_name(obj)))
 
     def clone(self) -> "Source":
@@ -282,7 +362,9 @@ class Pipeline(Node):
             env = s.validate(env)
             if prev is not None:
                 if s.in_type is None:
-                    raise TypeMismatch(f"{s.name} is a source and cannot follow {prev.name}")
+                    raise TypeMismatch(
+                        f"{s.name} is a source and cannot follow {prev.name}"
+                    )
                 try:
                     s.accept(prev.out_type, env, f"{prev.name} -> {s.name}")
                 except TypeMismatch as e:
@@ -319,7 +401,9 @@ class Fanout(Node):
         self.name = "(" + " | ".join(b.name for b in flat) + ")"
         ins = [b.in_type for b in flat]
         if any(i is None for i in ins):
-            raise TypeMismatch("fan-out branches must accept input; use '&' to join sources")
+            raise TypeMismatch(
+                "fan-out branches must accept input; use '&' to join sources"
+            )
         self.in_type = _common_input(ins, self.name)
         self.out_type = TupleType(tuple(b.out_type for b in flat))
         self.port_names = _member_names(flat)
@@ -365,7 +449,9 @@ class Zip(Node):
         if all(i is None for i in ins):
             self.in_type = None
         elif any(i is None for i in ins):
-            raise TypeMismatch("cannot zip a source with a non-source; wrap inputs in a pipeline")
+            raise TypeMismatch(
+                "cannot zip a source with a non-source; wrap inputs in a pipeline"
+            )
         else:
             self.in_type = _common_input(ins, self.name)
         self.out_type = TupleType(tuple(p.out_type for p in flat))
@@ -414,12 +500,21 @@ class Feedback(Node):
         self.body = body
         self.init = init
         if not isinstance(body.in_type, TupleType) or len(body.in_type) != 2:
-            raise TypeMismatch(f"feedback body must take (input, state); {body.name} takes "
-                               f"{describe(body.in_type)}")
+            raise TypeMismatch(
+                f"feedback body must take (input, state); {body.name} takes "
+                f"{describe(body.in_type)}"
+            )
         if not isinstance(body.out_type, TupleType) or len(body.out_type) != 2:
-            raise TypeMismatch(f"feedback body must return (output, state); {body.name} returns "
-                               f"{describe(body.out_type)}")
-        unify(body.out_type.items[1], body.in_type.items[1], Env(), f"{body.name} state loop")
+            raise TypeMismatch(
+                f"feedback body must return (output, state); {body.name} returns "
+                f"{describe(body.out_type)}"
+            )
+        unify(
+            body.out_type.items[1],
+            body.in_type.items[1],
+            Env(),
+            f"{body.name} state loop",
+        )
         self.in_type = body.in_type.items[0]
         self.out_type = body.out_type.items[0]
         self.state_type = body.in_type.items[1]
@@ -436,8 +531,10 @@ class Feedback(Node):
         init = repr(self.init)
         if len(init) > 40:
             init = f"<{type(self.init).__name__}{getattr(self.init, 'shape', '')}>"
-        return (f"{indent}feedback(init={init}): {describe(self.in_type)} -> {describe(self.out_type)}\n"
-                + self.body.describe(indent + "  ↻ "))
+        return (
+            f"{indent}feedback(init={init}): {describe(self.in_type)} -> {describe(self.out_type)}\n"
+            + self.body.describe(indent + "  ↻ ")
+        )
 
 
 def feedback(body: Any, init: Any, name: str | None = None) -> Feedback:
@@ -450,15 +547,29 @@ class When(Node):
     true go through ``then``, the others through ``otherwise`` (default: pass through).
     Both branches must be 1:1; output order follows input order."""
 
-    def __init__(self, pred: Any, then: Node, otherwise: Node | None = None, name: str | None = None) -> None:
+    def __init__(
+        self,
+        pred: Any,
+        then: Node,
+        otherwise: Node | None = None,
+        name: str | None = None,
+    ) -> None:
         self.pred = pred
         self.then = then
         self.otherwise = otherwise
-        self.in_type = then.in_type if otherwise is None else _common_input([then.in_type, otherwise.in_type], "when")
+        self.in_type = (
+            then.in_type
+            if otherwise is None
+            else _common_input([then.in_type, otherwise.in_type], "when")
+        )
         if otherwise is None:
-            self.out_type = then.out_type if then.out_type == then.in_type else SignalType()
+            self.out_type = (
+                then.out_type if then.out_type == then.in_type else SignalType()
+            )
         else:
-            self.out_type = then.out_type if then.out_type == otherwise.out_type else SignalType()
+            self.out_type = (
+                then.out_type if then.out_type == otherwise.out_type else SignalType()
+            )
         self.name = name or f"when({getattr(pred, '__name__', 'pred')})"
 
     def validate(self, env: Env | None = None) -> Env:
@@ -472,11 +583,15 @@ class When(Node):
             self.otherwise.accept(produced, env, f"{where} [otherwise]")
 
     def nodes(self) -> list[Node]:
-        return self.then.nodes() + (self.otherwise.nodes() if self.otherwise is not None else [])
+        return self.then.nodes() + (
+            self.otherwise.nodes() if self.otherwise is not None else []
+        )
 
     def describe(self, indent: str = "") -> str:
-        lines = [f"{indent}{self.name}: {describe(self.in_type)} -> {describe(self.out_type)}",
-                 self.then.describe(indent + "  ? ")]
+        lines = [
+            f"{indent}{self.name}: {describe(self.in_type)} -> {describe(self.out_type)}",
+            self.then.describe(indent + "  ? "),
+        ]
         if self.otherwise is not None:
             lines.append(self.otherwise.describe(indent + "  : "))
         return "\n".join(lines)
@@ -485,7 +600,9 @@ class When(Node):
 def when(pred: Any, then: Any, otherwise: Any = None, name: str | None = None) -> When:
     """Route frames: ``when(lambda f: f.failed, quarantine, otherwise=main)``.
     ``pred`` receives the :class:`Frame`."""
-    return When(pred, as_node(then), as_node(otherwise) if otherwise is not None else None, name)
+    return When(
+        pred, as_node(then), as_node(otherwise) if otherwise is not None else None, name
+    )
 
 
 class Align(Node):
@@ -494,7 +611,13 @@ class Align(Node):
     Output: one tuple frame per match, ``t0`` = the latest member's. Unlike zip (lock-step
     by count) this tolerates different rates, jitter and gaps."""
 
-    def __init__(self, parts: Iterable[Node], tolerance: float, key: Any = None, name: str | None = None) -> None:
+    def __init__(
+        self,
+        parts: Iterable[Node],
+        tolerance: float,
+        key: Any = None,
+        name: str | None = None,
+    ) -> None:
         self.parts = list(parts)
         if any(p.in_type is not None for p in self.parts):
             raise TypeMismatch("align() joins sources (or source-rooted graphs) only")
@@ -515,7 +638,9 @@ class Align(Node):
         return [n for p in self.parts for n in p.nodes()]
 
     def describe(self, indent: str = "") -> str:
-        lines = [f"{indent}align(tolerance={self.tolerance}) -> {describe(self.out_type)}"]
+        lines = [
+            f"{indent}align(tolerance={self.tolerance}) -> {describe(self.out_type)}"
+        ]
         for p in self.parts:
             lines.append(p.describe(indent + "  ≈ "))
         return "\n".join(lines)
@@ -563,7 +688,9 @@ class Select(Node):
     def __init__(self, upstream: Node, key: Any) -> None:
         items = upstream.out_type.items
         names = tuple(getattr(upstream, "port_names", ()) or (None,) * len(items))
-        self.indices, self.single = _resolve_ports(key, len(items), names, upstream.name)
+        self.indices, self.single = _resolve_ports(
+            key, len(items), names, upstream.name
+        )
         self.key = key
         self.in_type = upstream.out_type
         if self.single:
@@ -589,8 +716,10 @@ class Slice(Node):
         t = upstream.out_type
         env = getattr(upstream, "env", None)
         if env is not None and isinstance(t, SignalType):
-            t = t.resolve(env)                      # use dimensions the graph has already bound
-        self.out_type = t.with_(shape=slice_shape(t.shape, key)) if isinstance(t, SignalType) else t
+            t = t.resolve(env)  # use dimensions the graph has already bound
+        self.out_type = (
+            t.with_(shape=slice_shape(t.shape, key)) if isinstance(t, SignalType) else t
+        )
         self.name = "[" + _key_repr(key) + "]"
 
     def describe(self, indent: str = "") -> str:
@@ -605,6 +734,7 @@ def _key_repr(key: Any) -> str:
             c = "" if k.step is None else ":" + str(k.step)
             return f"{a}:{b}{c}"
         return "..." if k is Ellipsis else repr(k)
+
     return ", ".join(one(k) for k in key) if isinstance(key, tuple) else one(key)
 
 
@@ -616,7 +746,9 @@ class StreamSlice(Node):
         self.params = params
         self.in_type = SignalType() if upstream is None else upstream.out_type
         self.out_type = self.in_type
-        self.port_names = () if upstream is None else tuple(getattr(upstream, "port_names", ()))
+        self.port_names = (
+            () if upstream is None else tuple(getattr(upstream, "port_names", ()))
+        )
         shown = ", ".join(f"{k}={v!r}" for k, v in params.items() if not callable(v))
         self.name = f"{kind}({shown})"
 
@@ -654,18 +786,24 @@ class PortRef(Node):
 
     def __init__(self, key: Any) -> None:
         self.key = key
-        self.in_type = SignalType()       # placeholder (any); checked in accept(), resolved on placement
+        self.in_type = (
+            SignalType()
+        )  # placeholder (any); checked in accept(), resolved on placement
         self.out_type = SignalType()
         self.name = f"port[{key!r}]"
 
     def accept(self, produced: Any, env: Env, where: str) -> None:
         if not isinstance(produced, TupleType):
-            raise TypeMismatch(f"{where}: {self.name} needs a tuple output, got {describe(produced)}")
+            raise TypeMismatch(
+                f"{where}: {self.name} needs a tuple output, got {describe(produced)}"
+            )
 
     def resolve_ports(self, upstream: Node) -> Node:
         if not isinstance(upstream.out_type, TupleType):
-            raise TypeMismatch(f"{upstream.name} -> {self.name}: port selection needs a tuple output, "
-                               f"got {describe(upstream.out_type)}")
+            raise TypeMismatch(
+                f"{upstream.name} -> {self.name}: port selection needs a tuple output, "
+                f"got {describe(upstream.out_type)}"
+            )
         return Select(upstream, self.key)
 
 
@@ -675,17 +813,24 @@ def port(*key: Any) -> PortRef:
     return PortRef(key[0] if len(key) == 1 else key)
 
 
-def _resolve_ports(key: Any, n: int, names: tuple, where: str) -> tuple[list[int], bool]:
+def _resolve_ports(
+    key: Any, n: int, names: tuple, where: str
+) -> tuple[list[int], bool]:
     def one(k: Any) -> int:
         if isinstance(k, str):
             if k not in names:
-                raise KeyError(f"{where} has no port named {k!r}; ports: {[nm or i for i, nm in enumerate(names)]}")
+                raise KeyError(
+                    f"{where} has no port named {k!r}; ports: {[nm or i for i, nm in enumerate(names)]}"
+                )
             return names.index(k)
         if not isinstance(k, int):
-            raise TypeError(f"port keys are ints, names or slices, not {type(k).__name__}")
+            raise TypeError(
+                f"port keys are ints, names or slices, not {type(k).__name__}"
+            )
         if not -n <= k < n:
             raise IndexError(f"{where} has {n} ports; port {k} does not exist")
         return k % n
+
     if isinstance(key, slice):
         return list(range(n))[key], False
     if isinstance(key, tuple):
@@ -696,10 +841,12 @@ def _resolve_ports(key: Any, n: int, names: tuple, where: str) -> tuple[list[int
 def _member_names(nodes: list[Node]) -> tuple[str | None, ...]:
     """Port names for fan-out / zip members: the member's label or name (a pipeline
     branch is named after its last block); duplicates get no name."""
+
     def name_of(m: Node) -> str:
         if isinstance(m, Pipeline):
             m = m.stages[-1]
         return getattr(m, "label", None) or m.name
+
     names = [name_of(m) for m in nodes]
     return tuple(nm if names.count(nm) == 1 else None for nm in names)
 
@@ -707,6 +854,7 @@ def _member_names(nodes: list[Node]) -> tuple[str | None, ...]:
 def _unscope(t: Any) -> Any:
     """Strip symbol scopes so a type can be re-scoped for a cloned node."""
     from .types import DVar, StreamType
+
     if t is None:
         return None
     if isinstance(t, TupleType):
@@ -715,8 +863,14 @@ def _unscope(t: Any) -> Any:
         return StreamType(_unscope(t.item))
     if not isinstance(t, SignalType):
         return t
-    dtype = DVar(t.dtype.name.split("#", 1)[0]) if isinstance(t.dtype, DVar) else t.dtype
-    shape = None if t.shape is None else tuple(d.split("#", 1)[0] if isinstance(d, str) else d for d in t.shape)
+    dtype = (
+        DVar(t.dtype.name.split("#", 1)[0]) if isinstance(t.dtype, DVar) else t.dtype
+    )
+    shape = (
+        None
+        if t.shape is None
+        else tuple(d.split("#", 1)[0] if isinstance(d, str) else d for d in t.shape)
+    )
     return t.with_(dtype=dtype, shape=shape)
 
 
@@ -737,12 +891,18 @@ def fresh(node: Node, seen: set[int]) -> Node:
     if isinstance(node, Merge):
         return Merge([fresh(p, seen) for p in node.parts])
     if isinstance(node, Align):
-        return Align([fresh(p, seen) for p in node.parts], node.tolerance, node.key, node.name)
+        return Align(
+            [fresh(p, seen) for p in node.parts], node.tolerance, node.key, node.name
+        )
     if isinstance(node, Feedback):
         return Feedback(fresh(node.body, seen), node.init, node.name)
     if isinstance(node, When):
-        return When(node.pred, fresh(node.then, seen),
-                    fresh(node.otherwise, seen) if node.otherwise is not None else None, node.name)
+        return When(
+            node.pred,
+            fresh(node.then, seen),
+            fresh(node.otherwise, seen) if node.otherwise is not None else None,
+            node.name,
+        )
     return node
 
 
@@ -758,7 +918,9 @@ def _common_input(ins: list[Any], where: str) -> Any:
                 unify(t, best, env, where)
                 best = t
             except TypeMismatch:
-                raise TypeMismatch(f"{where}: branches require incompatible inputs {best} and {t}") from None
+                raise TypeMismatch(
+                    f"{where}: branches require incompatible inputs {best} and {t}"
+                ) from None
     return best
 
 
@@ -768,10 +930,15 @@ def as_node(obj: Any) -> Node:
         return obj
     if isinstance(obj, BlockDef):
         return obj.node()
-    if isinstance(obj, (list, tuple)) and obj and all(isinstance(o, (Node, BlockDef)) for o in obj):
+    if (
+        isinstance(obj, (list, tuple))
+        and obj
+        and all(isinstance(o, (Node, BlockDef)) for o in obj)
+    ):
         return Fanout([as_node(o) for o in obj])
     if callable(obj):
         from .block import lift
+
         return lift(obj).node()
     if hasattr(obj, "__iter__") or hasattr(obj, "__aiter__"):
         return Source(obj)

@@ -10,6 +10,7 @@ Unification treats *different but convertible* units as a mismatch with a hint
 Logarithmic units (dB, dBm, dBV, dBFS) are their own dimensions. If ``pint`` is
 installed it is used for parsing anything this registry does not know.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -23,16 +24,53 @@ class UnitError(ValueError):
 
 # base symbol -> dimension; scale is applied on top via SI prefixes
 _BASE: dict[str, str] = {
-    "V": "voltage", "A": "current", "W": "power", "Hz": "frequency", "s": "time", "m": "length",
-    "rad": "angle", "deg": "angle", "1": "dimensionless", "": "dimensionless", "count": "dimensionless",
-    "dB": "level", "dBm": "level_dBm", "dBV": "level_dBV", "dBFS": "level_dBFS", "dBc": "level_dBc",
-    "K": "temperature", "Pa": "pressure", "g": "mass", "b": "bit", "B": "byte", "sym": "symbol",
+    "V": "voltage",
+    "A": "current",
+    "W": "power",
+    "Hz": "frequency",
+    "s": "time",
+    "m": "length",
+    "rad": "angle",
+    "deg": "angle",
+    "1": "dimensionless",
+    "": "dimensionless",
+    "count": "dimensionless",
+    "dB": "level",
+    "dBm": "level_dBm",
+    "dBV": "level_dBV",
+    "dBFS": "level_dBFS",
+    "dBc": "level_dBc",
+    "K": "temperature",
+    "Pa": "pressure",
+    "g": "mass",
+    "b": "bit",
+    "B": "byte",
+    "sym": "symbol",
 }
-_PREFIX: dict[str, float] = {"T": 1e12, "G": 1e9, "M": 1e6, "k": 1e3, "": 1.0, "m": 1e-3, "u": 1e-6, "µ": 1e-6,
-                             "n": 1e-9, "p": 1e-12}
-_ALIAS = {"volt": "V", "volts": "V", "hertz": "Hz", "sec": "s", "seconds": "s", "degrees": "deg",
-          "radians": "rad", "samples": "1", "sample": "1"}
-_SPECIAL_SCALE = {"deg": 3.141592653589793 / 180.0}     # deg expressed in rad
+_PREFIX: dict[str, float] = {
+    "T": 1e12,
+    "G": 1e9,
+    "M": 1e6,
+    "k": 1e3,
+    "": 1.0,
+    "m": 1e-3,
+    "u": 1e-6,
+    "µ": 1e-6,
+    "n": 1e-9,
+    "p": 1e-12,
+}
+_ALIAS = {
+    "volt": "V",
+    "volts": "V",
+    "hertz": "Hz",
+    "sec": "s",
+    "seconds": "s",
+    "degrees": "deg",
+    "radians": "rad",
+    "samples": "1",
+    "sample": "1",
+}
+_SPECIAL_SCALE = {"deg": 3.141592653589793 / 180.0}  # deg expressed in rad
 
 
 def parse(unit: str | None) -> tuple[str, float]:
@@ -44,12 +82,18 @@ def parse(unit: str | None) -> tuple[str, float]:
     if u in _BASE:
         return _BASE[u], _SPECIAL_SCALE.get(u, 1.0)
     for p, scale in _PREFIX.items():
-        if p and u.startswith(p) and u[len(p):] in _BASE and not u[len(p):].startswith("dB"):
-            base = u[len(p):]
+        if (
+            p
+            and u.startswith(p)
+            and u[len(p) :] in _BASE
+            and not u[len(p) :].startswith("dB")
+        ):
+            base = u[len(p) :]
             return _BASE[base], scale * _SPECIAL_SCALE.get(base, 1.0)
     # exponent / compound forms via pint when available
     try:
         import pint
+
         q = pint.UnitRegistry()(u)
         return str(q.dimensionality), float(q.to_base_units().magnitude)
     except Exception:

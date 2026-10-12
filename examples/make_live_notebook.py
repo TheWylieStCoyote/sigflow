@@ -3,6 +3,7 @@
 The notebook is written WITHOUT outputs on purpose: its widgets only exist while a
 kernel runs the cells, so open it in Jupyter and run it top to bottom.
 """
+
 import nbformat as nbf
 
 nb = nbf.v4.new_notebook()
@@ -194,6 +195,10 @@ print(f, "| tone was at %.0f Hz" % f["freq_hz"], "| lineage:", [n.op for n in f.
 run2.monitor""")
 
 nb["cells"] = cells
-nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
+nb.metadata["kernelspec"] = {
+    "name": "python3",
+    "display_name": "Python 3",
+    "language": "python",
+}
 nbf.write(nb, "live_control.ipynb")
 print("wrote live_control.ipynb (no outputs: run it in Jupyter)")

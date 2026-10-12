@@ -21,6 +21,7 @@ with symbolic dimensions shared across the whole graph. A graph without sources
 declares an input with ``g.input(type)`` and is itself a reusable node. Cycles
 are not allowed — use ``feedback()`` for loops.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -40,12 +41,18 @@ class Ref:
 
     def __getitem__(self, key: Any) -> "Ref":
         if not isinstance(self.node.out_type, TupleType):
-            raise TypeError(f"{self.name} has a single output; [] selects ports of tuple outputs")
+            raise TypeError(
+                f"{self.name} has a single output; [] selects ports of tuple outputs"
+            )
         return Ref(self.graph, self.node, self.name, key)
 
     @property
     def out_type(self) -> Any:
-        return Select(self.node, self.key).out_type if self.key is not None else self.node.out_type
+        return (
+            Select(self.node, self.key).out_type
+            if self.key is not None
+            else self.node.out_type
+        )
 
     def __rshift__(self, other: Any) -> "Ref":
         """``a >> b`` inside a graph: add ``b`` if needed and connect."""
@@ -70,7 +77,9 @@ class Graph(Node):
     def __init__(self, name: str = "graph") -> None:
         self.name = name
         self.members: dict[str, Node] = {}
-        self.edges: list[tuple[Ref, str, Any]] = []       # (source ref, consumer name, input slot)
+        self.edges: list[
+            tuple[Ref, str, Any]
+        ] = []  # (source ref, consumer name, input slot)
         self.outputs: list[Ref] = []
         self._input: _Input | None = None
         self.in_type = None
@@ -110,16 +119,24 @@ class Graph(Node):
         n_in = self._n_inputs(dst.node)
         if slot is None:
             used = [e[2] for e in self.edges if e[1] == dst.name]
-            slot = next(i for i in range(max(n_in, 1)) if i not in used) if len(used) < max(n_in, 1) else len(used)
+            slot = (
+                next(i for i in range(max(n_in, 1)) if i not in used)
+                if len(used) < max(n_in, 1)
+                else len(used)
+            )
         if isinstance(slot, str):
             names = self._input_names(dst.node)
             if slot not in names:
-                raise KeyError(f"{dst.name} has no input named {slot!r}; inputs: {names}")
+                raise KeyError(
+                    f"{dst.name} has no input named {slot!r}; inputs: {names}"
+                )
             slot = names.index(slot)
         if any(e[1] == dst.name and e[2] == slot for e in self.edges):
             raise TypeMismatch(f"input {slot} of {dst.name} is already connected")
         if not 0 <= slot < max(n_in, 1):
-            raise IndexError(f"{dst.name} has {max(n_in, 1)} input(s); slot {slot} does not exist")
+            raise IndexError(
+                f"{dst.name} has {max(n_in, 1)} input(s); slot {slot} does not exist"
+            )
         self.edges.append((src, dst.name, slot))
         self._check_edge(src, dst, slot)
         self._reject_cycles()
@@ -226,16 +243,25 @@ class Graph(Node):
         return env
 
     def nodes(self) -> list[Node]:
-        return [n for m in self.members.values() if m is not self._input for n in m.nodes()]
+        return [
+            n for m in self.members.values() if m is not self._input for n in m.nodes()
+        ]
 
     def describe(self, indent: str = "") -> str:
-        lines = [f"{indent}graph {self.name}: {('' if self.in_type is None else describe(self.in_type) + ' -> ')}{describe(self.out_type)}"]
+        lines = [
+            f"{indent}graph {self.name}: {('' if self.in_type is None else describe(self.in_type) + ' -> ')}{describe(self.out_type)}"
+        ]
         for name in self.order():
             node = self.members[name]
-            ins = ", ".join(f"{e[0].name}{'[' + repr(e[0].key) + ']' if e[0].key is not None else ''}"
-                            for e in sorted(self.consumers_of(name), key=lambda e: e[2]))
+            ins = ", ".join(
+                f"{e[0].name}{'[' + repr(e[0].key) + ']' if e[0].key is not None else ''}"
+                for e in sorted(self.consumers_of(name), key=lambda e: e[2])
+            )
             tag = " (output)" if any(r.name == name for r in self.outputs) else ""
-            lines.append(f"{indent}  {name}{tag}: {describe(node.out_type)}" + (f"   <- {ins}" if ins else ""))
+            lines.append(
+                f"{indent}  {name}{tag}: {describe(node.out_type)}"
+                + (f"   <- {ins}" if ins else "")
+            )
         return "\n".join(lines)
 
     def consumers_of(self, name: str) -> list[tuple[Ref, str, Any]]:

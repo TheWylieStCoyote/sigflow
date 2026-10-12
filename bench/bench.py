@@ -1,11 +1,14 @@
 """Per-frame overhead of the runtime. Run: python bench/bench.py  (writes docs/performance.md)."""
+
 import os
 import sys
 import time
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+)
 from sigflow import Sig, Stream, block, from_iterable, run, source  # noqa: E402
 from sigflow import dsp  # noqa: E402
 
@@ -50,12 +53,27 @@ def main():
     rows = []
     rows.append(timed("source only", src()))
     rows.append(timed("source >> 1 map block", src() >> ident))
-    rows.append(timed("source >> 5 map blocks", src() >> ident >> ident >> ident >> ident >> ident))
-    rows.append(timed("source >> 5 map blocks, check='all'", src() >> ident >> ident >> ident >> ident >> ident, check="all"))
+    rows.append(
+        timed(
+            "source >> 5 map blocks", src() >> ident >> ident >> ident >> ident >> ident
+        )
+    )
+    rows.append(
+        timed(
+            "source >> 5 map blocks, check='all'",
+            src() >> ident >> ident >> ident >> ident >> ident,
+            check="all",
+        )
+    )
     rows.append(timed("source >> sync generator stream block", src() >> passthrough))
     rows.append(timed("source >> async generator stream block", src() >> apassthrough))
     rows.append(timed("source >> fan-out of 2 >> select", src() >> (ident | ident)[0]))
-    rows.append(timed("source >> fft >> power_db (real work, N=1024)", src() >> dsp.to_complex >> dsp.fft >> dsp.power_db))
+    rows.append(
+        timed(
+            "source >> fft >> power_db (real work, N=1024)",
+            src() >> dsp.to_complex >> dsp.fft >> dsp.power_db,
+        )
+    )
     x = np.ones(N)
     t0 = time.perf_counter()
     for _ in range(FRAMES):
@@ -63,17 +81,26 @@ def main():
     base = (time.perf_counter() - t0) / FRAMES * 1e6
     print(f"{'(plain numpy fft of the same frames)':46s} {'':8s} {base:7.1f} us/frame")
     import platform
-    with open(os.path.join(os.path.dirname(__file__), "..", "docs", "performance.md"), "w") as fh:
-        fh.write("# Runtime overhead\n\nMeasured with `python bench/bench.py` "
-                 f"(Python {platform.python_version()}, NumPy {np.__version__}, {FRAMES} frames of {N} float64).\n\n"
-                 "| configuration | us / frame |\n|---|---|\n")
+
+    with open(
+        os.path.join(os.path.dirname(__file__), "..", "docs", "performance.md"), "w"
+    ) as fh:
+        fh.write(
+            "# Runtime overhead\n\nMeasured with `python bench/bench.py` "
+            f"(Python {platform.python_version()}, NumPy {np.__version__}, {FRAMES} frames of {N} float64).\n\n"
+            "| configuration | us / frame |\n|---|---|\n"
+        )
         for label, per in rows:
             fh.write(f"| {label} | {per:.1f} |\n")
-        fh.write(f"| plain `np.fft.fft` on the same frames, for scale | {base:.1f} |\n\n")
-        fh.write("Interpretation: each map block costs on the order of the per-block figure above "
-                 "(frame wrapping, annotation merge, a provenance node); a sync generator stream block "
-                 "adds a thread hop; `check='all'` adds the contract check per frame. The runtime is "
-                 "meant for frames of hundreds to millions of samples, not sample-by-sample streaming.\n")
+        fh.write(
+            f"| plain `np.fft.fft` on the same frames, for scale | {base:.1f} |\n\n"
+        )
+        fh.write(
+            "Interpretation: each map block costs on the order of the per-block figure above "
+            "(frame wrapping, annotation merge, a provenance node); a sync generator stream block "
+            "adds a thread hop; `check='all'` adds the contract check per frame. The runtime is "
+            "meant for frames of hundreds to millions of samples, not sample-by-sample streaming.\n"
+        )
 
 
 if __name__ == "__main__":
