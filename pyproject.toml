@@ -15,7 +15,7 @@ notebook = ["ipython", "jupyter", "ipywidgets"]
 test = ["pytest"]
 perf = ["greenlet"] # sync generator stream blocks run inline on the event loop
 zmq = ["pyzmq"] # io.zmq / io.zmq_sink
-docs = ["mkdocs-material"] # python docs/build_docs.py && mkdocs build
+docs = ["mkdocs-material", "pytest"] # python docs/build_docs.py && mkdocs build
 dev = [
   "pytest",
   "mypy",
