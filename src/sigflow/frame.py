@@ -19,6 +19,7 @@ accept a ``Frame`` and return ``frame.evolve(data=...)``.
 
 from __future__ import annotations
 
+import contextvars as _cv
 import itertools
 import types
 from dataclasses import dataclass, field
@@ -30,6 +31,7 @@ __all__ = [
     "Frame",
     "Issue",
     "Provenance",
+    "PROVENANCE_MODE",
     "Missing",
     "MISSING",
     "frozen",
@@ -106,6 +108,14 @@ class Missing:
 MISSING = Missing()
 
 
+PROVENANCE_MODE: "_cv.ContextVar[str]" = _cv.ContextVar(
+    "sigflow_provenance", default="full"
+)
+"""How much lineage new frames keep: ``"full"`` (every node), ``"roots"`` (each node
+keeps only the *source* frames it descends from — replay still works, memory stays
+flat), ``"off"`` (no parents, no params). Set per run with ``run(g, provenance=...)``."""
+
+
 # --------------------------------------------------------------------------- #
 # Provenance
 # --------------------------------------------------------------------------- #
@@ -120,6 +130,21 @@ class Provenance:
     parents: tuple["Provenance", ...] = ()
     seq: int | None = None  # ordinal within the producing stream
     id: int = field(default_factory=lambda: next(_ids))
+
+    def __post_init__(self) -> None:
+        mode = PROVENANCE_MODE.get()
+        if mode == "full" or not self.parents:
+            return
+        if mode == "roots":
+            roots: list[Provenance] = []
+            for p in self.parents:
+                for r in p.roots() if p.parents else [p]:
+                    if all(r is not q for q in roots):
+                        roots.append(r)
+            object.__setattr__(self, "parents", tuple(roots))
+        elif mode == "off":
+            object.__setattr__(self, "parents", ())
+            object.__setattr__(self, "params", frozen())
 
     def walk(self) -> Iterator["Provenance"]:
         """Depth-first walk over the lineage, each node once."""
