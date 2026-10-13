@@ -9,43 +9,30 @@ import numpy as np
 from sigflow import block, Sig, Stream, run
 from sigflow import dsp, plot
 
-
 @block
 def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
     return x * gain
 
-
 @block
-def pairs(
-    xs: Stream[Sig[float, "N"]],
-) -> Sig[float, (2, "N")]:  # a stateful stream block
+def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:   # a stateful stream block
     buf = []
     for x in xs:
         buf.append(x)
         if len(buf) == 2:
-            yield np.stack(buf)
-            buf = []
-
+            yield np.stack(buf); buf = []
 
 spec = plot.spectrum(title="1 kHz tone")
-g = (
-    dsp.sine(freq=1000, rate=48_000, n=1024, frames=50)
-    >> scale(gain=0.5)
-    >> spec
-    >> dsp.to_complex
-    >> dsp.fft
-)
+g = dsp.sine(freq=1000, rate=48_000, n=1024, frames=50) >> scale(gain=0.5) >> spec >> dsp.to_complex >> dsp.fft
 
-frames = run(
-    g, progress=True
-)  # or: await g.arun(),  for f in g: ...,  async for f in g: ...
-frames[-1].trace()  # full lineage back to the source frame
-spec.save("tone.gif")  # the plot remembered every frame -> animation
+frames = run(g, progress=True)          # or: await g.arun(),  for f in g: ...,  async for f in g: ...
+frames[-1].trace()                      # full lineage back to the source frame
+spec.save("tone.gif")                   # the plot remembered every frame -> animation
 ```
 
 ```
 python -m pip install -e .          # from this directory, with the Python you will use
-python -m pytest                    # 68 tests (also work uninstalled: tests/conftest.py adds src/)
+python -m pytest                    # 80 tests (also work uninstalled: tests/conftest.py adds src/)
+python -m pip install -e ".[perf,zmq,docs]"   # optional: greenlet, pyzmq, mkdocs-material
 python examples/01_basics.py
 jupyter notebook examples/sigflow_tour.ipynb
 ```
@@ -60,25 +47,26 @@ and select it from the Kernel menu. The tour notebook also falls back to the
 
 ## What is in the box
 
-| module             | contents                                                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------ |
+| module             | contents |
+|--------------------|----------|
 | `sigflow.types`    | `Sig[dtype, shape, rate, units]` signal types, symbolic dimensions, dtype variables, unification |
-| `sigflow.frame`    | immutable `Frame`: data + three annotation levels + issues + provenance                          |
-| `sigflow.block`    | `@block`, `@source`, `@tap`, `lift` — turn functions (yours or NumPy/SciPy's) into blocks        |
-| `sigflow.graph`    | operators `>>`, `\|`, `&`, `merge()`; compile-time validation                                    |
-| `sigflow.runtime`  | asyncio-native execution with transparent adapters for sync generators                           |
-| `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display                            |
-| `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters     |
-| `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets                        |
-| `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP sources and sinks                                        |
-| `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output)                                           |
-| `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion                                          |
-| `sigflow.persist`  | provenance JSON, frame save/load, `replay()`, `Stateful`, checkpoints                            |
-| `sigflow.dsp`      | sources (sine, noise, chirp, async ticker…), reframing, FFT, filters, taps                       |
-| `sigflow.linalg`   | shape-checked matmul / solve / eig / svd / covariance …                                          |
-| `sigflow.plot`     | line / spectrum / waterfall / constellation taps, animations, live notebook plots                |
-| `sigflow.draw`     | `g.draw()` SVG diagrams and `g.to_dot()` Graphviz export                                         |
-| `sigflow.notebook` | HTML representations for graphs, frames and monitors                                             |
+| `sigflow.frame`    | immutable `Frame`: data + three annotation levels + issues + provenance |
+| `sigflow.block`    | `@block`, `@source`, `@tap`, `lift` — turn functions (yours or NumPy/SciPy's) into blocks |
+| `sigflow.graph`    | operators `>>`, `\|`, `&`, `merge()`, `parallel()`; compile-time validation |
+| `sigflow.runtime`  | one asyncio scheduler for every graph; sync generators run inline (greenlet) or threaded |
+| `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display |
+| `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters |
+| `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets |
+| `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks |
+| `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output) |
+| `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion |
+| `sigflow.persist`  | provenance JSON, frame save/load, `replay()`, `Stateful`, checkpoints |
+| `sigflow.lineage`  | `Lineage`: query provenance across a run (through / blame / diff / descendants) |
+| `sigflow.dsp`      | sources (sine, noise, chirp, async ticker…), reframing, FFT, filters, taps |
+| `sigflow.linalg`   | shape-checked matmul / solve / eig / svd / covariance … |
+| `sigflow.plot`     | line / spectrum / waterfall / constellation taps, animations, live notebook plots |
+| `sigflow.draw`     | `g.draw()` SVG diagrams and `g.to_dot()` Graphviz export |
+| `sigflow.notebook` | HTML representations for graphs, frames and monitors |
 
 ## Design notes
 
@@ -93,10 +81,10 @@ blocks are unit-testable and reusable outside any graph.
 
 Three kinds are inferred, never declared:
 
-- **map** blocks are called once per frame and must be pure.
-- **stream** blocks are generator functions (sync or async) that receive the
+* **map** blocks are called once per frame and must be pure.
+* **stream** blocks are generator functions (sync or async) that receive the
   whole stream and may hold state — windows, filters with memory, decimators.
-- **sources** have no signal inputs and yield the stream.
+* **sources** have no signal inputs and yield the stream.
 
 Existing library code is wrapped, not rewritten:
 `fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])`.
@@ -166,6 +154,23 @@ frames lists five parents). `frame.trace()` renders the tree, `frame.lineage()`
 walks it, `frame.sources()` returns the root frames. Provenance is a linked
 structure shared between frames, so it costs one small object per computation.
 
+### Provenance as a query surface
+
+One frame's `trace()` answers "where did this come from"; `Lineage` answers the
+questions you ask about a whole run:
+
+```python
+from sigflow import Lineage
+L = Lineage(run(g, on_error="mark"))
+L.failed()                           # frames that failed
+L.through("fft", n=1024)             # frames whose lineage passed through fft with that config
+L.descendants_of("io.raw", seq=8)    # every output that descends from source frame 8
+L.blame()                            # failures grouped by (origin block, source block, source seq)
+L.configs("scale")                   # the distinct configurations a block ran with
+Lineage.diff(a, b)                   # {"scale.gain": (2.0, 3.0), "rms": ("present", "absent")}
+print(L.table())                     # per-block frame / failed / warning counts
+```
+
 ### Loops, routing and applying graphs to data
 
 Two combinators go beyond feed-forward chains. `feedback(body, init)` closes a
@@ -174,7 +179,7 @@ and the runtime feeds `new_state` back for the next frame, so an AGC is
 `feedback(agc_step, init=0.1)` and an LMS canceller is
 `feedback(split >> lms_filter >> lms_update, init=zeros)` — the loop spans
 blocks, and the loop state shows up in provenance. `when(pred, then,
-otherwise=...)` routes each frame by a predicate on the _frame_ (so it can look
+otherwise=...)` routes each frame by a predicate on the *frame* (so it can look
 at `f.failed`, `f.warnings` or annotations) through one of two 1:1 branches,
 preserving order; a branch that returns `None` drops the frame. Both keep the
 rest of the graph type-checked.
@@ -194,12 +199,10 @@ number of consumers, and multi-input members receive their inputs zipped.
 ```python
 g = Graph("diamond")
 cov = g.add(src >> linalg.covariance, "cov")
-e = g.add(eigh)  # named ports vals / vecs
-s = g.add(summarize)  # takes (vals, vecs, raw)
-g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(
-    cov, s, "raw"
-)
-g.output(s)  # several outputs -> a tuple
+e   = g.add(eigh)                                   # named ports vals / vecs
+s   = g.add(summarize)                              # takes (vals, vecs, raw)
+g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(cov, s, "raw")
+g.output(s)                                         # several outputs -> a tuple
 ```
 
 A graph with `g.input(type)` instead of sources is a reusable node; `g.draw()`
@@ -232,7 +235,7 @@ sensors with different rates and jitter — recording the `skew` of each pair.
 The fourth slot of `Sig` is a unit. `sigflow.units` knows SI prefixes on the
 usual bases (V, A, W, Hz, s, m, rad, deg, dB, dBm, dBV, dBFS …; `pint` is used
 for anything else when installed). Unification rejects different units; when
-they are _convertible_ the error says which `dsp.to_units("V")` to insert, and
+they are *convertible* the error says which `dsp.to_units("V")` to insert, and
 that block converts the data, the stream annotation and the type.
 
 ### Saving, replaying, checkpointing
@@ -254,25 +257,20 @@ A node with a tuple output — a fan-out, a zip, or a block that returns several
 signals — exposes **output ports**, selected with the subscript operator:
 
 ```python
-cov >> linalg.eigh[0] >> plot.line()  # eigenvalues only
-src >> (fft >> power_db | rms | peak)["rms"]  # a fan-out branch by name
-src >> (fft >> power_db | rms | peak)[0, 2]  # a tuple of two ports; [1:] also works
-eigh = block(
-    np.linalg.eigh,
-    inputs=Sig["T", ("N", "N")],
-    outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
-)
-mats >> eigh["vecs"]  # named ports on a wrapped library function
+cov >> linalg.eigh[0] >> plot.line()              # eigenvalues only
+src >> (fft >> power_db | rms | peak)["rms"]      # a fan-out branch by name
+src >> (fft >> power_db | rms | peak)[0, 2]       # a tuple of two ports; [1:] also works
+eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
+             outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
+mats >> eigh["vecs"]                              # named ports on a wrapped library function
 ```
 
-When several ports of one producer must reach _different_ consumers, fan out
+When several ports of one producer must reach *different* consumers, fan out
 port selectors — `port(key)` is a selection that resolves to a typed `Select`
 once it is placed after a tuple-typed node, including inside a branch:
 
 ```python
-(
-    eigh >> (port("vecs") | port("vals") >> model_order) >> noise_subspace
-)  # (vecs, order) -> block
+eigh >> (port("vecs") | port("vals") >> model_order) >> noise_subspace    # (vecs, order) -> block
 (a & b & c) >> (port(0) >> validate | port(1) >> validate | port(2) >> validate)
 ```
 
@@ -285,14 +283,12 @@ no ports and `[]` raises, which keeps the door open for data slicing later.
 The same operator reads frames and lineage:
 
 ```python
-f["rate"]  # annotation lookup: frame-level, then stream-level, then sample-level
-f.get("snr", None)  # with a default;  "rate" in f
-f[1]  # part 1 of a tuple frame (from a fan-out / zip), with its own provenance
-f.prov[0]  # this node;  f.prov[2] two steps upstream;  f.prov[-1] the root
-f.prov[
-    "fft"
-]  # nearest ancestor produced by a block called fft (its params, seq, parents)
-f.prov[1:3]  # nodes along the main line of descent;  "fft" in f.prov
+f["rate"]            # annotation lookup: frame-level, then stream-level, then sample-level
+f.get("snr", None)   # with a default;  "rate" in f
+f[1]                 # part 1 of a tuple frame (from a fan-out / zip), with its own provenance
+f.prov[0]            # this node;  f.prov[2] two steps upstream;  f.prov[-1] the root
+f.prov["fft"]        # nearest ancestor produced by a block called fft (its params, seq, parents)
+f.prov[1:3]          # nodes along the main line of descent;  "fft" in f.prov
 ```
 
 ### Functional by construction — graphs connect to graphs
@@ -301,13 +297,13 @@ Graphs are immutable values built from operators, and a graph is a node like
 any other, so graphs connect exactly the way blocks do:
 
 ```python
-front = dsp.window >> dsp.to_complex >> dsp.fft  # no source: a reusable sub-graph
-back = dsp.power_db >> dsp.rms
+front = dsp.window >> dsp.to_complex >> dsp.fft      # no source: a reusable sub-graph
+back  = dsp.power_db >> dsp.rms
 
-dsp.sine(n=256) >> front >> back  # chain graphs
-(rx >> front) & (ref >> front) >> compare  # zip two graphs
-src >> (front | front >> back)  # a graph as a fan-out branch
-from_iterable(g1, type=g1.out_type) >> g2  # feed one run's output into another
+dsp.sine(n=256) >> front >> back                     # chain graphs
+(rx >> front) & (ref >> front) >> compare            # zip two graphs
+src >> (front | front >> back)                       # a graph as a fan-out branch
+from_iterable(g1, type=g1.out_type) >> g2            # feed one run's output into another
 ```
 
 The join is type-checked like any edge. A sub-graph may be used several times
@@ -325,10 +321,41 @@ flow they are.
 The runtime is asyncio-native: every node compiles to an async transformation
 of frame streams, which is what lets a network ticker and a sampled signal live
 in one graph. Plain generators, iterables and functions are adapted
-automatically; a synchronous generator stream block runs in a worker thread
-behind bounded queues so it cannot stall async sources. From sync code, `run(g)`
-works everywhere (including inside a Jupyter kernel, where it uses a helper
-thread); from async code, `await g.arun()` or `async for f in g`.
+automatically. From sync code, `run(g)` works everywhere (including inside a
+Jupyter kernel, where it uses a helper thread); from async code,
+`await g.arun()` or `async for f in g`.
+
+There is one scheduler. Operator trees (`>>`, `|`, `&`, `feedback`, `when`,
+…) are *lowered* to the same `Graph` the explicit builder produces, and that
+graph is what runs: members connected by bounded queues, a failure future that
+cancels everything on the first unhandled error, and direct iteration of the
+output edge. Linear runs of map blocks are fused into one member so a chain of
+five blocks costs little more than one. A synchronous generator stream block
+runs *inline on the event loop* when `greenlet` is installed (`pip install
+sigflow[perf]`) — the generator is suspended at each `next()` instead of
+hopping through a worker thread — and falls back to a thread otherwise (or when
+declared `threaded=True`, which is right for a block that blocks on I/O).
+
+```python
+run(g, provenance="roots")    # keep only the source frames behind each output (replay still works)
+run(g, provenance="off")      # no lineage at all: fastest for very long runs
+```
+
+### Several cores inside one graph
+
+`parallel(block, workers=4)` wraps a data-only map block so its frames are
+computed on a pool while the graph sees an ordinary 1:1 block — results come
+out in order, provenance and annotations are attached as usual, and a failing
+frame becomes a failed frame rather than killing the pool.
+
+```python
+g = io.raw("capture.cfile", np.complex64, n=1 << 16) >> parallel(heavy_dsp, workers=4) >> plot.waterfall()
+```
+
+`backend="process"` (the default) needs a picklable, module-level block — blocks
+pickle by import path, so anything defined in a module works; `backend="thread"`
+works for lambdas and notebook-defined blocks, and pays off when the function
+releases the GIL (NumPy and SciPy do).
 
 ### Seeing the graph
 
@@ -352,7 +379,7 @@ shows the typed node table, the annotation/provenance card, or the status table.
 ### Controlling long-running graphs
 
 `g.start()` runs a graph in the background and returns a `Run` handle:
-`run.pause()`, `run.resume()`, `run.step(n)` (let _n_ source frames through,
+`run.pause()`, `run.resume()`, `run.step(n)` (let *n* source frames through,
 then stay paused), `run.stop()`, `run.wait()`; `run.frames` holds the outputs so
 far and `run.state` is `running`, `paused`, `stopped`, `done` or `failed`.
 `g.start(paused=True)` arms a graph without releasing any data. In a notebook,
@@ -387,10 +414,16 @@ streams and `run.drain()` hands over what arrived since the last call;
 
 `sigflow.io` has memory-mapped, chunked sources — `io.wav(path, n)`,
 `io.raw(path, np.complex64, n)` for GNU Radio file-sink captures, `io.npy`,
-`io.csv_rows` — an async `io.udp(port, dtype)` receiver, and sinks that are taps
-(`io.wav_sink`, `io.npy_sink`, `io.csv_log`, `io.udp_sink`; context managers
-that flush on close), so a file can be written from the middle of a chain.
-Sources take positional configuration (`io.wav("x.wav")` makes a node).
+`io.csv_rows` — async `io.udp(port, dtype)` and `io.zmq(address, dtype)`
+receivers, and sinks that are taps (`io.wav_sink`, `io.npy_sink`, `io.csv_log`,
+`io.udp_sink`, `io.zmq_sink`; context managers that flush on close), so a file
+can be written from the middle of a chain. Sources take positional
+configuration (`io.wav("x.wav")` makes a node).
+
+The ZeroMQ pair (`pip install sigflow[zmq]`) speaks the same wire format as
+GNU Radio's *ZMQ PUB/PUSH Sink* and *ZMQ SUB/PULL Source* blocks — one message
+per frame, raw samples, optional topic prefix — so a sigflow graph can sit on
+either end of a GNU Radio flowgraph over TCP or IPC.
 
 ### Documenting a graph
 
@@ -419,29 +452,57 @@ the built-in line, spectrum, waterfall and constellation plots do not cover, and
 ## Performance
 
 `python bench/bench.py` measures per-frame overhead and writes
-`docs/performance.md`. On this machine: ~8 µs per source frame, ~10 µs per map
-block, ~20 µs for an async generator stream block, ~260 µs for a _sync_
-generator stream block (it runs in a worker thread with a queue hop each way —
-prefer `async def` stream blocks on hot paths), ~15 µs for a plain 1024-point
-NumPy FFT for scale. The runtime suits frames of hundreds to millions of
-samples; it is not for sample-by-sample streaming. `run(..., strict=True)`
-raises when fan-out / zip branches produce different frame counts instead of
-silently stopping at the shortest.
+`docs/performance.md`. On this machine (5000 frames of 1024 float64): ~12 µs
+per source frame, ~22 µs for one map block, ~40 µs for five (fused), ~18 µs
+for an async generator stream block and ~22 µs for a sync one with `greenlet`
+installed (~230 µs without: the thread hop), ~90 µs for a fan-out of two plus
+select; a plain 1024-point NumPy FFT is ~14 µs for scale. `parallel()` on a
+2-core box took a CPU-bound chain from 1.18 s to 0.78 s. The runtime suits
+frames of hundreds to millions of samples; it is not for sample-by-sample
+streaming. `run(..., strict=True)` raises when fan-out / zip branches produce
+different frame counts instead of silently stopping at the shortest.
+
+## Static typing
+
+`Sig[...]` and `Stream[...]` are runtime objects — a small DSL that unification
+understands — but under `TYPE_CHECKING` they are declared as an `ndarray`
+subclass and an iterable, so mypy and pyright read `x: Sig[float, "N"]` as an
+array (`x.mean()`, `x[1:]`, `x * 2` all check) and `for x in xs` over a
+`Stream` is fine. `Framed[...]` reads as `Frame`. The package ships `py.typed`
+and `mypy src/sigflow` is clean; the few error codes disabled in
+`pyproject.toml` are the ones the DSL necessarily trips (`valid-type`,
+`type-arg`) plus `return-value`, because a block declared to return
+`Sig[float, ()]` legitimately returns a Python float. Block *bodies* are
+therefore checked as NumPy code; the signal contract itself is still checked by
+sigflow at graph construction time.
+
+## Documentation site
+
+`docs/` is an MkDocs Material site: concepts (frames, blocks, contracts,
+lineage, runs), guides (composing, time/units/slicing, notebooks, I/O,
+persistence, performance, testing), one page per example (generated from the
+scripts' docstrings and source) and the changelog.
+
+```
+python -m pip install -e ".[docs]"
+python docs/build_docs.py          # README -> index, CHANGELOG, examples/*.py -> docs/examples/*.md
+mkdocs serve                       # http://127.0.0.1:8000
+```
 
 ## Conventions worth knowing
 
-- Config lambdas (`refine=`, `total=`) receive the full configuration as keyword
+* Config lambdas (`refine=`, `total=`) receive the full configuration as keyword
   arguments; accept `**_` for the ones you do not use.
-- Fan-out and zip stop at the shortest branch; if branches change cardinality
+* Fan-out and zip stop at the shortest branch; if branches change cardinality
   (a window on one side), pair them deliberately.
-- A source that blocks (hardware reads, `time.sleep` pacing) should be declared
+* A source that blocks (hardware reads, `time.sleep` pacing) should be declared
   `@source(threaded=True)` so it cannot stall async sources beside it.
-- A stream block that yields several outputs from one input gives them all the
+* A stream block that yields several outputs from one input gives them all the
   same parents (provenance and annotations are inherited); a source that raises
   mid-stream ends its stream with a failed frame in its own name.
-- `Frame.evolve(meta=...)` merges annotation dicts; `Frame.without(*keys)`
+* `Frame.evolve(meta=...)` merges annotation dicts; `Frame.without(*keys)`
   removes keys.
-- A tap sees the frame (`inputs=Frame`) and passes it on unchanged; a map block
+* A tap sees the frame (`inputs=Frame`) and passes it on unchanged; a map block
   annotated `Framed[...]` can return an evolved frame to control annotations and
   issues precisely.
 
@@ -459,10 +520,9 @@ checkpoints).
 
 ## Status and next steps
 
-This is version 0.2 (see `CHANGELOG.md`) (68 tests, twenty example scripts, a tour
-notebook). Natural extensions: a process-based executor inside one graph (sweeps already
-use processes per configuration), inline execution of sync generator stream
-blocks (removing the thread hop), a provenance depth cap for very long runs,
-identity-typed taps so `Any` stops leaking through fan-outs, a `Sig` that
-static type checkers can read (block bodies are not type-checked today), and a
-richer set of scipy.signal wrappers.
+This is version 0.3 (see `CHANGELOG.md`): 80 tests, twenty example scripts, two
+notebooks, a docs site. Natural extensions: identity-typed taps so `Any` stops
+leaking through fan-outs, a richer set of scipy.signal wrappers, a
+`parallel()` that spans several machines over the ZeroMQ transport, and
+persisting `Lineage` indexes beside recordings so a query does not need the
+frames in memory.

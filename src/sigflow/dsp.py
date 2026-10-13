@@ -19,8 +19,7 @@ complex_ = complex
 from .block import Framed, block, source, tap
 from .frame import Frame
 from .graph import Block
-from .types import Sig
-from .types import StreamType as Stream
+from .types import Sig, Stream
 
 __all__ = [
     "sine",
@@ -173,26 +172,22 @@ class _Reframer:
     time origin of the stream, so every output frame gets an exact ``t0``."""
 
     def __init__(self) -> None:
-        self.buf = None
+        self.buf: np.ndarray = np.empty(0)
         self.pos = 0  # absolute index of buf[0] in the stream
-        self.origin = None  # t0 of the first frame seen (its sample 0)
-        self.rate = None
+        self.origin: float | None = None  # t0 of the first frame seen (its sample 0)
+        self.rate: float | None = None
 
     def push(self, f: Frame) -> None:
         x = np.asarray(f.data)
         if self.origin is None:
             self.origin = f.meta.get("t0", 0.0) or 0.0
             self.rate = f.stream.get("rate")
-        self.buf = (
-            x
-            if self.buf is None or self.buf.size == 0
-            else np.concatenate([self.buf, x])
-        )
+        self.buf = x if self.buf.size == 0 else np.concatenate([self.buf, x])
 
     def take(self, f: Frame, n: int, hop: int) -> Frame:
         """The next window of ``n`` samples as a frame stamped with its exact start time,
         then advance by ``hop``."""
-        t0 = self.origin + (self.pos / self.rate if self.rate else 0.0)
+        t0 = (self.origin or 0.0) + (self.pos / self.rate if self.rate else 0.0)
         out = f.evolve(data=self.buf[:n].copy(), meta={"t0": t0, "offset": self.pos})
         self.buf = self.buf[hop:]
         self.pos += hop

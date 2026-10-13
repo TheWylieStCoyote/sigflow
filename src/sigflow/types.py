@@ -20,13 +20,14 @@ that ``"N"`` means the same thing everywhere in a graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Mapping, Sequence
 
 import numpy as np
 
 __all__ = [
     "Any",
     "Sig",
+    "Stream",
     "SignalType",
     "DVar",
     "TupleType",
@@ -378,7 +379,26 @@ class SignalType:
     __repr__ = __str__
 
 
-Sig = SignalType
+if TYPE_CHECKING:
+    # To a static type checker a block parameter annotated ``Sig[...]`` is a NumPy
+    # array, so block bodies type-check (``x * gain``, ``x.mean()``); at runtime ``Sig``
+    # is :class:`SignalType`, whose subscription builds the contract. The symbolic
+    # dimension strings ("N") are the one thing checkers cannot read, which is why the
+    # package's mypy config disables ``name-defined`` / ``valid-type``.
+    from typing import Generic
+
+    from typing_extensions import TypeVarTuple, Unpack
+
+    _Ts = TypeVarTuple("_Ts")
+
+    class Sig(np.ndarray, Generic[Unpack[_Ts]]):  # type: ignore[misc,type-arg]
+        ...
+
+    class Stream(Generic[Unpack[_Ts]]):  # Stream[X] is an iterable of X to a checker
+        def __iter__(self) -> Any: ...
+        def __aiter__(self) -> Any: ...
+else:
+    Sig = SignalType
 
 
 # --------------------------------------------------------------------------- #
@@ -435,7 +455,7 @@ class StreamType:
         if (
             isinstance(item, type)
             and item.__name__ == "Frame"
-            or type(item).__name__ == "Framed"
+            or type(item).__name__ in ("Framed", "_FramedMarker")
         ):
             return cls(item)
         return cls(_as_type(item))
@@ -444,6 +464,10 @@ class StreamType:
         return f"Stream[{self.item}]"
 
     __repr__ = __str__
+
+
+if not TYPE_CHECKING:
+    Stream = StreamType
 
 
 def is_signal_type(obj: Any) -> bool:

@@ -34,7 +34,7 @@ from __future__ import annotations
 import functools
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
 from .frame import Frame, frozen
 from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
@@ -42,17 +42,30 @@ from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
 __all__ = ["block", "source", "tap", "BlockDef", "Framed", "InputSpec", "lift"]
 
 
-class Framed:
+class _FramedMarker:
     """Annotation marker: ``x: Framed[Sig[...]]`` delivers the whole :class:`Frame`."""
 
     def __init__(self, item: Any) -> None:
         self.item = as_type(item)
 
-    def __class_getitem__(cls, item: Any) -> "Framed":
+    def __class_getitem__(cls, item: Any) -> "_FramedMarker":
         return cls(item)
 
     def __repr__(self) -> str:
         return f"Framed[{self.item}]"
+
+
+if TYPE_CHECKING:
+    from typing import Generic, TypeVar
+
+    _F = TypeVar("_F")
+
+    class Framed(
+        Frame, Generic[_F]
+    ):  # a checker sees a Frame; the runtime sees the marker
+        ...
+else:
+    Framed = _FramedMarker
 
 
 @dataclass(frozen=True)
@@ -76,11 +89,11 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
         )
     if annotation is Frame:
         return SignalType(), True, False
-    if isinstance(annotation, Framed):
+    if isinstance(annotation, _FramedMarker):
         return annotation.item, True, False
     if isinstance(annotation, StreamType):
         inner = annotation.item
-        if isinstance(inner, Framed):
+        if isinstance(inner, _FramedMarker):
             return inner.item, True, True
         if inner is Frame:
             return SignalType(), True, True
@@ -90,11 +103,11 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
     if (
         isinstance(annotation, tuple)
         and annotation
-        and all(is_signal_type(a) or isinstance(a, Framed) for a in annotation)
+        and all(is_signal_type(a) or isinstance(a, _FramedMarker) for a in annotation)
     ):
         return (
             TupleType(
-                tuple(a.item if isinstance(a, Framed) else a for a in annotation)
+                tuple(a.item if isinstance(a, _FramedMarker) else a for a in annotation)
             ),
             False,
             False,
@@ -107,7 +120,7 @@ def _output_type(annotation: Any) -> Any:
         return SignalType()
     if isinstance(annotation, StreamType):
         annotation = annotation.item
-    if isinstance(annotation, Framed):
+    if isinstance(annotation, _FramedMarker):
         return annotation.item
     if annotation is Frame:
         return SignalType()
@@ -227,12 +240,12 @@ class BlockDef:
             for pname, t in spec.items():
                 if isinstance(t, StreamType):
                     inner = t.item
-                    fr = isinstance(inner, Framed) or inner is Frame
+                    fr = isinstance(inner, _FramedMarker) or inner is Frame
                     self.inputs.append(
                         InputSpec(
                             pname,
                             inner.item
-                            if isinstance(inner, Framed)
+                            if isinstance(inner, _FramedMarker)
                             else SignalType()
                             if inner is Frame
                             else inner,
@@ -240,7 +253,7 @@ class BlockDef:
                             True,
                         )
                     )
-                elif isinstance(t, Framed):
+                elif isinstance(t, _FramedMarker):
                     self.inputs.append(InputSpec(pname, t.item, True, False))
                 elif t is Frame:
                     self.inputs.append(InputSpec(pname, SignalType(), True, False))
@@ -378,6 +391,17 @@ class BlockDef:
         full.update(config)
         return full
 
+    # -- pickling: by import path, so process pools can call the block ------- #
+    def __reduce__(self) -> Any:
+        fn = self.fn
+        mod, qual = getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+        if mod and qual and "<" not in qual:
+            return (_import_block, (mod, qual))
+        raise TypeError(
+            f"block {self.name!r} wraps a function that cannot be pickled (lambda or "
+            f"nested); define it at module level or use parallel(..., backend='thread')"
+        )
+
     # -- operators: using the bare definition in a graph uses default config #
     def __getitem__(self, key: Any) -> Any:
         return self.node()[key]
@@ -415,6 +439,17 @@ class BlockDef:
         return f"<{self.kind} block {self.name}({ins}{', ' if ins and cfg else ''}{cfg}) -> {self.out_type}>"
 
 
+def _import_block(mod: str, qual: str) -> Any:
+    """Unpickle a block definition by import path (the module attribute may be the
+    BlockDef that replaced the function, or the function itself)."""
+    import importlib
+
+    obj: Any = importlib.import_module(mod)
+    for part in qual.split("."):
+        obj = getattr(obj, part)
+    return obj if isinstance(obj, BlockDef) else BlockDef(obj)
+
+
 def _looks_like_data(x: Any) -> bool:
     """Arrays, frames, containers and iterators are data; strings, numbers, Knobs, callables are config."""
     import numpy as _np
@@ -430,7 +465,7 @@ def _looks_like_data(x: Any) -> bool:
 
 
 def _respec(i: InputSpec) -> Any:
-    t: Any = Framed(i.type) if i.framed else i.type
+    t: Any = _FramedMarker(i.type) if i.framed else i.type
     return StreamType(t) if i.stream else t
 
 
@@ -470,9 +505,12 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       ``refine=lambda n, **_: Sig[float, (n,)]``
         total:        ``total(**config) -> int``: expected number of frames a
                       source emits, so progress can be reported as a percentage
-        threaded:     sources only: pull items in a worker thread, so a source
-                      that *blocks* (hardware reads, ``time.sleep`` pacing) does
-                      not stall asynchronous sources running alongside it
+        threaded:     sources: pull items in a worker thread, so a source that
+                      *blocks* (hardware reads, ``time.sleep`` pacing) does not
+                      stall asynchronous sources running alongside it. Sync
+                      generator stream blocks: force the worker-thread driver
+                      (the default runs them inline on the loop via greenlet when
+                      it is installed, which is much faster but must not block)
     """
     if fn is None:
         return lambda f: BlockDef(f, **options)

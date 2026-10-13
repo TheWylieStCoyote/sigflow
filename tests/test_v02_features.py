@@ -8,23 +8,20 @@ import pytest
 from sigflow import (
     Frame,
     Graph,
-    Provenance,
-    ReplayMismatch,
     Sig,
     Stateful,
-    TimeSpan,
     TypeMismatch,
     align,
     block,
-    dsp,
     from_iterable,
-    linalg,
-    plot,
     replay,
     run,
     source,
-    units,
+    ReplayMismatch,
+    Provenance,
+    TimeSpan,
 )
+from sigflow import dsp, linalg, plot, units
 
 
 @source

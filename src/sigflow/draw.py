@@ -229,9 +229,9 @@ class _Layout:
         out.w = x - _PAD_X * 1.5
         for src, dst, slot in g.edges:
             label = f"[{src.key}]" if src.key is not None else ""
-            for a in cells[src.name].exits:
-                for b in cells[dst].entries:
-                    out.edges.append((a, b, label))
+            for ea in cells[src.name].exits:
+                for eb in cells[dst].entries:
+                    out.edges.append((ea, eb, label))
         out.entries = [
             e
             for n, node in g.members.items()
@@ -320,7 +320,7 @@ class Diagram:
                 b.y += 40
             c.h += 40
         W, H = c.w + 2 * m, c.h + 2 * m
-        boxes = {b.id: b for b in c.boxes}
+        boxes = {bx.id: bx for bx in c.boxes}
         parts = [
             f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
             f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
@@ -329,8 +329,8 @@ class Diagram:
             "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
             "</marker></defs>",
         ]
-        for a, b, label in c.edges:
-            A, B = boxes[a], boxes[b]
+        for a, b_id, label in c.edges:
+            A, B = boxes[a], boxes[b_id]
             x1, y1 = A.x + A.w + m, A.y + A.h / 2 + m
             x2, y2 = B.x + m, B.y + B.h / 2 + m
             cx = (x1 + x2) / 2
@@ -341,7 +341,7 @@ class Diagram:
                 and bx.y + m < max(y1, y2) + 4
                 and bx.y + m + bx.h > min(y1, y2) - 4
                 for bx in c.boxes
-                if bx.id not in (a, b)
+                if bx.id not in (a, b_id)
             )
             if crosses:
                 # a long edge over other boxes: arc above the row so it stays readable
@@ -382,7 +382,7 @@ class Diagram:
                 f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
                 f"fill='{_FILL[b.kind]}' stroke='{_STROKE[b.kind]}' stroke-width='1.4'/>"
             )
-            lines = [(b.label, 12, "#111827", "600")]
+            lines: list[tuple[str, float, str, str]] = [(b.label, 12, "#111827", "600")]
             if b.sub:
                 lines.append((b.sub, 10, "#374151", "400"))
             if b.typ:
@@ -439,7 +439,7 @@ def to_dot(node: Any, types: bool = True) -> str:
                 f'  n{b.id} [label="{label}" shape=box fillcolor="{_FILL[b.kind]}" '
                 f'color="{_STROKE[b.kind]}"];'
             )
-    for a, b, label in cell.edges:
-        lines.append(f"  n{a} -> n{b};")
+    for ea, eb, label in cell.edges:
+        lines.append(f"  n{ea} -> n{eb};")
     lines.append("}")
     return "\n".join(lines)

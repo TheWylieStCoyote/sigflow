@@ -30,7 +30,7 @@ from .frame import Frame
 from .graph import Node, Select, TupleType, as_node, describe
 from .types import Env, SignalType, TypeMismatch, unify
 
-__all__ = ["Graph", "Ref"]
+__all__ = ["Graph", "Ref", "Join", "Chain", "lower"]
 
 
 class Ref:
@@ -64,6 +64,47 @@ class Ref:
         return f"Ref({self.name}{'[' + repr(self.key) + ']' if self.key is not None else ''})"
 
 
+class Join(Node):
+    """A tuple join member: receives N inputs zipped in lock step and passes the tuple
+    frame on. This is what a fan-out (`a | b`) or zip (`a & b`) lowers to."""
+
+    def __init__(self, out_type: Any, op: str = "zip", port_names: tuple = ()) -> None:
+        self.in_type = out_type
+        self.out_type = out_type
+        self.join_op = op
+        self.name = op
+        self.port_names = port_names
+
+
+class Chain(Node):
+    """A linear run of members executed back to back without queues between them
+    (what a pipeline segment between joins lowers to). Consecutive plain map blocks
+    inside a chain are fused by the runtime into one frame wrap."""
+
+    def __init__(self, stages: list[Node]) -> None:
+        self.stages = stages
+        self.in_type = stages[0].in_type
+        self.out_type = stages[-1].out_type
+        self.port_names = tuple(getattr(stages[-1], "port_names", ()))
+        if hasattr(stages[0], "join_op"):
+            self.join_op = stages[0].join_op
+        self.name = " >> ".join(s.name for s in stages)
+
+    def validate(self, env: Any = None) -> Any:
+        from .types import Env
+
+        env = env if env is not None else Env()
+        for s in self.stages:
+            env = s.validate(env)
+        return env
+
+    def nodes(self) -> list[Node]:
+        return [n for s in self.stages for n in s.nodes()]
+
+    def describe(self, indent: str = "") -> str:
+        return "\n".join(s.describe(indent) for s in self.stages)
+
+
 class _Input(Node):
     """Placeholder for the graph's own input (a source-less graph)."""
 
@@ -74,6 +115,8 @@ class _Input(Node):
 
 
 class Graph(Node):
+    transparent = False  # lowered operator trees add no provenance / stats of their own
+
     def __init__(self, name: str = "graph") -> None:
         self.name = name
         self.members: dict[str, Node] = {}
@@ -119,11 +162,19 @@ class Graph(Node):
         n_in = self._n_inputs(dst.node)
         if slot is None:
             used = [e[2] for e in self.edges if e[1] == dst.name]
-            slot = (
-                next(i for i in range(max(n_in, 1)) if i not in used)
-                if len(used) < max(n_in, 1)
-                else len(used)
-            )
+            if (
+                n_in > 1
+                and not used
+                and isinstance(src.out_type, TupleType)
+                and len(src.out_type) == n_in
+            ):
+                slot = -1  # one tuple-typed edge feeds all inputs at once
+            else:
+                slot = (
+                    next(i for i in range(max(n_in, 1)) if i not in used)
+                    if len(used) < max(n_in, 1)
+                    else len(used)
+                )
         if isinstance(slot, str):
             names = self._input_names(dst.node)
             if slot not in names:
@@ -133,7 +184,7 @@ class Graph(Node):
             slot = names.index(slot)
         if any(e[1] == dst.name and e[2] == slot for e in self.edges):
             raise TypeMismatch(f"input {slot} of {dst.name} is already connected")
-        if not 0 <= slot < max(n_in, 1):
+        if slot != -1 and not 0 <= slot < max(n_in, 1):
             raise IndexError(
                 f"{dst.name} has {max(n_in, 1)} input(s); slot {slot} does not exist"
             )
@@ -172,7 +223,7 @@ class Graph(Node):
         if not ins:
             return None
         n = self._n_inputs(node)
-        if n == 1 and len(ins) == 1:
+        if (n == 1 and len(ins) == 1) or ins[0][2] == -1:
             return ins[0][0].out_type
         slots = {e[2]: e[0].out_type for e in ins}
         return TupleType(tuple(slots.get(i, SignalType()) for i in range(n)))
@@ -180,7 +231,7 @@ class Graph(Node):
     def _check_edge(self, src: Ref, dst: Ref, slot: int) -> None:
         t = src.out_type
         need = dst.node.in_type
-        if isinstance(need, TupleType) and self._n_inputs(dst.node) > 1:
+        if slot != -1 and isinstance(need, TupleType) and self._n_inputs(dst.node) > 1:
             need = need.items[slot]
         try:
             unify(t, need, self._env, where=f"{src.name} -> {dst.name}[{slot}]")
@@ -269,3 +320,85 @@ class Graph(Node):
 
     def __repr__(self) -> str:
         return self.describe()
+
+
+# --------------------------------------------------------------------------- #
+# Lowering the operator tree
+# --------------------------------------------------------------------------- #
+
+
+def lower(node: Node) -> "Graph":
+    """Compile an operator-tree node (pipelines, fan-outs, zips, ...) into a Graph of
+    simple members and edges, so there is one scheduler for every graph."""
+    from .graph import Fanout, Pipeline, Zip
+
+    if isinstance(node, Graph):
+        return node
+    g = Graph(node.name)
+    g.transparent = True
+    src = g.input(node.in_type) if node.in_type is not None else None
+    out = _lower_into(g, node, src)
+    g.output(out)
+    return g
+
+
+def _lower_into(g: "Graph", node: Node, src: Ref | None) -> Ref:
+    from .graph import Fanout, Pipeline, Zip
+
+    if isinstance(node, Pipeline):
+        cur = src
+        run: list[Node] = []
+        feeders: list[Ref] | None = None  # refs feeding the join at the head of `run`
+
+        def flush() -> None:
+            nonlocal cur, run, feeders
+            if run:
+                member = run[0] if len(run) == 1 else Chain(run)
+                ref = g.add(member, _member_name(member))
+                if feeders is not None:
+                    for i, r in enumerate(feeders):
+                        g.connect(r, ref, i)
+                elif cur is not None and member.in_type is not None:
+                    g.connect(cur, ref)
+                cur = ref
+                run, feeders = [], None
+
+        for stage in node.stages:
+            if isinstance(stage, (Fanout, Zip)):
+                flush()
+                feeders, join = _lower_join(g, stage, cur)
+                run = [join]  # the join heads the next chain (no queue after it)
+            elif isinstance(stage, Graph):
+                flush()
+                cur = _lower_into(g, stage, cur)
+            else:
+                run.append(stage)
+        flush()
+        assert cur is not None
+        return cur
+    if isinstance(node, (Fanout, Zip)):
+        feeders, join = _lower_join(g, node, src)
+        ref = g.add(join, join.name)
+        for i, r in enumerate(feeders):
+            g.connect(r, ref, i)
+        return ref
+    ref = g.add(node, _member_name(node))
+    if src is not None and node.in_type is not None:
+        g.connect(src, ref)
+    return ref
+
+
+def _lower_join(g: "Graph", node: Node, src: Ref | None) -> tuple[list[Ref], "Join"]:
+    """Lower the branches of a fan-out / zip; return their refs and the (unplaced) join."""
+    from .graph import Fanout, Zip
+
+    if isinstance(node, Fanout) or (isinstance(node, Zip) and node.in_type is not None):
+        members = node.branches if isinstance(node, Fanout) else node.parts
+        refs = [_lower_into(g, b, src) for b in members]
+        return refs, Join(node.out_type, "fanout", node.port_names)
+    refs = [_lower_into(g, p, None) for p in node.parts]  # type: ignore[attr-defined]
+    return refs, Join(node.out_type, "zip", node.port_names)
+
+
+def _member_name(node: Node) -> str:
+    return node.name

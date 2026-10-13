@@ -103,10 +103,13 @@ def main():
             f"| plain `np.fft.fft` on the same frames, for scale | {base:.1f} |\n\n"
         )
         fh.write(
-            "Interpretation: each map block costs on the order of the per-block figure above "
-            "(frame wrapping, annotation merge, a provenance node); a sync generator stream block "
-            "adds a thread hop; `check='all'` adds the contract check per frame. The runtime is "
-            "meant for frames of hundreds to millions of samples, not sample-by-sample streaming.\n"
+            "Interpretation: the first map block pays for the scheduler hop; consecutive map "
+            "blocks are fused into one scheduler member so each extra one costs a few microseconds "
+            "(frame wrapping, annotation merge, a provenance node). A sync generator stream block "
+            "runs inline on the event loop when `greenlet` is installed (otherwise in a worker "
+            "thread, ~10x slower); `check='all'` adds the contract check per frame; "
+            "`provenance='roots'` or `'off'` trims per-frame bookkeeping on long runs. The runtime "
+            "is meant for frames of hundreds to millions of samples, not sample-by-sample streaming.\n"
         )
 
 

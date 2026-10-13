@@ -16,7 +16,8 @@ What this exercises
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Framed, Sig, Stream, block, dsp, plot, run, source
+from sigflow import Frame, Framed, Sig, Stream, block, run, source
+from sigflow import dsp, plot
 
 RATE = 16_000.0
 FRAME, HOP = 512, 256

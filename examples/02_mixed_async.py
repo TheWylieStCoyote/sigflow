@@ -8,7 +8,8 @@ import asyncio
 
 import numpy as np
 
-from sigflow import Sig, Stream, block, dsp, merge, run, source
+from sigflow import Sig, Stream, block, merge, run, source
+from sigflow import dsp
 
 
 @source(total=lambda count, **_: count)

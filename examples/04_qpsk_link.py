@@ -13,7 +13,8 @@ What this exercises
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow import Frame, Framed, Sig, Stream, block, run, source
+from sigflow import plot
 
 SPS = 8  # samples per symbol
 N_SYM = 256  # symbols per frame

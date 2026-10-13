@@ -15,7 +15,8 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, block, dsp, feedback, plot, run, source
+from sigflow import Frame, Framed, Sig, block, feedback, run, source
+from sigflow import dsp, plot
 
 RATE = 8_000
 N = 256

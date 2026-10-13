@@ -53,6 +53,8 @@ __all__ = [
     "port",
     "Align",
     "align",
+    "Parallel",
+    "parallel",
     "Feedback",
     "feedback",
     "When",
@@ -651,6 +653,55 @@ def align(*parts: Any, tolerance: float = 0.0, key: Any = None) -> Align:
     return Align([as_node(p) for p in parts], tolerance, key)
 
 
+class Parallel(Node):
+    """A map block executed on a pool (``parallel(block, workers=4)``): frames are submitted
+    as they arrive and results are yielded *in order*, so the graph sees an ordinary 1:1
+    block that uses several cores. ``backend="process"`` needs a picklable function (a
+    module-level block) and sends the frame's data to the worker; ``"thread"`` works for
+    anything and helps when the function releases the GIL (NumPy, SciPy)."""
+
+    def __init__(
+        self,
+        inner: Node,
+        workers: int = 4,
+        backend: str = "process",
+        window: int | None = None,
+    ) -> None:
+        if (
+            not isinstance(inner, Block)
+            or inner.kind != "map"
+            or len(inner.defn.inputs) != 1
+            or inner.defn.framed
+        ):
+            raise TypeError("parallel() wraps a single-input, data-only map block")
+        if backend not in ("process", "thread"):
+            raise ValueError("backend must be 'process' or 'thread'")
+        self.inner = inner
+        self.workers = workers
+        self.backend = backend
+        self.window = window or 2 * workers
+        self.in_type = inner.in_type
+        self.out_type = inner.out_type
+        self.port_names = inner.port_names
+        self.name = f"parallel({inner.name}, {workers})"
+
+    def validate(self, env: Env | None = None) -> Env:
+        return self.inner.validate(env)
+
+    def nodes(self) -> list[Node]:
+        return [self]
+
+    def describe(self, indent: str = "") -> str:
+        return f"{indent}{self.name} [{self.backend}]: {describe(self.in_type)} -> {describe(self.out_type)}"
+
+
+def parallel(
+    block: Any, workers: int = 4, backend: str = "process", window: int | None = None
+) -> Parallel:
+    """Run a map block on several cores, keeping frame order."""
+    return Parallel(as_node(block), workers, backend, window)
+
+
 class Merge(Node):
     """Interleave several source streams in arrival order (output type is their join)."""
 
@@ -894,6 +945,10 @@ def fresh(node: Node, seen: set[int]) -> Node:
         return Align(
             [fresh(p, seen) for p in node.parts], node.tolerance, node.key, node.name
         )
+    if isinstance(node, Parallel):
+        return Parallel(
+            fresh(node.inner, seen), node.workers, node.backend, node.window
+        )  # type: ignore[arg-type]
     if isinstance(node, Feedback):
         return Feedback(fresh(node.body, seen), node.init, node.name)
     if isinstance(node, When):

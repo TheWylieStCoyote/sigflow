@@ -10,7 +10,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
         numpy: ["numpy<2", "numpy>=2"]
         include:
           - os: windows-latest
@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test]"
+      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq]"
       - run: python -m pytest -q
         env:
           MPLBACKEND: Agg
@@ -54,3 +54,12 @@ jobs:
       - run: cd examples && python make_notebook.py && jupyter nbconvert --to notebook --execute sigflow_tour.ipynb --output /tmp/tour.ipynb
         env:
           MPLBACKEND: Agg
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[docs]"
+      - run: python docs/build_docs.py && mkdocs build --strict

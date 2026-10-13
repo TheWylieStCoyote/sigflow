@@ -10,14 +10,13 @@ from sigflow import (
     Stream,
     TypeMismatch,
     block,
-    dsp,
     feedback,
     from_iterable,
-    io,
     run,
     source,
     when,
 )
+from sigflow import dsp, io
 
 
 @source

@@ -25,18 +25,18 @@ sys.path.insert(
 )
 
 from sigflow import (
-    MISSING,
     Frame,
     Framed,
+    MISSING,
     Sig,
     Stream,
     TypeMismatch,
     block,
-    dsp,  # noqa: E402
     from_iterable,
     run,
     source,
 )  # noqa: E402
+from sigflow import dsp  # noqa: E402
 
 RATE = 1000.0
 

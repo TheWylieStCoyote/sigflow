@@ -16,7 +16,8 @@ What this exercises
 
 import numpy as np
 
-from sigflow import MISSING, Frame, Framed, Sig, Stream, block, dsp, run, source, when
+from sigflow import Frame, Framed, MISSING, Sig, Stream, block, source, run, when
+from sigflow import dsp
 
 N = 128
 

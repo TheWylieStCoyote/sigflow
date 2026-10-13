@@ -2,7 +2,8 @@
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, dsp, run, source
+from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, run, source
+from sigflow import dsp
 
 
 # A block is a plain function with typed signal inputs/outputs and config kwargs.

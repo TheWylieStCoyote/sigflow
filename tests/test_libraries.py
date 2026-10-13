@@ -3,7 +3,8 @@ import os
 import numpy as np
 import pytest
 
-from sigflow import Sig, TypeMismatch, dsp, linalg, plot, run, source
+from sigflow import Sig, TypeMismatch, run, source
+from sigflow import dsp, linalg, plot
 
 
 def test_dsp_chain_types_and_metadata():

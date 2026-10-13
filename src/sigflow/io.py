@@ -7,6 +7,8 @@ Sources (frames carry ``rate`` and ``source`` stream annotations where known):
     io.npy(path, n=1024)              a .npy array, memory-mapped and streamed in frames
     io.csv_rows(path)                 one dict per row of a CSV file
     io.udp(port, dtype, ...)          async UDP datagrams as arrays (loopback-friendly)
+    io.zmq(address, dtype, ...)       async ZeroMQ SUB/PULL receiver (pyzmq) — the GNU Radio
+                                      ZMQ PUB/PUSH sink blocks speak exactly this
 
 Sinks (taps: the frame passes through unchanged):
 
@@ -14,6 +16,7 @@ Sinks (taps: the frame passes through unchanged):
     io.npy_sink(path)                 stack frames into a .npy array (written on close)
     io.csv_log(path, fields=...)      one CSV row per frame from meta / data dict keys
     io.udp_sink(host, port)           send each frame as one datagram
+    io.zmq_sink(address, kind)        PUB/PUSH each frame as one message (GNU Radio ZMQ sources read it)
 
 A sink object is a graph node; call ``sink.close()`` after the run (or use it as a
 context manager) to flush files.
@@ -39,10 +42,12 @@ __all__ = [
     "npy",
     "csv_rows",
     "udp",
+    "zmq",
     "wav_sink",
     "npy_sink",
     "csv_log",
     "udp_sink",
+    "zmq_sink",
 ]
 
 
@@ -55,7 +60,7 @@ def _frames_of(
     x: np.ndarray, n: int, rate: float | None, name: str, path: str
 ) -> Iterator[Frame]:
     total = len(x)
-    stream = {"source": name, "path": os.fspath(path)}
+    stream: dict[str, Any] = {"source": name, "path": os.fspath(path)}
     if rate:
         stream["rate"] = rate
     for i in range(0, total - n + 1, n):
@@ -174,6 +179,46 @@ async def udp(
         transport.close()
 
 
+@source
+async def zmq(
+    address: str = "tcp://127.0.0.1:5555",
+    dtype: Any = np.complex64,
+    kind: str = "SUB",
+    topic: bytes = b"",
+    count: int | None = None,
+    timeout: float | None = None,
+    connect: bool = True,
+) -> Sig["T", None]:
+    """Asynchronous ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a
+    GNU Radio *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes
+    one frame of ``dtype``. ``connect=False`` binds instead of connecting."""
+    import zmq as _zmq
+    import zmq.asyncio as _zmqa
+
+    ctx = _zmqa.Context.instance()
+    sock = ctx.socket(_zmq.SUB if kind.upper() == "SUB" else _zmq.PULL)
+    if kind.upper() == "SUB":
+        sock.setsockopt(_zmq.SUBSCRIBE, topic)
+    (sock.connect if connect else sock.bind)(address)
+    try:
+        k = 0
+        while count is None or k < count:
+            if timeout is not None:
+                if not await sock.poll(timeout * 1000):
+                    return
+            msg = await sock.recv()
+            if topic and msg.startswith(topic):
+                msg = msg[len(topic) :]
+            yield Frame(
+                np.frombuffer(msg, dtype=np.dtype(dtype)).copy(),
+                meta={"seq": k},
+                stream={"source": f"zmq:{address}"},
+            )
+            k += 1
+    finally:
+        sock.close(linger=0)
+
+
 # --------------------------------------------------------------------------- #
 # Sinks
 # --------------------------------------------------------------------------- #
@@ -280,3 +325,31 @@ class udp_sink(_Sink):
 
     def close(self) -> None:
         self.sock.close()
+
+
+class zmq_sink(_Sink):
+    """Publish (``kind="PUB"``, read by a GNU Radio *ZMQ SUB Source*) or push (``"PUSH"``)
+    each frame's array as one message; ``bind=True`` by default (the usual server side)."""
+
+    def __init__(
+        self,
+        address: str = "tcp://127.0.0.1:5555",
+        kind: str = "PUB",
+        topic: bytes = b"",
+        bind: bool = True,
+    ) -> None:
+        import zmq as _zmq
+
+        self.ctx = _zmq.Context.instance()
+        self.sock = self.ctx.socket(_zmq.PUB if kind.upper() == "PUB" else _zmq.PUSH)
+        (self.sock.bind if bind else self.sock.connect)(address)
+        self.topic = topic
+        super().__init__(
+            lambda f: self.sock.send(
+                self.topic + np.ascontiguousarray(f.data).tobytes()
+            ),
+            "zmq_sink",
+        )
+
+    def close(self) -> None:
+        self.sock.close(linger=200)

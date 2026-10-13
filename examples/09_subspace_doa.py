@@ -12,7 +12,8 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, block, linalg, plot, port, run, source
+from sigflow import Frame, Framed, Sig, block, port, run, source
+from sigflow import linalg, plot
 
 N_SENSORS, N_SNAP = 8, 200
 TRUE_DOAS = (-30.0, 10.0, 45.0)  # degrees

@@ -11,13 +11,14 @@ from sigflow import (
     Stream,
     TypeMismatch,
     block,
-    dsp,
     from_iterable,
     merge,
     run,
     source,
     tap,
 )
+from sigflow import dsp
+
 
 # --------------------------------------------------------------------------- #
 # Blocks used by the tests
@@ -452,7 +453,6 @@ def test_multi_input_framed_block_skips_failed_parts():
 
 def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
     import time
-
     from sigflow import Knob
 
     gain = Knob(1.0, "gain")
@@ -488,7 +488,6 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 
 def test_throttle_record_snapshot_and_knob_kinds():
     import time
-
     from sigflow import Knob
 
     win = Knob("hann", "window", choices=["hann", "hamming"])

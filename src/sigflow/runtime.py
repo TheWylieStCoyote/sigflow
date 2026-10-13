@@ -39,6 +39,7 @@ from .graph import (
     Feedback,
     Merge,
     Node,
+    Parallel,
     Pipeline,
     Select,
     Slice,
@@ -65,7 +66,11 @@ class RunOptions:
         control: Any = None,
         resume: Any = None,
         strict: bool = False,
+        provenance: str = "full",
     ) -> None:
+        if provenance not in ("full", "roots", "off"):
+            raise ValueError("provenance must be 'full', 'roots' or 'off'")
+        self.provenance = provenance
         if check not in ("first", "all", "none"):
             raise ValueError("check must be 'first', 'all' or 'none'")
         self.check = check
@@ -125,11 +130,23 @@ class Runner:
     def compile(
         self, node: Node, upstream: AsyncIterator[Frame] | None
     ) -> AsyncIterator[Frame]:
-        if isinstance(node, Pipeline):
-            stream = upstream
-            for stage in node.stages:
-                stream = self.compile(stage, stream)
-            return stream  # type: ignore[return-value]
+        from .builder import Chain, Graph, Join, lower
+
+        if isinstance(node, (Pipeline, Fanout, Zip)):
+            g = lower(node)
+            real = [m for m in g.members.values() if type(m).__name__ != "_Input"]
+            if len(real) == 1 and len(g.outputs) == 1 and g.outputs[0].key is None:
+                return self.compile(
+                    real[0], upstream
+                )  # a plain chain: no queues at all
+            return self._graph(g, upstream)  # one scheduler for every composition
+        if isinstance(node, Graph):
+            return self._graph(node, upstream)
+        if isinstance(node, Join):
+            assert upstream is not None
+            return self._join(node, upstream)
+        if isinstance(node, Chain):
+            return self._chain(node, upstream)
         if isinstance(node, Source):
             return self._source(node)
         if isinstance(node, Block):
@@ -139,13 +156,11 @@ class Runner:
             if node.kind == "stream":
                 return self._stream_block(node, upstream)
             return self._map_block(node, upstream)
-        if isinstance(node, Fanout):
-            assert upstream is not None
-            return self._fanout(node, upstream)
-        if isinstance(node, Zip):
-            return self._zip(node, upstream)
         if isinstance(node, Merge):
             return self._merge(node)
+        if isinstance(node, Parallel):
+            assert upstream is not None
+            return self._parallel(node, upstream)
         if isinstance(node, Align):
             return self._align(node)
         if isinstance(node, Select):
@@ -157,10 +172,6 @@ class Runner:
         if isinstance(node, StreamSlice):
             assert upstream is not None
             return self._stream_slice(node, upstream)
-        from .builder import Graph
-
-        if isinstance(node, Graph):
-            return self._graph(node, upstream)
         if isinstance(node, Feedback):
             assert upstream is not None
             return self._feedback(node, upstream)
@@ -235,22 +246,173 @@ class Runner:
             stats.out += 1
             seq += 1
 
+    def _chain(
+        self, node: Any, upstream: AsyncIterator[Frame] | None
+    ) -> AsyncIterator[Frame]:
+        """Compose the stages directly (no queues); fuse runs of plain map blocks."""
+        stream = upstream
+        run: list[Block] = []
+
+        def fusable(st: Node) -> bool:
+            return (
+                isinstance(st, Block)
+                and st.kind == "map"
+                and len(st.defn.inputs) == 1
+                and not st.defn.tap
+                and not st.defn.is_async
+            )
+
+        def flush() -> None:
+            nonlocal stream, run
+            if run:
+                assert stream is not None
+                stream = (
+                    self._map_block(run[0], stream)
+                    if len(run) == 1
+                    else self._fused_maps(run, stream)
+                )
+                run = []
+
+        for st in node.stages:
+            if fusable(st):
+                run.append(st)
+            else:
+                flush()
+                stream = self.compile(st, stream)
+        flush()
+        assert stream is not None
+        return stream
+
+    async def _fused_maps(
+        self, nodes: list[Block], upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Several map blocks applied back to back with one frame wrap at the end.
+        Provenance still gets one node per block; annotations are merged once."""
+        stats_ = [self.mon.stats(n.name, n) for n in nodes]
+        policies = [self._policy(n) for n in nodes]
+        seqs = [0] * len(nodes)
+        check_first = self.opts.check == "first"
+        check_all = self.opts.check == "all"
+        async for f in upstream:
+            prov = f.prov
+            value: Any = f.data
+            frame = f  # the current frame as a *framed* block would see it
+            failed = f.failed
+            keep_samples = True
+            cfg_used: list = []
+            for i, node in enumerate(nodes):
+                st = stats_[i]
+                st.inp += 1
+                d = node.defn
+                if failed and not d.framed:
+                    prov = Provenance(
+                        node.name, node.config, (prov,) if prov else (), seqs[i]
+                    )
+                    seqs[i] += 1
+                    st.out += 1
+                    continue
+                t0 = time.perf_counter()
+                try:
+                    if d.framed and (frame.data is not value or frame.prov is not prov):
+                        frame = frame.evolve(
+                            data=value, prov=prov
+                        )  # materialize what a framed block sees
+                    arg = frame if d.framed else value
+                    cfg = live(node.given) if node.live else node.given
+                    result = d.fn(arg, **cfg)
+                except Exception as e:
+                    st.errors += 1
+                    st.time += time.perf_counter() - t0
+                    if policies[i] == "raise":
+                        raise
+                    if policies[i] == "drop":
+                        value = None
+                        break
+                    prov = Provenance(
+                        node.name, node.config, (prov,) if prov else (), seqs[i]
+                    )
+                    frame = frame.evolve(
+                        data=MISSING,
+                        issues=frame.issues
+                        + (
+                            Issue(
+                                f"{type(e).__name__}: {e}", "error", node.name, e, prov
+                            ),
+                        ),
+                        prov=prov,
+                    )
+                    value, failed = MISSING, True
+                    seqs[i] += 1
+                    st.out += 1
+                    continue
+                st.time += time.perf_counter() - t0
+                if result is None:
+                    value = None
+                    break
+                prov = Provenance(
+                    node.name, {**node.config, **cfg}, (prov,) if prov else (), seqs[i]
+                )
+                seqs[i] += 1
+                if isinstance(result, Frame):
+                    frame = result.evolve(prov=prov)
+                    value = result.data
+                else:
+                    value = result
+                    if not d.keep_samples and frame.samples:
+                        frame = _clear_samples(frame)
+                    if d.framed or i == len(nodes) - 1:
+                        frame = frame.evolve(data=value, prov=prov)
+                if (
+                    check_all or (check_first and st.out == 0)
+                ) and value is not MISSING:
+                    try:
+                        node.out_type.check(
+                            value, self.opts.env, where=f"{node.name} output"
+                        )
+                    except TypeMismatch as e:
+                        raise TypeMismatch(f"runtime check failed: {e}") from None
+                st.out += 1
+            if value is None:
+                continue  # dropped by some block
+            if failed:
+                yield frame.evolve(prov=prov)
+                continue
+            out = (
+                frame
+                if frame.prov is prov and frame.data is value
+                else frame.evolve(data=value, prov=prov)
+            )
+            yield out
+
+    async def _join(
+        self, node: Any, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """A tuple join: its inputs were zipped by the scheduler; pass the tuple frames on."""
+        async for f in upstream:
+            yield f
+
     # -- explicit graphs ---------------------------------------------------- #
     async def _graph(
         self, g: Any, upstream: AsyncIterator[Frame] | None
     ) -> AsyncIterator[Frame]:
         """Schedule a builder Graph: every member becomes a task pumping its output into
         one queue per consuming edge; multi-input members zip their input queues."""
-        from .builder import _Input
+        from .builder import Join, _Input
 
-        stats = self.mon.stats(g.name, g)
+        stats = self.mon.stats(g.name, g) if not g.transparent else None
         queues: dict[tuple[str, int], asyncio.Queue] = {}  # (consumer, slot) -> queue
         out_qs: dict[str, asyncio.Queue] = {}  # graph outputs
         for src, dst, slot in g.edges:
-            queues[(dst, slot)] = asyncio.Queue()
+            # bounded edges give backpressure; edges into a join are unbounded so a branch
+            # that changes cardinality (a window on one side) cannot deadlock the pump
+            bounded = not isinstance(g.members[dst], Join)
+            queues[(dst, slot)] = asyncio.Queue(self.opts.queue_size if bounded else 0)
         for r in g.outputs:
-            out_qs[r.name] = asyncio.Queue()
+            out_qs[r.name] = asyncio.Queue(self.opts.queue_size)
         tasks: list[asyncio.Task] = []
+        failure: asyncio.Future = (
+            asyncio.get_running_loop().create_future()
+        )  # first error in any member
 
         def inputs_for(name: str) -> AsyncIterator[Frame] | None:
             node = g.members[name]
@@ -259,10 +421,11 @@ class Runner:
             slots = sorted(k[1] for k in queues if k[0] == name)
             if not slots:
                 return None
-            if len(slots) == 1 and g._n_inputs(node) == 1:
-                return _drain(queues[(name, slots[0])])
+            if len(slots) == 1 and (g._n_inputs(node) == 1 or slots[0] == -1):
+                return _drain(queues[(name, slots[0])], failure)
+            op = getattr(node, "join_op", "inputs")
             return self._zip_streams(
-                [_drain(queues[(name, i)]) for i in slots], "inputs", node
+                [_drain(queues[(name, i)], failure) for i in slots], op, node
             )
 
         async def pump(name: str, stream: AsyncIterator[Frame]) -> None:
@@ -283,8 +446,17 @@ class Runner:
                     for q in outs:
                         await q.put(f)
             except BaseException as e:  # noqa: BLE001
-                for q in outs:
-                    await q.put(("error", e))
+                # a failure (or cancellation) is recorded once for the whole graph; every
+                # consumer checks it, so the run re-raises instead of ending quietly
+                if not failure.done():
+                    failure.set_exception(e)
+                for q in [queues[(dst, slot)] for _, dst, slot in edges] + outs:
+                    try:
+                        q.put_nowait(
+                            ("error", e)
+                        )  # wake a blocked consumer (best effort)
+                    except asyncio.QueueFull:
+                        pass
                 raise
             finally:
                 for src, dst, slot in edges:
@@ -292,6 +464,14 @@ class Runner:
                 for q in outs:
                     await q.put(_DONE)
 
+        # The single output member, when nothing else consumes it, is iterated directly by
+        # this generator instead of through a pump task and a queue (one hop less).
+        direct = (
+            g.outputs[0].name
+            if len(g.outputs) == 1 and not g.consumers(g.outputs[0].name)
+            else None
+        )
+        direct_stream = None
         for name in g.order():
             node = g.members[name]
             stream = (
@@ -300,15 +480,42 @@ class Runner:
                 else inputs_for(name)
             )
             assert stream is not None
+            if name == direct:
+                direct_stream = stream
+                continue
             tasks.append(asyncio.create_task(pump(name, stream)))
 
         try:
-            if len(g.outputs) == 1:
+            if direct is not None:
+                key = g.outputs[0].key
+                sel = Select(g.members[direct], key) if key is not None else None
+                assert direct_stream is not None
+                async for f in direct_stream:
+                    if failure.done():
+                        raise failure.exception()  # type: ignore[misc]
+                    if sel is not None:
+                        f = _select_frame(f, sel)
+                    if stats is None:
+                        yield f
+                    else:
+                        stats.out += 1
+                        yield f.evolve(
+                            prov=Provenance(
+                                g.name, {}, (f.prov,) if f.prov else (), stats.out - 1
+                            )
+                        )
+                if failure.done():
+                    raise failure.exception()  # type: ignore[misc]
+            elif len(g.outputs) == 1:
                 q = out_qs[g.outputs[0].name]
                 key = g.outputs[0].key
                 while True:
+                    if failure.done():
+                        raise failure.exception()  # type: ignore[misc]
                     it = await q.get()
                     if it is _DONE:
+                        if failure.done():
+                            raise failure.exception()  # type: ignore[misc]
                         return
                     if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
                         raise it[1]
@@ -317,17 +524,21 @@ class Runner:
                         if key is not None
                         else it
                     )
-                    stats.out += 1
-                    yield f.evolve(
-                        prov=Provenance(
-                            g.name, {}, (f.prov,) if f.prov else (), stats.out - 1
+                    if stats is None:
+                        yield f  # lowered operator tree: no wrapper node
+                    else:
+                        stats.out += 1
+                        yield f.evolve(
+                            prov=Provenance(
+                                g.name, {}, (f.prov,) if f.prov else (), stats.out - 1
+                            )
                         )
-                    )
             else:
                 async for f in self._zip_streams(
                     [_drain(out_qs[r.name]) for r in g.outputs], "outputs", g
                 ):
-                    stats.out += 1
+                    if stats is not None:
+                        stats.out += 1
                     yield f
         finally:
             for t in tasks:
@@ -688,7 +899,12 @@ class Runner:
                     seq += 1
                     stats.out += 1
             else:
-                async for out, parents in _run_sync_stream(
+                driver = (
+                    _run_inline_stream
+                    if (_greenlet is not None and not d.threaded)
+                    else _run_sync_stream
+                )
+                async for out, parents in driver(
                     d.fn,
                     node.given,
                     frames(),
@@ -739,50 +955,6 @@ class Runner:
         )
 
     # -- fan-out / zip / merge --------------------------------------------- #
-    async def _fanout(
-        self, node: Fanout, upstream: AsyncIterator[Frame]
-    ) -> AsyncIterator[Frame]:
-        n = len(node.branches)
-        in_qs: list[asyncio.Queue] = [
-            asyncio.Queue(self.opts.queue_size) for _ in range(n)
-        ]
-
-        async def pump() -> None:
-            try:
-                async for f in upstream:
-                    for q in in_qs:
-                        await q.put(f)
-            finally:
-                for q in in_qs:
-                    await q.put(_DONE)
-
-        pump_task = asyncio.create_task(pump())
-        try:
-            async for f in self._zip_streams(
-                [self.compile(b, _drain(q)) for b, q in zip(node.branches, in_qs)],
-                "fanout",
-                node,
-            ):
-                yield f
-        finally:
-            pump_task.cancel()
-            try:
-                await pump_task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-    async def _zip(
-        self, node: Zip, upstream: AsyncIterator[Frame] | None
-    ) -> AsyncIterator[Frame]:
-        if upstream is None:
-            streams = [self.compile(p, None) for p in node.parts]
-            async for f in self._zip_streams(streams, "zip", node):
-                yield f
-        else:
-            fan = Fanout(node.parts)
-            async for f in self._fanout(fan, upstream):
-                yield f
-
     async def _zip_streams(
         self, streams: list[AsyncIterator[Frame]], op: str, node: Node
     ) -> AsyncIterator[Frame]:
@@ -838,6 +1010,104 @@ class Runner:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
+
+    async def _parallel(
+        self, node: Parallel, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Submit frames to a pool, keep a window of in-flight futures, yield results in order."""
+        import concurrent.futures as cf
+        from collections import deque
+
+        inner = node.inner
+        d = inner.defn
+        stats = self.mon.stats(node.name, node)
+        policy = self._policy(inner)
+        pool = (
+            cf.ProcessPoolExecutor(node.workers)
+            if node.backend == "process"
+            else cf.ThreadPoolExecutor(node.workers)
+        )
+        loop = asyncio.get_running_loop()
+        pending: deque = deque()  # (frame, future | None)
+        seq = 0
+
+        async def emit_ready(block_on_first: bool) -> AsyncIterator[Frame]:
+            nonlocal seq
+            while pending and (
+                block_on_first or pending[0][1] is None or pending[0][1].done()
+            ):
+                f, fut = pending.popleft()
+                if fut is None:  # failed frame passed through untouched
+                    yield f.evolve(
+                        prov=Provenance(
+                            node.name, inner.config, (f.prov,) if f.prov else (), seq
+                        )
+                    )
+                    seq += 1
+                    stats.out += 1
+                    continue
+                t0 = time.perf_counter()
+                try:
+                    result = await fut
+                except Exception as e:
+                    stats.errors += 1
+                    if policy == "raise":
+                        raise
+                    if policy == "drop":
+                        continue
+                    prov = Provenance(
+                        inner.name, inner.config, (f.prov,) if f.prov else (), seq
+                    )
+                    yield f.evolve(
+                        data=MISSING,
+                        issues=f.issues
+                        + (
+                            Issue(
+                                f"{type(e).__name__}: {e}", "error", inner.name, e, prov
+                            ),
+                        ),
+                        prov=prov,
+                    )
+                    seq += 1
+                    stats.out += 1
+                    continue
+                stats.time += time.perf_counter() - t0
+                if result is None:
+                    continue
+                yield self._wrap_output(
+                    result,
+                    inner.name,
+                    inner.config,
+                    (f,),
+                    seq,
+                    inner.out_type,
+                    stats,
+                    keep_samples=d.keep_samples,
+                )
+                seq += 1
+                stats.out += 1
+
+        try:
+            async for f in upstream:
+                stats.inp += 1
+                if f.failed:
+                    pending.append((f, None))
+                else:
+                    cfg = live(inner.given) if inner.live else dict(inner.given)
+                    fut = loop.run_in_executor(
+                        pool,
+                        _call_block,
+                        d if node.backend == "process" else d.fn,
+                        f.data,
+                        cfg,
+                    )
+                    pending.append((f, fut))
+                async for out in emit_ready(block_on_first=len(pending) >= node.window):
+                    yield out
+            async for out in emit_ready(block_on_first=True):
+                yield out
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     async def _align(self, node: Align) -> AsyncIterator[Frame]:
         """Greedy time matching: keep the head of every stream; when all heads agree within
@@ -1058,6 +1328,16 @@ class _SubPipe:
             pass
 
 
+def _call_block(target: Any, data: Any, cfg: dict) -> Any:
+    """Worker-side call (module-level so it pickles for process pools)."""
+    fn = target.fn if isinstance(target, BlockDef) else target
+    return fn(data, **cfg)
+
+
+def _clear_samples(f: Frame) -> Frame:
+    return Frame(f.data, f.meta, f.stream, {}, f.issues, f.prov, f.parts)
+
+
 def _select_frame(f: Frame, node: Select) -> Frame:
     """Apply a port selection to one frame (used on graph edges)."""
     if f.failed:
@@ -1097,12 +1377,80 @@ def _unique(items: Any) -> tuple:
     return tuple(out)
 
 
-async def _drain(q: asyncio.Queue) -> AsyncIterator[Frame]:
+async def _drain(
+    q: asyncio.Queue, failure: "asyncio.Future | None" = None
+) -> AsyncIterator[Frame]:
     while True:
+        if failure is not None and failure.done():
+            raise failure.exception()  # type: ignore[misc]
         it = await q.get()
         if it is _DONE:
+            if failure is not None and failure.done():
+                raise failure.exception()  # type: ignore[misc]
             return
+        if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
+            raise it[1]
         yield it
+
+
+try:
+    import greenlet as _greenlet
+except ImportError:  # pragma: no cover - optional
+    _greenlet = None
+
+
+async def _run_inline_stream(
+    fn: Callable[..., Any],
+    config: Any,
+    frames: AsyncIterator[Frame],
+    consumed: list[Frame],
+    framed: bool,
+    qsize: int,
+) -> AsyncIterator[tuple[Any, tuple[Frame, ...]]]:
+    """Run a synchronous generator stream block *on the event loop* with greenlet: the
+    generator's pull for input switches back here, we await the next frame, and switch it
+    in. No thread, no queues — a few microseconds per frame instead of hundreds."""
+    parent = _greenlet.getcurrent()
+    NEED, OUT, DONE_ = "need", "out", "done"
+
+    def feed() -> Iterator[Any]:
+        while True:
+            item = parent.switch((NEED,))
+            if item is _DONE:
+                return
+            consumed.append(item)
+            yield item if framed else item.data
+
+    def body() -> tuple:
+        last: tuple[Frame, ...] = ()
+        for out in fn(feed(), **config):
+            parents, consumed[:] = tuple(consumed) or last, []
+            last = parents
+            parent.switch((OUT, out, parents))
+        return (DONE_,)
+
+    g = _greenlet.greenlet(body)
+    res = g.switch()
+    try:
+        while True:
+            if res[0] == NEED:
+                nxt: Any
+                try:
+                    nxt = await frames.__anext__()
+                except StopAsyncIteration:
+                    nxt = _DONE
+                res = g.switch(nxt)
+            elif res[0] == OUT:
+                yield res[1], res[2]
+                res = g.switch(None)
+            else:
+                return
+    finally:
+        if not g.dead:
+            try:
+                g.throw(GeneratorExit)  # closes the generator; it re-raises into us
+            except (Exception, GeneratorExit):
+                pass
 
 
 async def _run_sync_stream(
@@ -1203,10 +1551,14 @@ def iterate(graph: Node, **options: Any) -> AsyncIterator[Frame]:
                 "control",
                 "resume",
                 "strict",
+                "provenance",
             )
         }
     )
     runner = Runner(opts)
+    from .frame import PROVENANCE_MODE
+
+    PROVENANCE_MODE.set(opts.provenance)
     return runner.compile(graph, None)
 
 
@@ -1234,6 +1586,9 @@ async def arun(
     graph.validate()
     graph.last_monitor = mon  # type: ignore[attr-defined]
     runner = Runner(opts)
+    from .frame import PROVENANCE_MODE
+
+    token = PROVENANCE_MODE.set(opts.provenance)
     out: list[Frame] = []
     reporter = Reporter(mon, graph, mode=progress) if progress else None
     mon.start()
@@ -1249,6 +1604,7 @@ async def arun(
             if reporter:
                 reporter.tick()
     finally:
+        PROVENANCE_MODE.reset(token)
         mon.stop()
         if reporter:
             reporter.finish()

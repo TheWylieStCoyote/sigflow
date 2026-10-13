@@ -69,7 +69,7 @@ class PlotBlock(Block):
         self.figsize = figsize
         self.keep = keep  # how many frames to remember for animation (None = all)
         self.live = live
-        self.every = every
+        self.stride = every
         self.frames: list[Frame] = []
         import threading
 
@@ -95,6 +95,7 @@ class PlotBlock(Block):
             plt = _matplotlib()
             self._fig, self._ax = plt.subplots(figsize=self.figsize)
             if self.title:
+                assert self._ax is not None
                 self._ax.set_title(self.title)
             # Keep the figure out of pyplot's auto-display (inline backends show
             # every open figure at the end of a cell); it is displayed explicitly
@@ -109,7 +110,7 @@ class PlotBlock(Block):
 
     def _on_frame(self, f: Frame) -> None:
         self._count += 1
-        if (self._count - 1) % self.every:
+        if (self._count - 1) % self.stride:
             return
         self.frames.append(f)
         if self.keep is not None and len(self.frames) > self.keep:
@@ -434,6 +435,7 @@ class Multi(PlotBlock):
                 a.set_axis_off()
             self._ax = self._axes[0]
             if self.title:
+                assert self._fig is not None
                 self._fig.suptitle(self.title)
             plt.close(self._fig)
         return self._fig
