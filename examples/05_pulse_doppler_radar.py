@@ -13,8 +13,7 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, run, source
-from sigflow import plot
+from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
 
 P, R = 64, 256  # pulses per coherent interval, range cells
 PRF = 5000.0  # Hz  (unambiguous velocity +-37.5 m/s)

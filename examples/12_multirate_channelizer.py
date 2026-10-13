@@ -15,8 +15,18 @@ What this exercises
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Sig, Stream, TypeMismatch, block, port, run, source
-from sigflow import dsp, plot
+from sigflow import (
+    Frame,
+    Sig,
+    Stream,
+    TypeMismatch,
+    block,
+    dsp,
+    plot,
+    port,
+    run,
+    source,
+)
 
 FS = 48_000.0
 M = 4  # channels

@@ -145,6 +145,7 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
     """Documentation of a graph: diagram, typed node table and each block's docstring.
     ``fmt`` is ``"html"`` (with the SVG inline) or ``"md"`` (Markdown)."""
     import inspect as _inspect
+
     from .graph import Block, Source
 
     title = title or node.name

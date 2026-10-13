@@ -90,9 +90,10 @@ class _Layout:
         return self._n
 
     def leaf(self, node: Any) -> _Cell:
+        import inspect
+
         from .graph import Block, Source
         from .plot import PlotBlock
-        import inspect
 
         if isinstance(node, PlotBlock):
             kind = "plot"

@@ -154,6 +154,7 @@ class Reporter:
         if self.mode == "notebook":
             try:
                 from IPython.display import HTML, display
+
                 from .notebook import monitor_html
 
                 html = HTML(monitor_html(self.mon))

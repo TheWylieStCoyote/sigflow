@@ -15,15 +15,15 @@ offending nodes, before any data flows.
 from __future__ import annotations
 
 import inspect
+import itertools
 from typing import Any, Callable, Iterable, Mapping
-from typing import Any
 
 from .block import BlockDef
 from .frame import Frame, frozen
-import itertools
-
 from .types import (
     Any as _Any,
+)
+from .types import (
     DVar,
     Env,
     SignalType,

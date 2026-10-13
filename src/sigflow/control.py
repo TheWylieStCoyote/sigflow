@@ -394,6 +394,7 @@ class Run:
 
     def _html_controls(self, refresh: float) -> Any:
         from IPython.display import HTML, display
+
         from .ui import _HELP
 
         handle = display(HTML(""), display_id=True)

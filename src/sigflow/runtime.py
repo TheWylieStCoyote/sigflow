@@ -21,15 +21,16 @@ Semantics applied uniformly by the runtime (so block authors never write them):
 from __future__ import annotations
 
 import asyncio
-
-import numpy as np
 import inspect
 import queue
 import threading
 import time
 from typing import Any, AsyncIterator, Callable, Iterable, Iterator
 
+import numpy as np
+
 from .block import BlockDef
+from .control import Knob, live
 from .frame import MISSING, Frame, Issue, Provenance, frozen, merge_annotations
 from .graph import (
     Align,
@@ -46,9 +47,8 @@ from .graph import (
     When,
     Zip,
 )
-from .types import Env, SignalType, TupleType, TypeMismatch
 from .progress import Monitor, Reporter
-from .control import Knob, live
+from .types import Env, SignalType, TupleType, TypeMismatch
 
 __all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
 

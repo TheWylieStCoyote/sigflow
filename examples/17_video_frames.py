@@ -13,8 +13,7 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, run, source
-from sigflow import plot
+from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
 
 H, W = 64, 96
 

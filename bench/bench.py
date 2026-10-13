@@ -9,8 +9,15 @@ import numpy as np
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 )
-from sigflow import Sig, Stream, block, from_iterable, run, source  # noqa: E402
-from sigflow import dsp  # noqa: E402
+from sigflow import (  # noqa: E402
+    Sig,
+    Stream,
+    block,
+    dsp,  # noqa: E402
+    from_iterable,
+    run,
+    source,
+)
 
 FRAMES = 5000
 N = 1024

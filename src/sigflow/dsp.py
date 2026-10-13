@@ -19,7 +19,8 @@ complex_ = complex
 from .block import Framed, block, source, tap
 from .frame import Frame
 from .graph import Block
-from .types import Sig, StreamType as Stream
+from .types import Sig
+from .types import StreamType as Stream
 
 __all__ = [
     "sine",

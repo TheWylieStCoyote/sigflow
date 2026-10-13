@@ -2,8 +2,7 @@
 
 import numpy as np
 
-from sigflow import Sig, run, source
-from sigflow import dsp, linalg, plot
+from sigflow import Sig, dsp, linalg, plot, run, source
 
 # --- a spectrum analyser with a waterfall, animated ------------------------
 spec = plot.spectrum(title="chirp spectrum", ylim=(-80, 10))

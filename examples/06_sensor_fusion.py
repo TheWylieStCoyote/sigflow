@@ -18,8 +18,7 @@ import time
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, merge, run, source
-from sigflow import plot
+from sigflow import Frame, Framed, Sig, Stream, block, merge, plot, run, source
 
 IMU_RATE = 50.0  # Hz, synchronous
 GPS_PERIOD = 0.4  # s, asynchronous and jittery

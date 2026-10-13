@@ -24,11 +24,13 @@ from sigflow import (
     TypeMismatch,
     align,
     block,
+    dsp,
+    linalg,
+    plot,
     replay,
     run,
     source,
 )
-from sigflow import dsp, linalg, plot
 
 WORK = tempfile.mkdtemp(prefix="sigflow_v02_")
 RATE = 1000.0
