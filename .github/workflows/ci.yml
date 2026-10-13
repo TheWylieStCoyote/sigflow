@@ -48,6 +48,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[notebook]" nbconvert
+      - run: python -m pip install -U pytest
       - run: for f in examples/[0-9]*.py; do echo "== $f"; python "$f" > /dev/null || exit 1; done
         env:
           MPLBACKEND: Agg
