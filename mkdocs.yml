@@ -3,18 +3,19 @@ site_description: Typed, functional, generator-based signal-processing graphs fo
 repo_url: https://github.com/example/sigflow
 theme:
   name: material
-  features: [navigation.sections, navigation.top, content.code.copy, search.suggest]
+  features:
+    [navigation.sections, navigation.top, content.code.copy, search.suggest]
   palette:
     - scheme: default
       primary: indigo
-      toggle: {icon: material/weather-night, name: dark}
+      toggle: { icon: material/weather-night, name: dark }
     - scheme: slate
       primary: indigo
-      toggle: {icon: material/weather-sunny, name: light}
+      toggle: { icon: material/weather-sunny, name: light }
 markdown_extensions:
   - admonition
   - tables
-  - toc: {permalink: true}
+  - toc: { permalink: true }
   - pymdownx.superfences
   - pymdownx.highlight
 nav:

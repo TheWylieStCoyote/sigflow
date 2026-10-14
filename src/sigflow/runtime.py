@@ -445,9 +445,12 @@ class Runner:
                         await queues[(dst, slot)].put(item)
                     for q in outs:
                         await q.put(f)
+            except asyncio.CancelledError:
+                # cancelled by the graph's own teardown (below): not a member failure
+                raise
             except BaseException as e:  # noqa: BLE001
-                # a failure (or cancellation) is recorded once for the whole graph; every
-                # consumer checks it, so the run re-raises instead of ending quietly
+                # a failure is recorded once for the whole graph; every consumer checks
+                # it, so the run re-raises instead of ending quietly
                 if not failure.done():
                     failure.set_exception(e)
                 for q in [queues[(dst, slot)] for _, dst, slot in edges] + outs:
@@ -548,6 +551,8 @@ class Runner:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
+            if failure.done():
+                failure.exception()  # retrieved: the consumer raised first
 
     # -- per-frame sub-pipelines (feedback / when) ------------------------- #
     def _subpipe(self, node: Node) -> "_SubPipe":
