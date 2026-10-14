@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterable, Mapping
 
 from .block import BlockDef
 from .frame import Frame, frozen
+from .ratio import Ratio, RatioMismatch, as_ratio, leading_dim
 from .types import (
     Any as _Any,
 )
@@ -59,6 +60,8 @@ __all__ = [
     "feedback",
     "When",
     "when",
+    "Switch",
+    "switch",
     "merge",
     "as_node",
     "from_iterable",
@@ -74,8 +77,19 @@ class Node:
     out_type: Any = SignalType()
     name: str = "node"
 
-    # -- operators --------------------------------------------------------- #
+    # -- stream-rate contract --------------------------------------------- #
     port_names: tuple[str | None, ...] = ()
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        """Output frames per input frame when fed ``in_type`` (see :mod:`sigflow.ratio`)."""
+        return Ratio.ANY
+
+    @property
+    def ratio(self) -> Ratio:
+        """Output frames per input frame (per source frame for a graph with a source)."""
+        return self.ratio_for(self.in_type)
+
+    # -- operators --------------------------------------------------------- #
 
     def __rshift__(self, other: Any) -> "Pipeline":
         return Pipeline([self, as_node(other)])
@@ -284,6 +298,14 @@ class Block(Node):
     def kind(self) -> str:
         return self.defn.kind
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        spec = self.defn.ratio_spec
+        if callable(spec):
+            from .control import live as _live
+
+            spec = spec(n_in=leading_dim(in_type), **_live(self.config))
+        return as_ratio(spec)
+
     def named(self, label: str) -> "Block":
         return Block(self.defn, self.config, label)
 
@@ -301,14 +323,19 @@ class Block(Node):
         new.out_type = scoped(_unscope(self.out_type), str(new.id))
         return new
 
-    def describe(self, indent: str = "") -> str:
+    def describe(self, indent: str = "", ratio_in: Any = None) -> str:
         cfg = ", ".join(f"{k}={v!r}" for k, v in self.config.items())
         it = "" if self.in_type is None else f"{describe(self.in_type)} -> "
-        return f"{indent}{self.name}({cfg}): {it}{describe(self.out_type)}"
+        r = self.ratio_for(ratio_in if ratio_in is not None else self.in_type)
+        tail = f"  [{r}]" if self.kind == "stream" and r and r != Ratio.ONE else ""
+        return f"{indent}{self.name}({cfg}): {it}{describe(self.out_type)}{tail}"
 
 
 class Source(Node):
     """A source built from an existing iterable / async iterable / factory."""
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
 
     in_type = None
 
@@ -371,8 +398,19 @@ class Pipeline(Node):
                     s.accept(prev.out_type, env, f"{prev.name} -> {s.name}")
                 except TypeMismatch as e:
                     raise TypeMismatch(str(e)) from None
+                s.ratio_for(
+                    prev.out_type
+                )  # branch rates are checked with the real input
             prev = s
         return env
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        r = Ratio.ONE
+        t = in_type
+        for s in self.stages:
+            r = r * s.ratio_for(t if s.in_type is not None else None)
+            t = s.out_type
+        return r
 
     def accept(self, produced: Any, env: Env, where: str) -> None:
         self.stages[0].accept(produced, env, where)
@@ -387,7 +425,15 @@ class Pipeline(Node):
         return [n for s in self.stages for n in s.nodes()]
 
     def describe(self, indent: str = "") -> str:
-        return "\n".join(s.describe(indent) for s in self.stages)
+        lines, prev = [], None
+        for s in self.stages:
+            lines.append(
+                s.describe(indent, ratio_in=prev.out_type)
+                if isinstance(s, Block) and prev is not None
+                else s.describe(indent)
+            )
+            prev = s
+        return "\n".join(lines)
 
 
 class Fanout(Node):
@@ -419,6 +465,9 @@ class Fanout(Node):
     def accept(self, produced: Any, env: Env, where: str) -> None:
         for b in self.branches:
             b.accept(produced, env, f"{where} | {b.name}")
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return _common_ratio(self.branches, in_type, "fan-out")
 
     def resolve_ports(self, upstream: Node) -> Node:
         resolved = [b.resolve_ports(upstream) for b in self.branches]
@@ -469,6 +518,11 @@ class Zip(Node):
         for p in self.parts:
             p.accept(produced, env, f"{where} & {p.name}")
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        if self.in_type is None:
+            return Ratio.ONE  # lock-step over sources: one tuple per source frame
+        return _common_ratio(self.parts, in_type, "zip")
+
     def resolve_ports(self, upstream: Node) -> Node:
         if self.in_type is None:
             return self
@@ -497,6 +551,9 @@ class Feedback(Node):
 
         agc = feedback(measure_and_scale, init=1.0)      # gain flows around the loop
     """
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
 
     def __init__(self, body: Node, init: Any, name: str | None = None) -> None:
         self.body = body
@@ -548,6 +605,9 @@ class When(Node):
     """Per-frame routing (built by :func:`when`): frames for which ``pred(frame)`` is
     true go through ``then``, the others through ``otherwise`` (default: pass through).
     Both branches must be 1:1; output order follows input order."""
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
 
     def __init__(
         self,
@@ -607,6 +667,115 @@ def when(pred: Any, then: Any, otherwise: Any = None, name: str | None = None) -
     )
 
 
+class Switch(Node):
+    """Keyed routing (built by :func:`switch`): ``selector(frame)`` picks the branch each
+    frame goes through; unselected branches stay idle. Branch outputs are merged into one
+    stream. With ``ordered=False`` (default) branches run concurrently as real streams —
+    they may re-frame, window or drop — and outputs appear in completion order; with
+    ``ordered=True`` output order follows input order and every branch must be 1:1."""
+
+    def __init__(
+        self,
+        selector: Any,
+        branches: Mapping[Any, Node],
+        default: Any = None,
+        ordered: bool = False,
+        name: str | None = None,
+    ) -> None:
+        if not branches:
+            raise ValueError("switch() needs at least one branch")
+        self.key_of = (
+            (lambda f, k=selector: f[k]) if isinstance(selector, str) else selector
+        )
+        self.selector = selector
+        self.branches = dict(branches)
+        self.default = default  # Node, "pass", or None (drop)
+        self.ordered = ordered
+        all_nodes = list(self.branches.values()) + (
+            [default] if isinstance(default, Node) else []
+        )
+        self.in_type = _common_input([b.in_type for b in all_nodes], "switch")
+        outs = [b.out_type for b in all_nodes] + (
+            [self.in_type] if default == "pass" else []
+        )
+        self.out_type = outs[0] if all(o == outs[0] for o in outs) else SignalType()
+        sel = (
+            selector
+            if isinstance(selector, str)
+            else getattr(selector, "__name__", "selector")
+        )
+        self.name = name or f"switch({sel})"
+        if ordered:
+            for k, b in self.branches.items():
+                if b.ratio_for(self.in_type) not in (Ratio.ONE, Ratio.DOWN, Ratio.ANY):
+                    raise RatioMismatch(
+                        f"switch(ordered=True): branch {k!r} emits {b.ratio_for(self.in_type)} frames "
+                        f"per input; ordered routing needs 1:1 branches"
+                    )
+
+    def _all(self) -> list[Node]:
+        return list(self.branches.values()) + (
+            [self.default] if isinstance(self.default, Node) else []
+        )
+
+    def validate(self, env: Env | None = None) -> Env:
+        env = env if env is not None else Env()
+        for b in self._all():
+            env = b.validate(env)
+        return env
+
+    def accept(self, produced: Any, env: Env, where: str) -> None:
+        for k, b in self.branches.items():
+            b.accept(produced, env, f"{where} [{k!r}]")
+        if isinstance(self.default, Node):
+            self.default.accept(produced, env, f"{where} [default]")
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        rs = [b.ratio_for(in_type) for b in self._all()]
+        r = rs[0]
+        for x in rs[1:]:
+            if x != r:
+                return Ratio.ANY
+        return r
+
+    def nodes(self) -> list[Node]:
+        return [n for b in self._all() for n in b.nodes()]
+
+    def describe(self, indent: str = "") -> str:
+        lines = [
+            f"{indent}{self.name}: {describe(self.in_type)} -> {describe(self.out_type)}"
+        ]
+        for k, b in self.branches.items():
+            lines.append(b.describe(indent + f"  {k!r}: "))
+        if isinstance(self.default, Node):
+            lines.append(self.default.describe(indent + "  default: "))
+        elif self.default == "pass":
+            lines.append(f"{indent}  default: pass through")
+        return "\n".join(lines)
+
+
+def switch(
+    selector: Any,
+    branches: Mapping[Any, Any],
+    default: Any = None,
+    ordered: bool = False,
+    name: str | None = None,
+) -> Switch:
+    """Route each frame to one of several branches by key.
+
+    ``selector`` is a callable on the :class:`Frame` or the name of an annotation
+    (``switch("band", {...})`` reads ``frame["band"]``). ``default`` handles keys with no
+    branch: a node, ``"pass"`` (forward unchanged) or ``None`` (drop; ``run(strict=True)``
+    raises instead). ::
+
+        switch("modulation", {"bpsk": demod_bpsk, "qpsk": demod_qpsk}, default=log_unknown)
+        switch(lambda f: f["snr_db"] > 10, {True: fast_path, False: robust_path})
+    """
+    nodes = {k: as_node(v) for k, v in branches.items()}
+    dflt = default if default in (None, "pass") else as_node(default)
+    return Switch(selector, nodes, dflt, ordered, name)
+
+
 class Align(Node):
     """Timestamp join (built by :func:`align`): pairs frames from several sources whose
     start times agree within ``tolerance`` seconds, dropping unmatched older frames.
@@ -660,6 +829,9 @@ class Parallel(Node):
     module-level block) and sends the frame's data to the worker; ``"thread"`` works for
     anything and helps when the function releases the GIL (NumPy, SciPy)."""
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return self.inner.ratio_for(in_type)
+
     def __init__(
         self,
         inner: Node,
@@ -705,6 +877,9 @@ def parallel(
 class Merge(Node):
     """Interleave several source streams in arrival order (output type is their join)."""
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
+
     def __init__(self, parts: Iterable[Node]) -> None:
         seen: set[int] = set()
         self.parts = [fresh(p, seen) for p in parts]
@@ -736,6 +911,9 @@ def merge(*parts: Any) -> Merge:
 class Select(Node):
     """Pick one or several ports of a tuple-typed upstream node (built by ``node[key]``)."""
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
+
     def __init__(self, upstream: Node, key: Any) -> None:
         items = upstream.out_type.items
         names = tuple(getattr(upstream, "port_names", ()) or (None,) * len(items))
@@ -760,6 +938,9 @@ class Select(Node):
 
 class Slice(Node):
     """Data slicing of an array-typed upstream (built by ``node[key]``)."""
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
 
     def __init__(self, upstream: Node, key: Any) -> None:
         self.key = key
@@ -791,6 +972,11 @@ def _key_repr(key: Any) -> str:
 
 class StreamSlice(Node):
     """Frame-count slicing of a stream: take / skip / every / until (identity-typed)."""
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        if self.kind == "every":
+            return Ratio.of(int(self.params.get("k", 1)), 1)
+        return Ratio.DOWN  # take / skip / until / while: fewer or equal
 
     def __init__(self, kind: str, upstream: Node | None = None, **params: Any) -> None:
         self.kind = kind
@@ -834,6 +1020,9 @@ class PortRef(Node):
 
         decomposition >> (port("vecs") | port("vals") >> model_order) >> combine
     """
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
 
     def __init__(self, key: Any) -> None:
         self.key = key
@@ -959,6 +1148,21 @@ def fresh(node: Node, seen: set[int]) -> Node:
             node.name,
         )
     return node
+
+
+def _common_ratio(branches: list[Node], in_type: Any, where: str) -> Ratio:
+    """Branches paired by a fan-out / zip must emit frames at compatible rates."""
+    rs = [b.ratio_for(in_type) for b in branches]
+    best = Ratio.ANY
+    for b, r in zip(branches, rs):
+        if not best.compatible(r):
+            bad = next(x for x, y in zip(branches, rs) if y == best)
+            raise RatioMismatch(
+                f"{where}: {bad.name} emits {best} frames per input but {b.name} emits {r}; "
+                f"pair branches with matching rates (or re-frame one side)"
+            )
+        best = best.meet(r)
+    return best
 
 
 def _common_input(ins: list[Any], where: str) -> Any:

@@ -178,6 +178,19 @@ class _Layout:
                 [self.layout(node.otherwise)] if node.otherwise is not None else []
             )
             return self.column(cells, "when", node, broadcast=True)
+        if type(node).__name__ == "Switch":
+            members = _members(node)
+            cells = [self.layout(b) for b in members]
+            keys = [repr(k) for k in node.branches] + (
+                ["default"] if len(members) > len(node.branches) else []
+            )
+            for c, k in zip(cells, keys):  # label each branch's first box with its key
+                if c.boxes:
+                    b0 = c.boxes[0]
+                    b0.sub = k + (" · " + b0.sub if b0.sub else "")
+                    b0.h = max(b0.h, _H + 12)
+                    b0.w = max(b0.w, len(b0.sub) * _CHAR + 24)
+            return self.column(cells, "switch", node, broadcast=True)
         if isinstance(node, Select) or type(node).__name__ in (
             "PortRef",
             "Slice",
@@ -289,6 +302,8 @@ class _Layout:
 def _members(node: Any) -> list[Any]:
     if type(node).__name__ == "When":
         return [node.then] + ([node.otherwise] if node.otherwise is not None else [])
+    if type(node).__name__ == "Switch":
+        return node._all()
     return getattr(node, "branches", None) or getattr(node, "parts", None) or []
 
 

@@ -149,10 +149,12 @@ class BlockDef:
         refine: Callable[..., Any] | None = None,
         total: Callable[..., int] | None = None,
         threaded: bool = False,
+        ratio: Any = None,
     ) -> None:
         self.fn = fn
         self.refine = refine
         self.total = total
+        self.ratio_spec = ratio  # see sigflow.ratio: "1:1", "N:1", (4, 1), callable
         self.threaded = threaded
         self.name = name or getattr(fn, "__name__", type(fn).__name__)
         self.__doc__ = doc or getattr(fn, "__doc__", None)
@@ -187,6 +189,10 @@ class BlockDef:
             else:
                 kind = "map"
         self.kind = kind
+        if ratio is None and kind != "stream":
+            self.ratio_spec = (
+                "1:1"  # map blocks, taps and sources are one frame per frame
+            )
         if kind == "source" and not is_gen and not self.is_async:
             # A plain function with no inputs: a one-shot source (or an iterable factory).
             pass
@@ -209,6 +215,17 @@ class BlockDef:
         if keep_samples is None:
             keep_samples = _same_leading(self.in_type, self.out_type)
         self.keep_samples = keep_samples
+
+    # -- stream-rate contract --------------------------------------------- #
+    def ratio_for(self, in_type: Any = None) -> Any:
+        """Output frames per input frame with default configuration (see :mod:`sigflow.ratio`)."""
+        from .graph import as_node
+
+        return as_node(self).ratio_for(in_type)
+
+    @property
+    def ratio(self) -> Any:
+        return self.ratio_for(self.in_type)
 
     # -- input parsing ----------------------------------------------------- #
     def _parse_inputs(

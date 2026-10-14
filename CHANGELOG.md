@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0
+
+New
+
+- Stream-rate contracts (`sigflow.ratio`): `@block(ratio=...)` declares frames
+  out per frame in (`"1:1"`, `"N:1"`, `"1:N"`, `(4, 1)`, or a callable of the
+  configuration and `n_in`); map blocks are `1:1` by definition. Ratios
+  multiply along pipelines (`node.ratio`, `describe()` tags), fan-out / zip
+  branches and `Graph` edges at incompatible rates raise `RatioMismatch` at
+  build time, `run(strict=True)` verifies declared ratios, and the progress
+  monitor scales source totals by the graph ratio. `dsp.chunk`, `overlap`,
+  `buffer`, `decimate`, `running_mean`, `fir`, `timestamp` declare theirs.
+- `switch(selector, {key: branch, ...}, default=..., ordered=...)`: keyed
+  routing through real stream branches (windowing, state, drops allowed) that
+  run concurrently; `default` is a node, `"pass"` or drop; `ordered=True`
+  keeps input order for 1:1 branches; provenance names the branch taken.
+- Example 21 (modulation-switched demodulators, rate contracts).
+
+Changed
+
+- A fan-out whose branches have different _declared_ rates (for example
+  `dsp.rms | dsp.buffer(count=2)`) is now a build-time error rather than a
+  run-time `strict=True` one.
+
 ## 0.3.0
 
 New

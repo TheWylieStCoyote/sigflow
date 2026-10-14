@@ -10,53 +10,55 @@ def scale(x: Sig[float, "N"], gain: float = 1.0) -> Sig[float, "N"]:
 frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, "N"]) >> scale(gain=2)).run()
 """
 
+from . import io
+from .block import BlockDef, Framed, block, lift, source, tap
+from .builder import Graph
+from .control import Knob, Run
+from .frame import MISSING, Frame, Issue, Provenance, TimeSpan
+from .graph import (
+    Block,
+    Fanout,
+    Merge,
+    Node,
+    Pipeline,
+    Select,
+    Source,
+    Zip,
+    align,
+    as_node,
+    feedback,
+    from_iterable,
+    merge,
+    parallel,
+    port,
+    switch,
+    validate,
+    when,
+)
+from .lineage import Lineage
+from .persist import Checkpoint, ReplayMismatch, Stateful, load_checkpoint, replay
+from .progress import Monitor
+from .ratio import Ratio, RatioMismatch
+from .runtime import arun, iterate, iterate_sync, run
 from .types import (
     Any,
+    CMatrix,
+    CVector,
+    Env,
+    Matrix,
+    Scalar,
     Sig,
     SignalType,
-    TupleType,
     Stream,
-    TypeMismatch,
-    Env,
-    Scalar,
-    Vector,
-    Matrix,
     Tensor,
-    CVector,
-    CMatrix,
+    TupleType,
+    TypeMismatch,
+    Vector,
     unify,
 )
-from .frame import Frame, Issue, Provenance, MISSING, TimeSpan
-from .block import block, source, tap, lift, BlockDef, Framed
-from .graph import (
-    Node,
-    Block,
-    Source,
-    Pipeline,
-    Fanout,
-    Zip,
-    Merge,
-    Select,
-    port,
-    merge,
-    as_node,
-    from_iterable,
-    validate,
-    feedback,
-    when,
-    align,
-    parallel,
-)
-from .runtime import run, arun, iterate, iterate_sync
-from .progress import Monitor
-from .control import Run, Knob
 from .ui import dashboard, require_widgets
-from .builder import Graph
-from .lineage import Lineage
-from .persist import replay, Stateful, Checkpoint, load_checkpoint, ReplayMismatch
-from . import io
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "Any",
     "Sig",
@@ -98,6 +100,9 @@ __all__ = [
     "when",
     "align",
     "parallel",
+    "switch",
+    "Ratio",
+    "RatioMismatch",
     "from_iterable",
     "validate",
     "run",

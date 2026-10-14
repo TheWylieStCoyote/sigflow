@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import time as _time
+from fractions import Fraction
 from typing import Any, Iterable, Iterator
 
 import numpy as np
@@ -19,6 +20,7 @@ complex_ = complex
 from .block import Framed, block, source, tap
 from .frame import Frame
 from .graph import Block
+from .ratio import Ratio
 from .types import Sig, Stream
 
 __all__ = [
@@ -194,7 +196,14 @@ class _Reframer:
         return out
 
 
-@block(refine=lambda n, **_: Sig["T", (n,)])
+def _reframe_ratio(
+    n: int, hop: int | None = None, n_in: int | None = None, **_: Any
+) -> Ratio:
+    """Outputs per input of a re-framer, once the input frame length is known."""
+    return Ratio.of(1, Fraction(n_in, hop or n)) if n_in else Ratio.ANY
+
+
+@block(refine=lambda n, **_: Sig["T", (n,)], ratio=_reframe_ratio)
 def chunk(xs: Stream[Framed[Sig["T", None]]], n: int = 256) -> Sig["T", "N"]:
     """Re-frame a stream of 1-D arrays into fixed-length frames of ``n`` samples (time kept)."""
     r = _Reframer()
@@ -204,7 +213,7 @@ def chunk(xs: Stream[Framed[Sig["T", None]]], n: int = 256) -> Sig["T", "N"]:
             yield r.take(f, n, n)
 
 
-@block(refine=lambda n, **_: Sig["T", (n,)])
+@block(refine=lambda n, **_: Sig["T", (n,)], ratio=_reframe_ratio)
 def overlap(
     xs: Stream[Framed[Sig["T", "N"]]], n: int = 256, hop: int = 128
 ) -> Sig["T", "M"]:
@@ -217,7 +226,10 @@ def overlap(
             yield r.take(f, n, hop)
 
 
-@block(refine=lambda count, **_: Sig["T", (count, "N")])
+@block(
+    refine=lambda count, **_: Sig["T", (count, "N")],
+    ratio=lambda count, **_: Ratio.of(count, 1),
+)
 def buffer(xs: Stream[Framed[Sig["T", "N"]]], count: int = 8) -> Sig["T", ("K", "N")]:
     """Stack ``count`` consecutive frames into a matrix (K x N); ``t0`` of the first row."""
     buf: list[Frame] = []
@@ -231,7 +243,7 @@ def buffer(xs: Stream[Framed[Sig["T", "N"]]], count: int = 8) -> Sig["T", ("K", 
             buf = []
 
 
-@block
+@block(ratio=lambda every, **_: Ratio.of(every, 1))
 def decimate(xs: Stream[Sig["T", "N"]], every: int = 2) -> Sig["T", "N"]:
     """Keep one frame in ``every`` (frames keep their own time)."""
     x: Any
@@ -240,7 +252,7 @@ def decimate(xs: Stream[Sig["T", "N"]], every: int = 2) -> Sig["T", "N"]:
             yield x
 
 
-@block
+@block(ratio="1:1")
 def running_mean(xs: Stream[Sig[float, "N"]], alpha: float = 0.1) -> Sig[float, "N"]:
     """Exponential moving average across frames (stateful stream block)."""
     acc = None
@@ -251,7 +263,7 @@ def running_mean(xs: Stream[Sig[float, "N"]], alpha: float = 0.1) -> Sig[float, 
         yield acc
 
 
-@block
+@block(ratio="1:1")
 def timestamp(xs: Stream[Frame]) -> Frame:
     """Annotate frames with a running sequence number, wall-clock arrival time and — when
     the stream has a rate and the frame no ``t0`` yet — a ``t0`` from the sample count."""
@@ -346,7 +358,7 @@ def lfilter(x: Sig[float, "N"], b: Any = (1.0,), a: Any = (1.0,)) -> Sig[float, 
     return ss.lfilter(np.asarray(b), np.asarray(a), x)
 
 
-@block
+@block(ratio="1:1")
 def fir(xs: Stream[Sig[float, "N"]], taps: Any = (1.0,)) -> Sig[float, "N"]:
     """Streaming FIR filter that carries filter state across frames."""
     b = np.asarray(taps, dtype=float)

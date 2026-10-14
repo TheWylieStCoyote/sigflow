@@ -2,21 +2,10 @@
 
 `examples/01_basics.py`
 
-
-
-## Output
-
-Files the script writes when run:
-
-![basics_graph.svg](assets/01_basics/basics_graph.svg)
-
-*`basics_graph.svg`*
-
 ## Source
 
 ```python
 """Basics: declare typed blocks, compose with operators, run, inspect provenance."""
-
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, run, source
@@ -50,29 +39,19 @@ def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:
 def check_level(f: Framed[Sig[float, "N"]], limit: float = 0.9) -> Sig[float, "N"]:
     mask = np.abs(f.data) > limit
     out = f.annotate(peak=float(np.abs(f.data).max())).annotate_samples(hot=mask)
-    return (
-        out.with_issue(f"{mask.sum()} hot samples", "warning", "check_level")
-        if mask.any()
-        else out
-    )
+    return out.with_issue(f"{mask.sum()} hot samples", "warning", "check_level") if mask.any() else out
 
 
 if __name__ == "__main__":
     # Blocks are still functions:
     print(scale(np.arange(4.0), gain=2))
 
-    g = (
-        dsp.sine(freq=440, rate=8000, n=64, frames=6, amplitude=1.2)
-        >> check_level
-        >> scale(gain=0.5)
-        >> energy
-    )
+    g = dsp.sine(freq=440, rate=8000, n=64, frames=6, amplitude=1.2) >> check_level >> scale(gain=0.5) >> energy
     print(g.describe(), "\n")
-    g.draw().save("basics_graph.svg")
 
     frames = run(g, progress=True)
     f = frames[-1]
-    print(f)  # Frame(float, meta={...}, issues=1, from=energy)
+    print(f)                      # Frame(float, meta={...}, issues=1, from=energy)
     print("warnings:", [str(w) for w in f.warnings])
     print("stream annotations:", dict(f.stream))
     print("lineage:\n" + f.trace())

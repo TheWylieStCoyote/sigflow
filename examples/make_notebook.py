@@ -25,7 +25,7 @@ print("sigflow", sigflow.__version__, "from", pathlib.Path(sigflow.__file__).par
 code("""import numpy as np
 import matplotlib
 %matplotlib inline
-from sigflow import Sig, Stream, Framed, Frame, TypeMismatch, block, source, run
+from sigflow import Sig, Stream, Framed, Frame, TypeMismatch, RatioMismatch, block, source, run
 from sigflow import dsp, linalg, plot""")
 
 md("""## 1. Blocks are plain functions with typed signatures
@@ -52,9 +52,12 @@ code("""@block
 def add(a: Sig["T", "N"], b: Sig["T", "N"]) -> Sig["T", "N"]:
     return a + b
 
-big = (((dsp.sine(n=256, frames=4) >> dsp.window) & dsp.noise(n=256, frames=4))
-       >> add >> dsp.to_complex
-       >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=4) >> linalg.norm))
+front = ((dsp.sine(n=256, frames=8) >> dsp.window) & dsp.noise(n=256, frames=8)) >> add >> dsp.to_complex
+try:                       # branches must run at compatible rates: buffer(4) is 4:1, the others 1:1
+    front >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=4) >> linalg.norm)
+except RatioMismatch as e:
+    print("rejected:", e)
+big = front >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=1) >> linalg.norm)
 big.draw()""")
 code("""try:
     dsp.sine() >> energy >> scale      # scalar cannot feed a vector

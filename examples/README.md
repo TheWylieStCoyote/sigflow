@@ -33,6 +33,7 @@ run it in Jupyter with `ipywidgets` installed (regenerate with
 | `17_video_frames.py` | imaging | (H, W) frames, frame differencing, 2-D motion masks as sample-level annotations kept through blur and dropped by the spectrum, centroid tracking |
 | `18_testing_pipelines.py` | testing | the recommended way to test chains: blocks as functions, graphs on fixtures, `check="all"`, a fake clock, parametrised and golden tests (`pytest` runnable) |
 | `19_graph_report.py` | documentation | `g.report()` HTML/Markdown with diagram, typed table and docstrings; a generated docs folder |
+| `21_routing_and_rates.py` | routing / rates | `switch()` by annotation or callable with pipeline branches (a stateful tracker, a 4:1 re-framer), `default=`, `ordered=True`; `ratio=` contracts, `g.ratio`, `RatioMismatch` at build time, `strict=True` verification |
 | `20_builder_time_replay.py` | 0.2 tour | units in the contract, data + stream slicing, `Frame.time`, `align()`, an explicit `Graph` diamond, `frame.save`/`replay`, `Stateful` checkpoint/resume, `plot.multi`/`history` |
 
 A few lessons the examples were written to make visible:
@@ -51,6 +52,9 @@ A few lessons the examples were written to make visible:
 * Multi-port, multi-rate outputs (a channelizer) are one tuple frame per input
   frame — the 1:1 shape fan-out and `port()` expect (12).
 * A loop across blocks is `feedback(body, init)`; the body must be 1:1 and
-  must not buffer frames (13). Routing is `when(pred, then, otherwise)` (15).
+  must not buffer frames (13). Two-way routing is `when(pred, then, otherwise)`
+  (15); keyed routing through real stream branches is `switch()` (21).
+* Declare `ratio=` on stream blocks that re-frame: a fan-out of branches at
+  different rates is then refused before it runs (21).
 * Sweeps run one configuration per process from a factory function; nothing in
   a graph needs to be picklable (14).

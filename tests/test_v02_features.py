@@ -9,6 +9,7 @@ from sigflow import (
     Frame,
     Graph,
     Sig,
+    Stream,
     Stateful,
     TypeMismatch,
     align,
@@ -258,7 +259,18 @@ def test_checkpoint_and_resume(tmp_path):
 
 
 def test_strict_fanout():
-    g = ramp(count=6) >> (dsp.rms | dsp.buffer(count=2))
+    from sigflow import RatioMismatch
+
+    with pytest.raises(RatioMismatch):  # declared rates: caught before running
+        ramp(count=6) >> (dsp.rms | dsp.buffer(count=2))
+
+    @block  # no declared ratio: caught at run time
+    def halve(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+        for i, x in enumerate(xs):
+            if i % 2:
+                yield x
+
+    g = ramp(count=6) >> (dsp.rms | halve)
     assert len(run(g)) == 3
     with pytest.raises(TypeMismatch, match="different numbers"):
         run(g, strict=True)

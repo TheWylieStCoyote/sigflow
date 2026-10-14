@@ -28,6 +28,7 @@ from typing import Any
 
 from .frame import Frame
 from .graph import Node, Select, TupleType, as_node, describe
+from .ratio import Ratio, RatioMismatch
 from .types import Env, SignalType, TypeMismatch, unify
 
 __all__ = ["Graph", "Ref", "Join", "Chain", "lower"]
@@ -75,6 +76,9 @@ class Join(Node):
         self.name = op
         self.port_names = port_names
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
+
 
 class Chain(Node):
     """A linear run of members executed back to back without queues between them
@@ -100,6 +104,13 @@ class Chain(Node):
 
     def nodes(self) -> list[Node]:
         return [n for s in self.stages for n in s.nodes()]
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        r, t = Ratio.ONE, in_type
+        for s in self.stages:
+            r = r * s.ratio_for(t if s.in_type is not None else None)
+            t = s.out_type
+        return r
 
     def describe(self, indent: str = "") -> str:
         return "\n".join(s.describe(indent) for s in self.stages)
@@ -191,6 +202,11 @@ class Graph(Node):
         self.edges.append((src, dst.name, slot))
         self._check_edge(src, dst, slot)
         self._reject_cycles()
+        try:
+            self.ratios()
+        except RatioMismatch:
+            self.edges.pop()
+            raise
         return self
 
     def output(self, *refs: Any) -> "Graph":
@@ -291,6 +307,7 @@ class Graph(Node):
                 unify(produced, node.in_type, env, where=f"-> {name}")
         if not self.outputs:
             raise TypeMismatch("graph has no output(); call g.output(ref)")
+        self.ratio_for(self.in_type)
         return env
 
     def nodes(self) -> list[Node]:
@@ -317,6 +334,43 @@ class Graph(Node):
 
     def consumers_of(self, name: str) -> list[tuple[Ref, str, Any]]:
         return [e for e in self.edges if e[1] == name]
+
+    # -- stream-rate contract --------------------------------------------- #
+    def ratios(self) -> dict[str, Ratio]:
+        """Each member's output frames per graph input / source frame. Edges meeting at a
+        multi-input member (or the graph's outputs) must carry compatible rates."""
+        out: dict[str, Ratio] = {}
+        for name in self.order():
+            node = self.members[name]
+            ins = sorted([e for e in self.edges if e[1] == name], key=lambda e: e[2])
+            if not ins:
+                out[name] = Ratio.ONE  # a source, or the graph input
+                continue
+            arriving = Ratio.ANY
+            for src, _, _ in ins:
+                r = out.get(src.name, Ratio.ANY)
+                if not arriving.compatible(r):
+                    raise RatioMismatch(
+                        f"-> {name}: inputs arrive at incompatible rates "
+                        f"({arriving} and {r} frames per source frame); re-frame one side"
+                    )
+                arriving = arriving.meet(r)
+            out[name] = arriving * node.ratio_for(self._produced(name))
+        return out
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        if not self.outputs:
+            return Ratio.ANY
+        rs = self.ratios()
+        r = Ratio.ANY
+        for ref in self.outputs:
+            x = rs.get(ref.name, Ratio.ANY)
+            if not r.compatible(x):
+                raise RatioMismatch(
+                    f"graph outputs run at incompatible rates ({r} and {x})"
+                )
+            r = r.meet(x)
+        return r
 
     def __repr__(self) -> str:
         return self.describe()

@@ -45,6 +45,7 @@ from .graph import (
     Slice,
     Source,
     StreamSlice,
+    Switch,
     When,
     Zip,
 )
@@ -178,6 +179,13 @@ class Runner:
         if isinstance(node, When):
             assert upstream is not None
             return self._when(node, upstream)
+        if isinstance(node, Switch):
+            assert upstream is not None
+            return (
+                self._switch_ordered(node, upstream)
+                if node.ordered
+                else self._switch(node, upstream)
+            )
         raise TypeError(f"cannot run {node!r}")
 
     async def _stream_slice(
@@ -445,12 +453,9 @@ class Runner:
                         await queues[(dst, slot)].put(item)
                     for q in outs:
                         await q.put(f)
-            except asyncio.CancelledError:
-                # cancelled by the graph's own teardown (below): not a member failure
-                raise
             except BaseException as e:  # noqa: BLE001
-                # a failure is recorded once for the whole graph; every consumer checks
-                # it, so the run re-raises instead of ending quietly
+                # a failure (or cancellation) is recorded once for the whole graph; every
+                # consumer checks it, so the run re-raises instead of ending quietly
                 if not failure.done():
                     failure.set_exception(e)
                 for q in [queues[(dst, slot)] for _, dst, slot in edges] + outs:
@@ -551,8 +556,6 @@ class Runner:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-            if failure.done():
-                failure.exception()  # retrieved: the consumer raised first
 
     # -- per-frame sub-pipelines (feedback / when) ------------------------- #
     def _subpipe(self, node: Node) -> "_SubPipe":
@@ -646,6 +649,148 @@ class Runner:
             await then.close()
             if other is not None:
                 await other.close()
+
+    # -- keyed routing ------------------------------------------------------ #
+    _NOKEY = object()
+
+    def _route(self, node: Switch, f: Frame) -> tuple[Any, Frame]:
+        """Pick the branch key for a frame; a selector error marks the frame as failed."""
+        try:
+            key = node.key_of(f)
+        except Exception as e:
+            issue = Issue(f"{type(e).__name__}: {e}", "error", node.name, e, f.prov)
+            return self._NOKEY, f.evolve(data=MISSING, issues=f.issues + (issue,))
+        return (key if key in node.branches else self._NOKEY), f
+
+    async def _switch(
+        self, node: Switch, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Concurrent routing: each branch is a real stream fed by its own queue; outputs are
+        merged in completion order (frames routed to one branch keep their order)."""
+        stats = self.mon.stats(node.name, node)
+        outq: asyncio.Queue = asyncio.Queue()
+        inqs: dict[Any, asyncio.Queue] = {}
+        tasks: list[asyncio.Task] = []
+        labels: dict[Any, str] = {}
+
+        async def feed(q: asyncio.Queue) -> AsyncIterator[Frame]:
+            async for f in _drain(q):
+                yield f
+
+        async def drive(label: str, branch: Node, q: asyncio.Queue) -> None:
+            try:
+                async for f in self.compile(branch, feed(q)):
+                    await outq.put((label, f))
+            except BaseException as e:  # noqa: BLE001
+                await outq.put(("error", e))
+                raise
+            finally:
+                await outq.put(_DONE)
+
+        members: list[tuple[Any, str, Node]] = [
+            (k, repr(k), b) for k, b in node.branches.items()
+        ]
+        if isinstance(node.default, Node):
+            members.append((self._NOKEY, "default", node.default))
+        for key, label, branch in members:
+            q: asyncio.Queue = asyncio.Queue(maxsize=self.opts.queue_size)
+            inqs[key], labels[key] = q, label
+            tasks.append(asyncio.create_task(drive(label, branch, q)))
+        live_ = len(tasks)
+        done_feeding = False
+
+        async def router() -> None:
+            try:
+                async for f in upstream:
+                    stats.inp += 1
+                    key, f = self._route(node, f)
+                    if key is self._NOKEY and self._NOKEY not in inqs:
+                        if node.default == "pass":
+                            await outq.put(("pass", f))
+                        elif self.opts.strict:
+                            raise KeyError(
+                                f"{node.name}: no branch for key {node.key_of(f)!r} and no default"
+                            )
+                        continue  # dropped
+                    await inqs[key].put(f)
+            except BaseException as e:  # noqa: BLE001
+                await outq.put(("error", e))
+                raise
+            finally:
+                for q in inqs.values():
+                    await q.put(_DONE)
+                await outq.put(_DONE)
+
+        rt = asyncio.create_task(router())
+        live_ += 1
+        seq = 0
+        try:
+            while live_:
+                it = await outq.get()
+                if it is _DONE:
+                    live_ -= 1
+                    continue
+                label, f = it
+                if label == "error":
+                    raise f
+                stats.out += 1
+                yield f.evolve(
+                    prov=Provenance(
+                        f"{node.name}[{label}]", {}, (f.prov,) if f.prov else (), seq
+                    )
+                )
+                seq += 1
+        finally:
+            for t in [rt, *tasks]:
+                t.cancel()
+            for t in [rt, *tasks]:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _switch_ordered(
+        self, node: Switch, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Ordered routing: one frame at a time through 1:1 branches, like when()."""
+        stats = self.mon.stats(node.name, node)
+        pipes = {k: self._subpipe(b) for k, b in node.branches.items()}
+        dflt = self._subpipe(node.default) if isinstance(node.default, Node) else None
+        seq = 0
+        try:
+            async for f in upstream:
+                stats.inp += 1
+                key, f = self._route(node, f)
+                if key is self._NOKEY:
+                    if dflt is not None:
+                        out, label = await dflt.one(f), "default"
+                    elif node.default == "pass":
+                        out, label = f, "pass"
+                    elif self.opts.strict:
+                        raise KeyError(
+                            f"{node.name}: no branch for key {node.key_of(f)!r} and no default"
+                        )
+                    else:
+                        continue
+                else:
+                    out, label = await pipes[key].one(f), repr(key)
+                if out is None:
+                    continue
+                yield out.evolve(
+                    prov=Provenance(
+                        f"{node.name}[{label}]",
+                        {},
+                        (out.prov,) if out.prov else (),
+                        seq,
+                    )
+                )
+                stats.out += 1
+                seq += 1
+        finally:
+            for p in pipes.values():
+                await p.close()
+            if dflt is not None:
+                await dflt.close()
 
     async def _select(
         self, node: Select, upstream: AsyncIterator[Frame]
@@ -863,6 +1008,8 @@ class Runner:
         consumed: list[Frame] = []
         failed_q: asyncio.Queue = asyncio.Queue()
 
+        first_len: list[int] = []
+
         async def frames() -> AsyncIterator[Frame]:
             async for f in upstream:
                 stats.inp += 1
@@ -871,6 +1018,12 @@ class Runner:
                     # generator that raised cannot be resumed, so it must never see MISSING data.
                     failed_q.put_nowait(f)
                     continue
+                if (
+                    not first_len
+                    and hasattr(f.data, "shape")
+                    and getattr(f.data, "ndim", 0) >= 1
+                ):
+                    first_len.append(len(f.data))
                 yield f
 
         async def items() -> AsyncIterator[Any]:
@@ -952,6 +1105,27 @@ class Runner:
         while not failed_q.empty():
             yield self._forward_failed(failed_q.get_nowait(), node, seq)
             seq += 1
+        if self.opts.strict:
+            self._check_ratio(node, stats, first_len[0] if first_len else None)
+
+    def _check_ratio(self, node: Block, stats: Any, n_in: int | None) -> None:
+        """strict=True: a stream block with an exact ratio must have honoured it."""
+        from types import SimpleNamespace
+
+        from .ratio import RatioMismatch
+
+        r = node.ratio_for(
+            SimpleNamespace(shape=(n_in,)) if n_in is not None else node.in_type
+        )
+        if r.kind != "exact" or r.value is None or stats.inp == 0:
+            return
+        v = float(r.value)
+        expected = stats.inp * v
+        if abs(stats.out - expected) > max(1.0, v) + 1:
+            raise RatioMismatch(
+                f"{node.name} declares ratio {r} but emitted {stats.out} frames for "
+                f"{stats.inp} inputs (expected about {expected:.0f})"
+            )
 
     def _forward_failed(self, f: Frame, node: Block, seq: int) -> Frame:
         self.mon.stats(node.name).out += 1
@@ -1589,6 +1763,12 @@ async def arun(
     mon = opts.monitor
     mon.total = total
     graph.validate()
+    try:
+        mon.ratio = (
+            graph.ratio
+        )  # scales the sources' totals into an expected output count
+    except Exception:  # pragma: no cover - never let a ratio bug stop a run
+        mon.ratio = None
     graph.last_monitor = mon  # type: ignore[attr-defined]
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE

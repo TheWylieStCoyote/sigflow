@@ -15,18 +15,6 @@ What this exercises
   * `on_error="drop"` on a block vs. propagating by default
   * a block that catches its own exception and emits a warning instead of failing
 
-## Output
-
-Files the script writes when run:
-
-![robustness_graph.svg](assets/15_robustness/robustness_graph.svg)
-
-*`robustness_graph.svg`*
-
-![routing_graph.svg](assets/15_robustness/routing_graph.svg)
-
-*`routing_graph.svg`*
-
 ## Source
 
 ```python
@@ -45,7 +33,6 @@ What this exercises
   * `on_error="drop"` on a block vs. propagating by default
   * a block that catches its own exception and emits a warning instead of failing
 """
-
 import numpy as np
 
 from sigflow import Frame, Framed, MISSING, Sig, Stream, block, source, run, when
@@ -55,7 +42,6 @@ N = 128
 
 
 # --------------------------------------------------------- a flaky device
-
 
 class Device:
     """Pretend hardware: works for a while, then dies and must be re-opened."""
@@ -72,10 +58,8 @@ class Device:
         if self.k >= self.lifetime:
             raise IOError("device reset")
         self.k += 1
-        snr = 20 if self.rng.random() > 0.3 else 0  # occasional low-SNR frames
-        x = np.sin(2 * np.pi * 5 * np.arange(N) / N) + 10 ** (
-            -snr / 20
-        ) * self.rng.normal(size=N)
+        snr = 20 if self.rng.random() > 0.3 else 0            # occasional low-SNR frames
+        x = np.sin(2 * np.pi * 5 * np.arange(N) / N) + 10 ** (-snr / 20) * self.rng.normal(size=N)
         return x
 
 
@@ -92,12 +76,11 @@ def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[floa
             x = dev.read()
         except IOError as e:
             if restarts >= max_restarts:
-                raise  # give up: the stream ends with a failed frame
+                raise                                   # give up: the stream ends with a failed frame
             restarts += 1
             dev = Device(seed)
-            yield Frame(
-                np.zeros(N), meta={"seq": k, "gap": True}, stream={"restarts": restarts}
-            ).with_issue(f"{e}; restarted ({restarts})", "warning", "watchdog")
+            yield Frame(np.zeros(N), meta={"seq": k, "gap": True}, stream={"restarts": restarts}
+                        ).with_issue(f"{e}; restarted ({restarts})", "warning", "watchdog")
             k += 1
             continue
         yield Frame(x, meta={"seq": k, "gap": False}, stream={"restarts": restarts})
@@ -105,7 +88,6 @@ def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[floa
 
 
 # ---------------------------------------------------- degrading gracefully
-
 
 @block
 def assess(f: Framed[Sig[float, "N"]]) -> Sig[float, "N"]:
@@ -144,28 +126,18 @@ def guarded(f: Framed[Sig[float, "N"]]) -> Sig[dict]:
     try:
         return precise_frequency(f.data)
     except ValueError as e:
-        return f.evolve(data=robust_frequency(f.data)).with_issue(
-            f"fell back: {e}", "warning", "guarded"
-        )
+        return f.evolve(data=robust_frequency(f.data)).with_issue(f"fell back: {e}", "warning", "guarded")
 
 
 if __name__ == "__main__":
     # 1. Watchdog + graceful degradation: low-SNR frames take the robust path.
-    estimate = when(
-        lambda f: f["low_snr"],
-        robust_frequency,
-        otherwise=precise_frequency,
-        name="pick_method",
-    )
+    estimate = when(lambda f: f["low_snr"], robust_frequency, otherwise=precise_frequency, name="pick_method")
     g = watchdog(frames=60) >> assess >> estimate
     print(g.describe(), "\n")
-    g.draw().save("robustness_graph.svg")
     out = run(g, progress=True)
     methods = [f.data["method"] for f in out if f.ok]
-    print(
-        f"\n{len(out)} frames: {methods.count('precise')} precise, {methods.count('robust')} robust, "
-        f"{sum(f.failed for f in out)} failed; device restarted {out[-1]['restarts']} times"
-    )
+    print(f"\n{len(out)} frames: {methods.count('precise')} precise, {methods.count('robust')} robust, "
+          f"{sum(f.failed for f in out)} failed; device restarted {out[-1]['restarts']} times")
     gaps = [f for f in out if f.warnings]
     print("restart warnings:", [str(f.warnings[0]) for f in gaps][:2])
 
@@ -174,33 +146,23 @@ if __name__ == "__main__":
 
     @block
     def drop_failed(f: Framed[Sig[dict]]) -> Sig[dict]:
-        return None  # returning None drops the frame
+        return None                                   # returning None drops the frame
 
-    route = when(
-        lambda f: f.failed,
-        drop_failed,
-        otherwise=when(lambda f: bool(f.warnings), quarantine >> main, otherwise=main),
-    )
+    route = when(lambda f: f.failed, drop_failed,
+                 otherwise=when(lambda f: bool(f.warnings), quarantine >> main, otherwise=main))
     # `guarded` turns estimator failures into warnings, the watchdog's restarts are warnings
     # already, and anything that still fails (none here) would be dropped by the first branch.
     g2 = watchdog(frames=40) >> assess >> guarded >> route
-    g2.draw().save("routing_graph.svg")
     out2 = run(g2)
-    print(
-        f"\nrouting: {len(main.frames)} to main, {len(quarantine.frames)} of them also quarantined (warnings), "
-        f"{40 - len(out2)} dropped"
-    )
+    print(f"\nrouting: {len(main.frames)} to main, {len(quarantine.frames)} of them also quarantined (warnings), "
+          f"{40 - len(out2)} dropped")
 
     # 3. A self-healing block vs. error policies on the same input.
     dropping = block(precise_frequency.fn, name="precise", on_error="drop")
-    for label, graph in (
-        ("guarded block", watchdog(frames=40) >> assess >> guarded),
-        ("precise, on_error=drop", watchdog(frames=40) >> assess >> dropping),
-        ("precise, propagate", watchdog(frames=40) >> assess >> precise_frequency),
-    ):
+    for label, graph in (("guarded block", watchdog(frames=40) >> assess >> guarded),
+                         ("precise, on_error=drop", watchdog(frames=40) >> assess >> dropping),
+                         ("precise, propagate", watchdog(frames=40) >> assess >> precise_frequency)):
         o = run(graph)
-        print(
-            f"{label:24s}: {len(o):2d} frames out, {sum(f.failed for f in o):2d} failed, "
-            f"{sum(bool(f.warnings) for f in o):2d} with warnings"
-        )
+        print(f"{label:24s}: {len(o):2d} frames out, {sum(f.failed for f in o):2d} failed, "
+              f"{sum(bool(f.warnings) for f in o):2d} with warnings")
 ```

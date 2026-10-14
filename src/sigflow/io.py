@@ -27,8 +27,6 @@ from __future__ import annotations
 import asyncio
 import csv
 import os
-import threading
-import time
 from typing import Any, Iterator
 
 import numpy as np
@@ -181,9 +179,6 @@ async def udp(
         transport.close()
 
 
-_ZMQ_POLL_MS = 50  # how often the receive thread checks for stop / timeout
-
-
 @source
 async def zmq(
     address: str = "tcp://127.0.0.1:5555",
@@ -194,66 +189,24 @@ async def zmq(
     timeout: float | None = None,
     connect: bool = True,
 ) -> Sig["T", None]:
-    """ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a GNU Radio
-    *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes one frame
-    of ``dtype``. ``connect=False`` binds instead of connecting. ``timeout`` is the longest
-    wait for any single message (seconds) before the stream ends.
-
-    The socket is owned by a worker thread that hands messages to the event loop, so it
-    works on every asyncio loop (including Windows' default Proactor loop, which lacks the
-    ``add_reader`` support that ``zmq.asyncio`` needs)."""
+    """Asynchronous ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a
+    GNU Radio *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes
+    one frame of ``dtype``. ``connect=False`` binds instead of connecting."""
     import zmq as _zmq
+    import zmq.asyncio as _zmqa
 
-    loop = asyncio.get_running_loop()
-    q: asyncio.Queue[Any] = asyncio.Queue()
-    stop = threading.Event()
-    end = object()
-
-    def post(item: Any) -> None:
-        if stop.is_set():
-            return
-        try:
-            loop.call_soon_threadsafe(q.put_nowait, item)
-        except RuntimeError:  # loop already closed
-            pass
-
-    def pump() -> None:
-        try:
-            sock: Any = _zmq.Context.instance().socket(
-                _zmq.SUB if kind.upper() == "SUB" else _zmq.PULL
-            )
-        except BaseException as e:  # noqa: BLE001
-            post(e)
-            return
-        try:
-            if kind.upper() == "SUB":
-                sock.setsockopt(_zmq.SUBSCRIBE, topic)
-            (sock.connect if connect else sock.bind)(address)
-            k = 0
-            t_last = time.monotonic()
-            while not stop.is_set() and (count is None or k < count):
-                if sock.poll(_ZMQ_POLL_MS):
-                    post(sock.recv())
-                    k += 1
-                    t_last = time.monotonic()
-                elif timeout is not None and time.monotonic() - t_last >= timeout:
-                    break
-            post(end)
-        except BaseException as e:  # noqa: BLE001
-            post(e)
-        finally:
-            sock.close(linger=0)
-
-    thread = threading.Thread(target=pump, name=f"sigflow-zmq:{address}", daemon=True)
-    thread.start()
+    ctx = _zmqa.Context.instance()
+    sock = ctx.socket(_zmq.SUB if kind.upper() == "SUB" else _zmq.PULL)
+    if kind.upper() == "SUB":
+        sock.setsockopt(_zmq.SUBSCRIBE, topic)
+    (sock.connect if connect else sock.bind)(address)
     try:
         k = 0
-        while True:
-            msg = await q.get()
-            if msg is end:
-                return
-            if isinstance(msg, BaseException):
-                raise msg
+        while count is None or k < count:
+            if timeout is not None:
+                if not await sock.poll(timeout * 1000):
+                    return
+            msg = await sock.recv()
             if topic and msg.startswith(topic):
                 msg = msg[len(topic) :]
             yield Frame(
@@ -263,8 +216,7 @@ async def zmq(
             )
             k += 1
     finally:
-        stop.set()
-        thread.join(timeout=1.0)
+        sock.close(linger=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -388,7 +340,7 @@ class zmq_sink(_Sink):
     ) -> None:
         import zmq as _zmq
 
-        self.ctx: Any = _zmq.Context.instance()
+        self.ctx = _zmq.Context.instance()
         self.sock = self.ctx.socket(_zmq.PUB if kind.upper() == "PUB" else _zmq.PUSH)
         (self.sock.bind if bind else self.sock.connect)(address)
         self.topic = topic

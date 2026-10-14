@@ -19,7 +19,6 @@ accept a ``Frame`` and return ``frame.evolve(data=...)``.
 
 from __future__ import annotations
 
-import contextvars as _cv
 import itertools
 import types
 from dataclasses import dataclass, field
@@ -31,12 +30,12 @@ __all__ = [
     "Frame",
     "Issue",
     "Provenance",
-    "PROVENANCE_MODE",
     "Missing",
     "MISSING",
     "frozen",
     "as_frame",
     "TimeSpan",
+    "PROVENANCE_MODE",
 ]
 
 
@@ -80,6 +79,15 @@ class TimeSpan:
 
 _ids = itertools.count(1)
 
+import contextvars as _cv
+
+PROVENANCE_MODE: "_cv.ContextVar[str]" = _cv.ContextVar(
+    "sigflow_provenance", default="full"
+)
+"""How much lineage new frames keep: ``"full"`` (every node), ``"roots"`` (each node
+keeps only the *source* frames it descends from — replay still works, memory stays
+flat), ``"off"`` (no parents, no params). Set per run with ``run(g, provenance=...)``."""
+
 
 def frozen(m: Mapping[str, Any] | None = None, **kw: Any) -> Mapping[str, Any]:
     """Read-only mapping used for annotations."""
@@ -106,14 +114,6 @@ class Missing:
 
 
 MISSING = Missing()
-
-
-PROVENANCE_MODE: "_cv.ContextVar[str]" = _cv.ContextVar(
-    "sigflow_provenance", default="full"
-)
-"""How much lineage new frames keep: ``"full"`` (every node), ``"roots"`` (each node
-keeps only the *source* frames it descends from — replay still works, memory stays
-flat), ``"off"`` (no parents, no params). Set per run with ``run(g, provenance=...)``."""
 
 
 # --------------------------------------------------------------------------- #
@@ -486,7 +486,9 @@ def merge_annotations(frames: Iterable[Frame], *, keep_samples: bool) -> dict[st
     for f in frames:
         meta.update(f.meta)
         stream.update(f.stream)
-        issues.extend(f.issues)
+        for i in f.issues:  # an issue shared by several parents appears once
+            if all(i is not j for j in issues):
+                issues.append(i)
     if keep_samples and len(frames) == 1:
         samples.update(frames[0].samples)
     return {"meta": meta, "stream": stream, "samples": samples, "issues": tuple(issues)}
