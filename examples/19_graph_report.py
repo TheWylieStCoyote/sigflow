@@ -18,8 +18,7 @@ import tempfile
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Framed, Sig, Stream, block, feedback, port, when, run
-from sigflow import dsp, linalg
+from sigflow import Framed, Sig, Stream, block, dsp, feedback, linalg, port, run, when
 
 
 @block

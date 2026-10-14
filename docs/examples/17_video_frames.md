@@ -3,14 +3,15 @@
 `examples/17_video_frames.py`
 
 What this exercises
-  * frames whose data is an (H, W) image, with symbolic 2-D shapes checked end to end
-  * a stateful stream block (frame differencing needs the previous frame)
-  * sample-level annotations on 2-D data: a motion mask aligned with the image,
-    kept through image->image blocks (same leading dimension) and dropped by a
-    block that changes it (the 2-D FFT's shifted spectrum keeps H, so it survives!
-    — the example shows exactly when masks are kept)
-  * a per-row annotation (motion energy per scan line) as a second sample-level array
-  * fan-out to a 2-D spectrum, a centroid tracker and an image plot with the mask overlaid
+
+- frames whose data is an (H, W) image, with symbolic 2-D shapes checked end to end
+- a stateful stream block (frame differencing needs the previous frame)
+- sample-level annotations on 2-D data: a motion mask aligned with the image,
+  kept through image->image blocks (same leading dimension) and dropped by a
+  block that changes it (the 2-D FFT's shifted spectrum keeps H, so it survives!
+  — the example shows exactly when masks are kept)
+- a per-row annotation (motion energy per scan line) as a second sample-level array
+- fan-out to a 2-D spectrum, a centroid tracker and an image plot with the mask overlaid
 
 ## Source
 

@@ -3,13 +3,14 @@
 `examples/09_subspace_doa.py`
 
 What this exercises
-  * output ports: `port("vals")` / `port("vecs")` route the two results of one
-    decomposition to different consumers that later rejoin, each port with its
-    own type contract; `decomposition["vals"]` for a direct selection
-  * named ports declared on a wrapped NumPy function (`outputs={...}`)
-  * port selection inside a fan-out (`port(1)` re-exports the model order)
-  * shape symbols flowing through: (M snapshots x N sensors) -> (N x N) -> (N, K)
-  * provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
+
+- output ports: `port("vals")` / `port("vecs")` route the two results of one
+  decomposition to different consumers that later rejoin, each port with its
+  own type contract; `decomposition["vals"]` for a direct selection
+- named ports declared on a wrapped NumPy function (`outputs={...}`)
+- port selection inside a fan-out (`port(1)` re-exports the model order)
+- shape symbols flowing through: (M snapshots x N sensors) -> (N x N) -> (N, K)
+- provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
 
 ## Source
 

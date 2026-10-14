@@ -3,14 +3,15 @@
 `examples/05_pulse_doppler_radar.py`
 
 What this exercises
-  * 2-D frames with symbolic dimensions ("P" pulses x "R" range cells), checked
-    across the whole chain at build time
-  * reusing NumPy FFT routines on matrices via block(...) wrappers
-  * a frame-aware block that attaches detections as frame metadata and a
-    sample-level mask over the range-Doppler map
-  * a custom plot (plot.custom) drawing the map with detections overlaid
-  * fan-out: the same map feeds a plot, a detector and a summary statistic, and
-    `[1:]` selects the ports worth keeping
+
+- 2-D frames with symbolic dimensions ("P" pulses x "R" range cells), checked
+  across the whole chain at build time
+- reusing NumPy FFT routines on matrices via block(...) wrappers
+- a frame-aware block that attaches detections as frame metadata and a
+  sample-level mask over the range-Doppler map
+- a custom plot (plot.custom) drawing the map with detections overlaid
+- fan-out: the same map feeds a plot, a detector and a summary statistic, and
+  `[1:]` selects the ports worth keeping
 
 ## Source
 

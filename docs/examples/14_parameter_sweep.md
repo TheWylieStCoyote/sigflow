@@ -4,20 +4,21 @@
 
 The QPSK link from example 04 is swept over SNR to produce a BER curve, two ways:
 
-  * processes — each configuration builds and runs its graph in a worker process
-    (true parallelism for CPU-bound chains; graphs are built inside the worker
-    from a plain factory function, so nothing needs to be pickled but the config)
-  * threads   — `start()` several runs at once in this process and watch them
-    together (NumPy releases the GIL in the heavy parts; handy in a notebook)
+- processes — each configuration builds and runs its graph in a worker process
+  (true parallelism for CPU-bound chains; graphs are built inside the worker
+  from a plain factory function, so nothing needs to be pickled but the config)
+- threads — `start()` several runs at once in this process and watch them
+  together (NumPy releases the GIL in the heavy parts; handy in a notebook)
 
 Provenance tags every result with the configuration that produced it, and a
 summary plot is made after the sweep.
 
 What this exercises
-  * building graphs from a factory, cloning sub-graphs per configuration
-  * `run(...)` in worker processes; progress across the whole sweep
-  * `start()`-based concurrency and polling several Run handles
-  * `f.prov["channel"].params` to recover the configuration from a result
+
+- building graphs from a factory, cloning sub-graphs per configuration
+- `run(...)` in worker processes; progress across the whole sweep
+- `start()`-based concurrency and polling several Run handles
+- `f.prov["channel"].params` to recover the configuration from a result
 
 ## Source
 

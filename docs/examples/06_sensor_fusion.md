@@ -5,14 +5,15 @@
 slow, irregular, asynchronous GPS fixes — plus a flaky sensor to show error flow.
 
 What this exercises
-  * merge() of a blocking synchronous source (threaded=True) and an async
-    source into one event stream of heterogeneous Python objects (Sig[dict])
-  * a stateful stream block (the filter) that dispatches on the event kind and
-    uses the linear-algebra primitives directly (predict / update)
-  * error propagation: the GPS parser raises on a corrupt fix; the failed frame
-    travels on with its provenance and the filter simply never sees it
-  * frame annotations (innovation per update) and an animation built after
-    the run from the recorded frames (plot.animate)
+
+- merge() of a blocking synchronous source (threaded=True) and an async
+  source into one event stream of heterogeneous Python objects (Sig[dict])
+- a stateful stream block (the filter) that dispatches on the event kind and
+  uses the linear-algebra primitives directly (predict / update)
+- error propagation: the GPS parser raises on a corrupt fix; the failed frame
+  travels on with its provenance and the filter simply never sees it
+- frame annotations (innovation per update) and an animation built after
+  the run from the recorded frames (plot.animate)
 
 ## Source
 

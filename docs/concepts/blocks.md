@@ -17,14 +17,14 @@ reusable on their own.
 
 ## Three kinds, inferred
 
-* **map** blocks are called once per frame and should be pure.
-* **stream** blocks are generator functions (sync or async) that receive the
+- **map** blocks are called once per frame and should be pure.
+- **stream** blocks are generator functions (sync or async) that receive the
   whole stream of items and may keep state: windows, filters with memory,
   decimators, trackers. A generator that yields several items for one input, or
   none, changes the cardinality of the stream — and the runtime records exactly
   which input frames each output consumed.
-* **sources** have no signal inputs and yield the stream. `@source(threaded=True)`
-  runs a *blocking* source (hardware reads, wall-clock pacing) in a worker thread.
+- **sources** have no signal inputs and yield the stream. `@source(threaded=True)`
+  runs a _blocking_ source (hardware reads, wall-clock pacing) in a worker thread.
 
 ## Reusing existing code
 

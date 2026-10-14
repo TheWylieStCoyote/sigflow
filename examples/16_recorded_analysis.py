@@ -17,8 +17,7 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Knob, Sig, block, from_iterable, run, source
-from sigflow import dsp, plot
+from sigflow import Frame, Knob, Sig, block, dsp, from_iterable, plot, run, source
 
 RATE = 8_000.0
 N = 512

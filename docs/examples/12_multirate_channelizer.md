@@ -5,14 +5,15 @@
 rational resampler whose output rate is part of its type.
 
 What this exercises
-  * the `rate` field of Sig: a block's output rate derived from its configuration
-    (`refine=...`), so `resample(up=3, down=4)` on 48 kHz *declares* 36 kHz, and a
-    consumer that insists on 48 kHz is rejected before anything runs
-  * a block with N output ports of a different rate than its input (one tuple
-    frame = N channel frames); ports routed with `port(k)` to separate consumers
-  * stateful polyphase filtering as a stream block
-  * fan-out cardinality is 1:1 here because the channelizer emits one tuple per
-    input frame — the right shape for multi-port, multi-rate outputs
+
+- the `rate` field of Sig: a block's output rate derived from its configuration
+  (`refine=...`), so `resample(up=3, down=4)` on 48 kHz _declares_ 36 kHz, and a
+  consumer that insists on 48 kHz is rejected before anything runs
+- a block with N output ports of a different rate than its input (one tuple
+  frame = N channel frames); ports routed with `port(k)` to separate consumers
+- stateful polyphase filtering as a stream block
+- fan-out cardinality is 1:1 here because the channelizer emits one tuple per
+  input frame — the right shape for multi-port, multi-rate outputs
 
 ## Source
 

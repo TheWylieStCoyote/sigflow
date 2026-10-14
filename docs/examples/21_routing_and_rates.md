@@ -3,22 +3,23 @@
 `examples/21_routing_and_rates.py`
 
 A receiver sees bursts of different modulations on one channel. A classifier tags
-each burst; `switch()` then sends every frame through the demodulator for *its*
+each burst; `switch()` then sends every frame through the demodulator for _its_
 modulation only. Unlike `when()`, the branches of a switch are real streams: they
 may window, buffer or drop, keep state across the frames they see, and run
 concurrently. The second half shows the stream-rate contract: blocks declare how
 many frames they emit per frame they consume, pipelines multiply those ratios, and
 a fan-out of branches that would run at different rates is refused when the graph
-is *built* instead of silently stopping at the shortest branch when it runs.
+is _built_ instead of silently stopping at the shortest branch when it runs.
 
 What this exercises
-  * switch(selector, {key: branch, ...}) with a string selector (an annotation key)
-    and with a callable; default=node / "pass" / None (drop)
-  * branches that are whole pipelines, including N:1 re-framers
-  * ordered=True for strict input-order output (1:1 branches only)
-  * provenance that names the branch each frame took, queried with Lineage
-  * @block(ratio=...) declarations, g.ratio, describe() rate tags, RatioMismatch
-  * run(strict=True) checking declared ratios and expected frame counts
+
+- switch(selector, {key: branch, ...}) with a string selector (an annotation key)
+  and with a callable; default=node / "pass" / None (drop)
+- branches that are whole pipelines, including N:1 re-framers
+- ordered=True for strict input-order output (1:1 branches only)
+- provenance that names the branch each frame took, queried with Lineage
+- @block(ratio=...) declarations, g.ratio, describe() rate tags, RatioMismatch
+- run(strict=True) checking declared ratios and expected frame counts
 
 ## Source
 

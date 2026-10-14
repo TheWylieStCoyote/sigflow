@@ -5,13 +5,14 @@
 "What does this pipeline do?" answered from the graph itself: the diagram, the
 typed node table with resolved dimensions and configuration, and every block's
 docstring — as HTML (self-contained, diagram inline) or Markdown. Nothing is
-written by hand; docstrings and type annotations on the blocks *are* the docs.
+written by hand; docstrings and type annotations on the blocks _are_ the docs.
 
 What this exercises
-  * `g.report()` / `g.report(fmt="md")` and `g.draw().save()` / `g.to_dot()`
-  * docstrings on blocks (including wrapped library functions via `doc=`)
-  * reports for sub-graphs, feedback loops and routed graphs
-  * a tiny "docs site": one HTML page per graph plus an index, from a script
+
+- `g.report()` / `g.report(fmt="md")` and `g.draw().save()` / `g.to_dot()`
+- docstrings on blocks (including wrapped library functions via `doc=`)
+- reports for sub-graphs, feedback loops and routed graphs
+- a tiny "docs site": one HTML page per graph plus an index, from a script
 
 ## Source
 

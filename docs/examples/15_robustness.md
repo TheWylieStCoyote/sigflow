@@ -2,18 +2,19 @@
 
 `examples/15_robustness.py`
 
-Example 10 attributed failures; this one keeps the pipeline *useful* while they
+Example 10 attributed failures; this one keeps the pipeline _useful_ while they
 happen.
 
 What this exercises
-  * a watchdog source: wraps a flaky device, restarts it after it dies, and
-    annotates frames with the restart count (`restarts` in stream annotations)
-  * graceful degradation with `when()`: frames flagged low-SNR take a cheaper,
-    more robust path; the rest take the precise one — both paths rejoin
-  * routing by issue level: warnings go to a quarantine sink *and* carry on,
-    errors are dropped, clean frames go to the main sink
-  * `on_error="drop"` on a block vs. propagating by default
-  * a block that catches its own exception and emits a warning instead of failing
+
+- a watchdog source: wraps a flaky device, restarts it after it dies, and
+  annotates frames with the restart count (`restarts` in stream annotations)
+- graceful degradation with `when()`: frames flagged low-SNR take a cheaper,
+  more robust path; the rest take the precise one — both paths rejoin
+- routing by issue level: warnings go to a quarantine sink _and_ carry on,
+  errors are dropped, clean frames go to the main sink
+- `on_error="drop"` on a block vs. propagating by default
+- a block that catches its own exception and emits a warning instead of failing
 
 ## Source
 

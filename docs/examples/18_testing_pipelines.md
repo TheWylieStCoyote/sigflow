@@ -2,17 +2,18 @@
 
 `examples/18_testing_pipelines.py`
 
-Run with ``pytest examples/18_testing_pipelines.py -q`` or ``python examples/18_testing_pipelines.py``.
+Run with `pytest examples/18_testing_pipelines.py -q` or `python examples/18_testing_pipelines.py`.
 
 What this exercises
-  * unit tests of blocks as plain functions — no graph, no runtime
-  * graph tests on fixed frames with `from_iterable` / `graph(frames)`: known input,
-    assert on output *and* on provenance / annotations
-  * `check="all"`: turn the runtime contract check into an assertion for every frame
-  * stream blocks tested by feeding an iterable and comparing to a reference
-  * a fake clock: an async source whose time you control, for time-based logic
-  * property-style checks across a parameter grid, error-policy behaviour, and
-    a regression test pinned to a recorded golden output
+
+- unit tests of blocks as plain functions — no graph, no runtime
+- graph tests on fixed frames with `from_iterable` / `graph(frames)`: known input,
+  assert on output _and_ on provenance / annotations
+- `check="all"`: turn the runtime contract check into an assertion for every frame
+- stream blocks tested by feeding an iterable and comparing to a reference
+- a fake clock: an async source whose time you control, for time-based logic
+- property-style checks across a parameter grid, error-policy behaviour, and
+  a regression test pinned to a recorded golden output
 
 ## Source
 

@@ -6,13 +6,14 @@ Everything earlier was feed-forward. `feedback(body, init)` closes a loop: `body
 maps a tuple frame `(x, state) -> (y, new_state)` and the runtime feeds
 `new_state` back as `state` for the next input frame. The body can be a single
 block or a whole pipeline, so the loop can span several blocks — here the LMS
-weights are produced by an *update* block and consumed by a *filter* block.
+weights are produced by an _update_ block and consumed by a _filter_ block.
 
 What this exercises
-  * feedback() with a one-block body (AGC) and a two-block body (LMS)
-  * state typed like any other signal (a scalar gain, a weight vector of symbolic length)
-  * loop state in provenance: each output's lineage includes the previous iteration
-  * a loop inside a larger graph, zipped inputs (microphone + far-end reference)
+
+- feedback() with a one-block body (AGC) and a two-block body (LMS)
+- state typed like any other signal (a scalar gain, a weight vector of symbolic length)
+- loop state in provenance: each output's lineage includes the previous iteration
+- a loop inside a larger graph, zipped inputs (microphone + far-end reference)
 
 ## Source
 

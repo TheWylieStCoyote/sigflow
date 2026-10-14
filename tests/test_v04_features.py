@@ -8,19 +8,19 @@ import pytest
 from sigflow import (
     Frame,
     Graph,
+    Lineage,
     Monitor,
     Ratio,
     RatioMismatch,
     Sig,
     Stream,
+    TypeMismatch,
     block,
+    dsp,
     run,
     source,
     switch,
-    TypeMismatch,
-    Lineage,
 )
-from sigflow import dsp
 from sigflow.ratio import as_ratio
 
 

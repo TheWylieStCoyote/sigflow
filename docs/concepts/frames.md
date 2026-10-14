@@ -3,12 +3,12 @@
 A **frame** is the unit of data that moves through a graph. It is an immutable
 value with four parts:
 
-| part | what it holds |
-|---|---|
-| `data` | the payload: an array, a scalar, a tuple of payloads, any Python object |
+| part        | what it holds                                                                                                                                                                                                                    |
+| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data`      | the payload: an array, a scalar, a tuple of payloads, any Python object                                                                                                                                                          |
 | annotations | `stream` (facts about the whole stream: `rate`, `units`, `source`), `meta` (facts about this frame: `t0`, `seq`, an SNR estimate), `samples` (arrays aligned with the leading axis of `data`: a clipping mask, a per-row energy) |
-| `issues` | errors and warnings attached along the way |
-| `prov` | provenance: the block that made it, its configuration, and the parent frames' provenance |
+| `issues`    | errors and warnings attached along the way                                                                                                                                                                                       |
+| `prov`      | provenance: the block that made it, its configuration, and the parent frames' provenance                                                                                                                                         |
 
 Frames are frozen. Every transformation produces a new frame; `frame.evolve(...)`
 copies with changes (`meta=`/`stream=`/`samples=` are merged), `frame.annotate(...)`

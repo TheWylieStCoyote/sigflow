@@ -3,13 +3,14 @@
 `examples/20_builder_time_replay.py`
 
 What this exercises
-  * units in the type: a millivolt ADC refuses a volts-only block until dsp.to_units converts
-  * data slicing `node[a:b]` with static shapes; stream slicing `take/skip/every/until`
-  * Frame.time / TimeSpan through re-framing; align() joining two sources by timestamp
-  * Graph builder: a diamond where a covariance feeds eigh AND a later combiner
-  * frame.save / Frame.load / replay(): reproduce exactly one output frame from disk
-  * Stateful blocks with run.checkpoint() and resume=
-  * plot.multi and plot.history in one figure
+
+- units in the type: a millivolt ADC refuses a volts-only block until dsp.to_units converts
+- data slicing `node[a:b]` with static shapes; stream slicing `take/skip/every/until`
+- Frame.time / TimeSpan through re-framing; align() joining two sources by timestamp
+- Graph builder: a diamond where a covariance feeds eigh AND a later combiner
+- frame.save / Frame.load / replay(): reproduce exactly one output frame from disk
+- Stateful blocks with run.checkpoint() and resume=
+- plot.multi and plot.history in one figure
 
 ## Source
 

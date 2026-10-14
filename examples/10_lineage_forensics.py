@@ -20,8 +20,7 @@ from collections import Counter
 
 import numpy as np
 
-from sigflow import MISSING, Frame, Framed, Sig, block, port, run, source
-from sigflow import dsp
+from sigflow import MISSING, Frame, Framed, Sig, block, dsp, port, run, source
 
 
 @source(total=lambda frames, **_: frames)

@@ -3,13 +3,14 @@
 `examples/08_extending.py`
 
 What this exercises
-  * sample rate and units as part of the contract (Sig[dtype, shape, rate, units])
-    — a 48 kHz block refuses a 44.1 kHz stream before anything runs
-  * wrapping a stateful SciPy filter (sosfilt with carried state) in a few lines
-  * a dataclass as a frame payload (Sig[MyType]) and a block that consumes it
-  * the three error policies, side by side, on the same flaky block
-  * runtime checking modes: check="first" (default) vs "all"
-  * blocks are functions: unit-test them with plain asserts, no graph needed
+
+- sample rate and units as part of the contract (Sig[dtype, shape, rate, units])
+  — a 48 kHz block refuses a 44.1 kHz stream before anything runs
+- wrapping a stateful SciPy filter (sosfilt with carried state) in a few lines
+- a dataclass as a frame payload (Sig[MyType]) and a block that consumes it
+- the three error policies, side by side, on the same flaky block
+- runtime checking modes: check="first" (default) vs "all"
+- blocks are functions: unit-test them with plain asserts, no graph needed
 
 ## Source
 

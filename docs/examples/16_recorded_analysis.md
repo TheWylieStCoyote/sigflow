@@ -2,19 +2,20 @@
 
 `examples/16_recorded_analysis.py`
 
-The live examples push data *through* graphs. Analysis is the other way round:
+The live examples push data _through_ graphs. Analysis is the other way round:
 load a capture once, build a source-less graph, and apply it to whichever
 slice you are looking at — `front_end(frames[100:120])` — as a plain call.
 In a notebook, bind the slice index to a slider and the plot updates as you
 scrub (the last section shows the pattern; it works headless too).
 
 What this exercises
-  * pipelines as functions on in-memory data: `g(x)`, `g([x1, x2])`, `g(frames)`,
-    and `block.apply(frames)` for a single block (plain `block(x)` calls the function)
-  * re-using the *same* graph for a live run and for post-hoc analysis
-  * slicing a recording into windows with `dsp.overlap` applied offline
-  * provenance on offline results points at the in-memory source and offset
-  * a scrubber built from `Knob` + `on_change` driving a plot block
+
+- pipelines as functions on in-memory data: `g(x)`, `g([x1, x2])`, `g(frames)`,
+  and `block.apply(frames)` for a single block (plain `block(x)` calls the function)
+- re-using the _same_ graph for a live run and for post-hoc analysis
+- slicing a recording into windows with `dsp.overlap` applied offline
+- provenance on offline results points at the in-memory source and offset
+- a scrubber built from `Knob` + `on_change` driving a plot block
 
 ## Source
 

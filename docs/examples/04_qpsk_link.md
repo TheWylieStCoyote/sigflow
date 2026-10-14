@@ -3,13 +3,14 @@
 `examples/04_qpsk_link.py`
 
 What this exercises
-  * stateful stream blocks written as plain generators (pulse shaping with
-    filter memory, a 4th-power frequency estimator, a phase-tracking loop)
-  * a stream block that annotates frames (the CFO estimate rides along as meta)
-  * wrapping scipy.signal functions as typed blocks
-  * zip (`&`) to compare received bits with the transmitted ones
-  * constellation plots before and after carrier recovery, exported as GIFs
-  * provenance: which transmitted frame a BER figure came from
+
+- stateful stream blocks written as plain generators (pulse shaping with
+  filter memory, a 4th-power frequency estimator, a phase-tracking loop)
+- a stream block that annotates frames (the CFO estimate rides along as meta)
+- wrapping scipy.signal functions as typed blocks
+- zip (`&`) to compare received bits with the transmitted ones
+- constellation plots before and after carrier recovery, exported as GIFs
+- provenance: which transmitted frame a BER figure came from
 
 ## Source
 

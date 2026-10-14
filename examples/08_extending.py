@@ -15,8 +15,18 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, lift, run, source
-from sigflow import dsp
+from sigflow import (
+    Frame,
+    Framed,
+    Sig,
+    Stream,
+    TypeMismatch,
+    block,
+    dsp,
+    lift,
+    run,
+    source,
+)
 
 # ------------------------------------------------------------- rate and units
 

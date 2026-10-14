@@ -14,12 +14,13 @@ from sigflow import (
     Stream,
     TypeMismatch,
     block,
+    dsp,
+    io,
     parallel,
     run,
     source,
 )
-from sigflow import dsp, io
-from sigflow.builder import lower, Chain
+from sigflow.builder import Chain, lower
 from sigflow.frame import PROVENANCE_MODE
 
 

@@ -2,8 +2,6 @@
 
 `examples/03_plots_and_linalg.py`
 
-
-
 ## Source
 
 ```python

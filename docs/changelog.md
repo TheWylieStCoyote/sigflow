@@ -3,6 +3,7 @@
 ## 0.4.0
 
 New
+
 - Stream-rate contracts (`sigflow.ratio`): `@block(ratio=...)` declares frames
   out per frame in (`"1:1"`, `"N:1"`, `"1:N"`, `(4, 1)`, or a callable of the
   configuration and `n_in`); map blocks are `1:1` by definition. Ratios
@@ -18,13 +19,15 @@ New
 - Example 21 (modulation-switched demodulators, rate contracts).
 
 Changed
-- A fan-out whose branches have different *declared* rates (for example
+
+- A fan-out whose branches have different _declared_ rates (for example
   `dsp.rms | dsp.buffer(count=2)`) is now a build-time error rather than a
   run-time `strict=True` one.
 
 ## 0.3.0
 
 New
+
 - One runtime: operator trees (`>>`, `|`, `&`, `feedback`, `when`, `align`,
   slicing) are lowered to the `Graph` scheduler, which is the only executor.
   Linear runs of map blocks are fused into a single scheduler member; the
@@ -48,6 +51,7 @@ New
   `docs/build_docs.py`; CI builds it with `--strict`.
 
 Changed
+
 - `plot` taps: the `every` parameter is now `stride`.
 - Benchmarks refreshed (`docs/performance.md`); README gained sections on the
   scheduler, `parallel`, lineage queries, typing and the docs site.
@@ -55,6 +59,7 @@ Changed
 ## 0.2.0
 
 New
+
 - `Graph` builder (`sigflow.builder`): explicit DAGs with `add` / `connect` (by
   position or input name, with port selection on edges) / `output`; edge-time
   type checking, cycle rejection, layered drawing, reports.
@@ -75,6 +80,7 @@ New
   clean `mypy` run (block bodies excluded: `Sig[...]` is a runtime DSL).
 
 Changed
+
 - Positional arguments to a block definition: arrays / Frames / lists call the
   function; strings, numbers and other scalars are configuration
   (`to_units("V")` makes a node). `block.fn(...)` always calls the function.
@@ -82,6 +88,7 @@ Changed
 - `requires-python` lowered to 3.10.
 
 Fixed
+
 - Overlap/chunk windows carried the input chunk's `t0`; now exact.
 - `step()` before the run loop attached could leave a paused run stuck.
 

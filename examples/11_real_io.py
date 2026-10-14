@@ -18,8 +18,7 @@ import time
 import numpy as np
 from scipy.io import wavfile
 
-from sigflow import Sig, block, run
-from sigflow import dsp, io
+from sigflow import Sig, block, dsp, io, run
 
 WORK = tempfile.mkdtemp(prefix="sigflow_io_")
 RATE = 16_000

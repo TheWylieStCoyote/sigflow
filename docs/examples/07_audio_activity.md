@@ -5,15 +5,16 @@
 segment annotations and a waterfall — the shape of a VAD / event detector.
 
 What this exercises
-  * re-framing a stream with overlap (dsp.overlap), carrying rate/units
-  * a fan-out that computes several features from the same frame and a block
-    that consumes them together (tuple input)
-  * a stateful stream block implementing a two-threshold state machine, which
-    annotates frames with segment ids and raises warnings on suspicious input
-  * sample-level annotations aligned with the audio, kept through a gain block
-    (same leading dimension) and dropped by the FFT (different dimension)
-  * graph.draw() to picture the topology; a waterfall plot of the result; the
-    provenance of a segment lists exactly the frames that made it up
+
+- re-framing a stream with overlap (dsp.overlap), carrying rate/units
+- a fan-out that computes several features from the same frame and a block
+  that consumes them together (tuple input)
+- a stateful stream block implementing a two-threshold state machine, which
+  annotates frames with segment ids and raises warnings on suspicious input
+- sample-level annotations aligned with the audio, kept through a gain block
+  (same leading dimension) and dropped by the FFT (different dimension)
+- graph.draw() to picture the topology; a waterfall plot of the result; the
+  provenance of a segment lists exactly the frames that made it up
 
 ## Source
 

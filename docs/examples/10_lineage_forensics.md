@@ -9,13 +9,14 @@ attribute every anomaly to its source frame, block and configuration —
 without having instrumented anything up front.
 
 What this exercises
-  * `f["key"]` annotation lookup across levels, `f.get`, `"key" in f`
-  * `f.prov["name"]` to reach a specific ancestor and read its `.params` / `.seq`
-  * `f.prov[-1]`, `f.prov.chain()`, `f.prov.roots()` on frames that merge several sources
-  * `f[i]` to open a tuple frame's parts and compare their lineages
-  * failed frames: their provenance and the issue's `prov` point at the exact spot
-  * a helper that groups anomalies by (block, config, source frame) — a report
-    built purely from lineage
+
+- `f["key"]` annotation lookup across levels, `f.get`, `"key" in f`
+- `f.prov["name"]` to reach a specific ancestor and read its `.params` / `.seq`
+- `f.prov[-1]`, `f.prov.chain()`, `f.prov.roots()` on frames that merge several sources
+- `f[i]` to open a tuple frame's parts and compare their lineages
+- failed frames: their provenance and the issue's `prov` point at the exact spot
+- a helper that groups anomalies by (block, config, source frame) — a report
+  built purely from lineage
 
 ## Source
 
