@@ -60,6 +60,7 @@ features = front_end >> (
 
 if __name__ == "__main__":
     x = record()
+    features.draw().save("features_graph.svg")  # a source-less graph draws too
     windows = run(
         dsp.from_array(x, n=N, rate=RATE) >> dsp.overlap(n=N, hop=N // 2)
     )  # offline re-framing

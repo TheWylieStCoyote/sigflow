@@ -15,6 +15,18 @@ What this exercises
   * graph.draw() to picture the topology; a waterfall plot of the result; the
     provenance of a segment lists exactly the frames that made it up
 
+## Output
+
+Files the script writes when run:
+
+![audio_graph.svg](assets/07_audio_activity/audio_graph.svg)
+
+*`audio_graph.svg`*
+
+![audio_waterfall.png](assets/07_audio_activity/audio_waterfall.png)
+
+*`audio_waterfall.gif` (last frame; the 36 MB animation is not copied)*
+
 ## Source
 
 ```python

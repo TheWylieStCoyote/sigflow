@@ -12,6 +12,18 @@ What this exercises
   * fan-out: the same map feeds a plot, a detector and a summary statistic, and
     `[1:]` selects the ports worth keeping
 
+## Output
+
+Files the script writes when run:
+
+![pulse_doppler_radar.svg](assets/05_pulse_doppler_radar/pulse_doppler_radar.svg)
+
+*`pulse_doppler_radar.svg`*
+
+![range_doppler.gif](assets/05_pulse_doppler_radar/range_doppler.gif)
+
+*`range_doppler.gif`*
+
 ## Source
 
 ```python
@@ -30,8 +42,7 @@ What this exercises
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, run, source
-from sigflow import plot
+from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
 
 P, R = 64, 256  # pulses per coherent interval, range cells
 PRF = 5000.0  # Hz  (unambiguous velocity +-37.5 m/s)
@@ -242,6 +253,7 @@ if __name__ == "__main__":
                 for t in trk["tracks"]
             )
         )
+    g.draw().save("pulse_doppler_radar.svg")
     print("\nwarnings:", [str(i) for i in out[-1].warnings] or "none")
     print("saved", rd_map.save("range_doppler.gif", interval=250))
 ```

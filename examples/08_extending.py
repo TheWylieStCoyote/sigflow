@@ -115,6 +115,7 @@ if __name__ == "__main__":
         print("rejected:", e)
     g = adc(rate=48_000) >> de_emphasis >> lowpass_2k >> measure >> report
     print(g.describe(), "\n")
+    g.draw().save("extending_graph.svg")
     for f in run(g)[:3]:
         print(f.data)
 

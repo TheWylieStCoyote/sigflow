@@ -11,6 +11,18 @@ What this exercises
   * Stateful blocks with run.checkpoint() and resume=
   * plot.multi and plot.history in one figure
 
+## Output
+
+Files the script writes when run:
+
+![diamond.svg](assets/20_builder_time_replay/diamond.svg)
+
+*`diamond.svg`*
+
+![panel.gif](assets/20_builder_time_replay/panel.gif)
+
+*`panel.gif`*
+
 ## Source
 
 ```python

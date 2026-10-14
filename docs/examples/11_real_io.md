@@ -12,6 +12,14 @@ What this exercises
   * provenance across the file boundary: the output frame knows the file and offset it
     came from
 
+## Output
+
+Files the script writes when run:
+
+![real_io_graph.svg](assets/11_real_io/real_io_graph.svg)
+
+*`real_io_graph.svg`*
+
 ## Source
 
 ```python
@@ -62,6 +70,7 @@ if __name__ == "__main__":
         >> (dsp.rms >> log | dsp.lfilter(b=[1, -0.95]) >> wav_out)[1]
     )
     print(g.describe(), "\n")
+    g.draw().save(os.path.join(WORK, "real_io_graph.svg"))
     with wav_out, log:
         out = run(g, progress=True)
     rate, y = wavfile.read(wav_out.path)

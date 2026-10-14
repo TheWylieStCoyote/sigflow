@@ -4,6 +4,14 @@
 
 
 
+## Output
+
+Files the script writes when run:
+
+![basics_graph.svg](assets/01_basics/basics_graph.svg)
+
+*`basics_graph.svg`*
+
 ## Source
 
 ```python
@@ -60,6 +68,7 @@ if __name__ == "__main__":
         >> energy
     )
     print(g.describe(), "\n")
+    g.draw().save("basics_graph.svg")
 
     frames = run(g, progress=True)
     f = frames[-1]

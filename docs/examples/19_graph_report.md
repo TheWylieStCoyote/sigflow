@@ -13,6 +13,18 @@ What this exercises
   * reports for sub-graphs, feedback loops and routed graphs
   * a tiny "docs site": one HTML page per graph plus an index, from a script
 
+## Output
+
+Files the script writes when run:
+
+![analysis.svg](assets/19_graph_report/analysis.svg)
+
+*`analysis.svg`*
+
+![receiver.svg](assets/19_graph_report/receiver.svg)
+
+*`receiver.svg`*
+
 ## Source
 
 ```python

@@ -19,6 +19,18 @@ What this exercises
   * `start()`-based concurrency and polling several Run handles
   * `f.prov["channel"].params` to recover the configuration from a result
 
+## Output
+
+Files the script writes when run:
+
+![ber_sweep.png](assets/14_parameter_sweep/ber_sweep.png)
+
+*`ber_sweep.png`*
+
+![qpsk_sweep_graph.svg](assets/14_parameter_sweep/qpsk_sweep_graph.svg)
+
+*`qpsk_sweep_graph.svg`*
+
 ## Source
 
 ```python
@@ -107,6 +119,7 @@ def theory(snr_db: np.ndarray) -> np.ndarray:
 
 if __name__ == "__main__":
     grid = [3, 5, 7, 9, 11]
+    link(grid[0]).draw().save("qpsk_sweep_graph.svg")  # the graph each worker runs
 
     # --- processes -----------------------------------------------------------
     t0 = time.perf_counter()

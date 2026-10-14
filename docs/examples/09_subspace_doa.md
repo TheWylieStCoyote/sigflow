@@ -11,6 +11,18 @@ What this exercises
   * shape symbols flowing through: (M snapshots x N sensors) -> (N x N) -> (N, K)
   * provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
 
+## Output
+
+Files the script writes when run:
+
+![doa_graph.svg](assets/09_subspace_doa/doa_graph.svg)
+
+*`doa_graph.svg`*
+
+![doa_spectrum.gif](assets/09_subspace_doa/doa_spectrum.gif)
+
+*`doa_spectrum.gif`*
+
 ## Source
 
 ```python

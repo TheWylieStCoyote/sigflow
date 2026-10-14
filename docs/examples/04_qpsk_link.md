@@ -11,6 +11,22 @@ What this exercises
   * constellation plots before and after carrier recovery, exported as GIFs
   * provenance: which transmitted frame a BER figure came from
 
+## Output
+
+Files the script writes when run:
+
+![qpsk_after.gif](assets/04_qpsk_link/qpsk_after.gif)
+
+*`qpsk_after.gif`*
+
+![qpsk_before.gif](assets/04_qpsk_link/qpsk_before.gif)
+
+*`qpsk_before.gif`*
+
+![qpsk_link.svg](assets/04_qpsk_link/qpsk_link.svg)
+
+*`qpsk_link.svg`*
+
 ## Source
 
 ```python
@@ -234,6 +250,7 @@ if __name__ == "__main__":
         rx & bits()
     ) >> ber  # the receiver's bits zipped with a second, identical bit source
     print(link.describe(), "\n")
+    link.draw().save("qpsk_link.svg")
 
     results = run(link, progress=True)
     total_err = sum(

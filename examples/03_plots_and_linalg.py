@@ -16,6 +16,7 @@ g = (
     >> dsp.to_complex
     >> fall
 )
+g.draw().save("chirp_graph.svg")
 run(g, progress=True)
 print(spec.save("chirp_spectrum.gif", interval=60))
 print(fall.save("chirp_waterfall.gif", interval=60))
@@ -46,3 +47,4 @@ for f in run(cov):
     print("eigenvalues:", np.round(w, 2), " dominant:", np.round(np.abs(v[:, -1]), 2))
 
 print(cov.describe())
+cov.draw().save("covariance_graph.svg")

@@ -4,6 +4,26 @@
 
 
 
+## Output
+
+Files the script writes when run:
+
+![chirp_graph.svg](assets/03_plots_and_linalg/chirp_graph.svg)
+
+*`chirp_graph.svg`*
+
+![chirp_spectrum.gif](assets/03_plots_and_linalg/chirp_spectrum.gif)
+
+*`chirp_spectrum.gif`*
+
+![chirp_waterfall.gif](assets/03_plots_and_linalg/chirp_waterfall.gif)
+
+*`chirp_waterfall.gif`*
+
+![covariance_graph.svg](assets/03_plots_and_linalg/covariance_graph.svg)
+
+*`covariance_graph.svg`*
+
 ## Source
 
 ```python
@@ -25,6 +45,7 @@ g = (
     >> dsp.to_complex
     >> fall
 )
+g.draw().save("chirp_graph.svg")
 run(g, progress=True)
 print(spec.save("chirp_spectrum.gif", interval=60))
 print(fall.save("chirp_waterfall.gif", interval=60))
@@ -55,4 +76,5 @@ for f in run(cov):
     print("eigenvalues:", np.round(w, 2), " dominant:", np.round(np.abs(v[:, -1]), 2))
 
 print(cov.describe())
+cov.draw().save("covariance_graph.svg")
 ```

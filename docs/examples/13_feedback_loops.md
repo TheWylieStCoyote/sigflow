@@ -14,6 +14,22 @@ What this exercises
   * loop state in provenance: each output's lineage includes the previous iteration
   * a loop inside a larger graph, zipped inputs (microphone + far-end reference)
 
+## Output
+
+Files the script writes when run:
+
+![agc_loop.svg](assets/13_feedback_loops/agc_loop.svg)
+
+*`agc_loop.svg`*
+
+![echo_canceller_graph.svg](assets/13_feedback_loops/echo_canceller_graph.svg)
+
+*`echo_canceller_graph.svg`*
+
+![erle.gif](assets/13_feedback_loops/erle.gif)
+
+*`erle.gif`*
+
 ## Source
 
 ```python
@@ -143,6 +159,7 @@ if __name__ == "__main__":
     agc = feedback(agc_step(target=0.3, attack=0.5), init=0.05)
     g = dsp.sine(n=N, frames=25, amplitude=2.0) >> agc >> dsp.rms
     print(g.describe(), "\n")
+    g.draw().save("agc_loop.svg")
     levels = [round(f.data, 3) for f in run(g)]
     print("AGC output level per frame:", levels[:4], "...", levels[-3:])
     f = run(g)[-1]
@@ -165,6 +182,7 @@ if __name__ == "__main__":
     mic = far_end() >> room  # what the microphone hears
     ref = far_end()  # the same far-end signal, as the reference
     g = (mic & ref) >> (canceller | (lambda pair: pair[0])) >> erle
+    g.draw().save("echo_canceller_graph.svg")
     improvement = plot.custom(
         lambda ax, v, f: (
             ax.bar([0], [v]),

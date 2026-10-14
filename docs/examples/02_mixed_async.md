@@ -5,6 +5,18 @@
 A sampled signal (synchronous generator) is zipped with an asynchronous
 telemetry ticker; a merged stream interleaves both as they arrive.
 
+## Output
+
+Files the script writes when run:
+
+![mixed_async_graph.svg](assets/02_mixed_async/mixed_async_graph.svg)
+
+*`mixed_async_graph.svg`*
+
+![mixed_async_merge.svg](assets/02_mixed_async/mixed_async_merge.svg)
+
+*`mixed_async_merge.svg`*
+
 ## Source
 
 ```python
@@ -52,6 +64,7 @@ async def main() -> None:
         >> smooth(alpha=0.3)
         >> dsp.rms
     )
+    g.draw().save("mixed_async_graph.svg")
     async for f in g:  # graphs are async-iterable
         print(f"rms={f.data:.3f}  parents={[p.op for p in f.prov.parents]}")
 
@@ -59,6 +72,7 @@ async def main() -> None:
     events = merge(
         dsp.ticker(period=0.005, count=3), gain_control(count=3, period=0.004)
     )
+    events.draw().save("mixed_async_merge.svg")
     out = await events.arun()
     print([f.data for f in out])
 

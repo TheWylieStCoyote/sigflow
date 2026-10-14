@@ -121,6 +121,7 @@ if __name__ == "__main__":
     )
     g = checked >> fuse >> alarm
     print(g.describe(), "\n")
+    g.draw().save("lineage_graph.svg")
 
     out = run(g, progress=True)
 

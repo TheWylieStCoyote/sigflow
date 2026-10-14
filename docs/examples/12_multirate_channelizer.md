@@ -14,6 +14,18 @@ What this exercises
   * fan-out cardinality is 1:1 here because the channelizer emits one tuple per
     input frame — the right shape for multi-port, multi-rate outputs
 
+## Output
+
+Files the script writes when run:
+
+![channel1.gif](assets/12_multirate_channelizer/channel1.gif)
+
+*`channel1.gif`*
+
+![channelizer_graph.svg](assets/12_multirate_channelizer/channelizer_graph.svg)
+
+*`channelizer_graph.svg`*
+
 ## Source
 
 ```python
@@ -34,8 +46,18 @@ What this exercises
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Sig, Stream, TypeMismatch, block, port, run, source
-from sigflow import dsp, plot
+from sigflow import (
+    Frame,
+    Sig,
+    Stream,
+    TypeMismatch,
+    block,
+    dsp,
+    plot,
+    port,
+    run,
+    source,
+)
 
 FS = 48_000.0
 M = 4  # channels
@@ -129,6 +151,7 @@ if __name__ == "__main__":
     per_channel = bank >> tuple(
         port(k) >> tone_freq for k in range(M)
     )  # a fan-out of port selectors
+    per_channel.draw().save("channelizer_graph.svg")
     out = run(per_channel, progress=True)
     last = out[-1].data
     for k in range(M):
@@ -139,7 +162,7 @@ if __name__ == "__main__":
         )
 
     # --- a single channel on its own, with a spectrum plot --------------------
-    ch1 = plot.spectrum(title="channel 1 (centre +12 kHz, rate 12 kHz)", ylim=(-80, 10))
+    ch1 = plot.spectrum(title="channel 1 (centre +12 kHz, rate 12 kHz)", ylim=(-80, 20))
     run(bank[1] >> ch1)
     print(
         "\nchannel 1 frames carry the decimated rate in their type:", bank[1].out_type

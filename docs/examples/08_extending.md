@@ -11,6 +11,14 @@ What this exercises
   * runtime checking modes: check="first" (default) vs "all"
   * blocks are functions: unit-test them with plain asserts, no graph needed
 
+## Output
+
+Files the script writes when run:
+
+![extending_graph.svg](assets/08_extending/extending_graph.svg)
+
+*`extending_graph.svg`*
+
 ## Source
 
 ```python
@@ -131,6 +139,7 @@ if __name__ == "__main__":
         print("rejected:", e)
     g = adc(rate=48_000) >> de_emphasis >> lowpass_2k >> measure >> report
     print(g.describe(), "\n")
+    g.draw().save("extending_graph.svg")
     for f in run(g)[:3]:
         print(f.data)
 

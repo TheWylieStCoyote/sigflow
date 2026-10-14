@@ -206,6 +206,11 @@ def test_error_policies_are_what_the_docs_say():
         run(src() >> boom, on_error="raise")
 
 
+def test_graph_draws_to_svg(tmp_path):
+    path = chain.draw().save(str(tmp_path / "chain_graph.svg"))
+    assert "<svg" in open(path, encoding="utf-8").read()
+
+
 GOLDEN = [51.0, 125.0, 250.0]  # recorded once from a known-good version
 
 

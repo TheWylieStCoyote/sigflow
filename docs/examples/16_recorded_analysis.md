@@ -16,6 +16,18 @@ What this exercises
   * provenance on offline results points at the in-memory source and offset
   * a scrubber built from `Knob` + `on_change` driving a plot block
 
+## Output
+
+Files the script writes when run:
+
+![features_graph.svg](assets/16_recorded_analysis/features_graph.svg)
+
+*`features_graph.svg`*
+
+![scrub.gif](assets/16_recorded_analysis/scrub.gif)
+
+*`scrub.gif`*
+
 ## Source
 
 ```python
@@ -81,6 +93,7 @@ features = front_end >> (
 
 if __name__ == "__main__":
     x = record()
+    features.draw().save("features_graph.svg")  # a source-less graph draws too
     windows = run(
         dsp.from_array(x, n=N, rate=RATE) >> dsp.overlap(n=N, hop=N // 2)
     )  # offline re-framing

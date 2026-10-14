@@ -14,6 +14,18 @@ What this exercises
   * frame annotations (innovation per update) and an animation built after
     the run from the recorded frames (plot.animate)
 
+## Output
+
+Files the script writes when run:
+
+![fusion_track.gif](assets/06_sensor_fusion/fusion_track.gif)
+
+*`fusion_track.gif`*
+
+![sensor_fusion_graph.svg](assets/06_sensor_fusion/sensor_fusion_graph.svg)
+
+*`sensor_fusion_graph.svg`*
+
 ## Source
 
 ```python
@@ -215,6 +227,7 @@ if __name__ == "__main__":
     _clock["t0"] = None
     g = merge(imu(), gps()) >> parse >> kalman >> error_vs_truth
     print(g.describe(), "\n")
+    g.draw().save("sensor_fusion_graph.svg")
 
     # The sources pace themselves on the wall clock, so keep the graph lean while it
     # runs (no drawing inside); animate the recorded frames afterwards.

@@ -196,6 +196,7 @@ if __name__ == "__main__":
     _clock["t0"] = None
     g = merge(imu(), gps()) >> parse >> kalman >> error_vs_truth
     print(g.describe(), "\n")
+    g.draw().save("sensor_fusion_graph.svg")
 
     # The sources pace themselves on the wall clock, so keep the graph lean while it
     # runs (no drawing inside); animate the recorded frames afterwards.

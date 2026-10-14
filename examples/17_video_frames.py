@@ -99,6 +99,7 @@ if __name__ == "__main__":
     )
     g = camera() >> difference(threshold=0.15) >> blur >> (view | centroid | spectrum2d)
     print(g.describe(), "\n")
+    g.draw().save("video_graph.svg")
 
     out = run(g, progress=True)
     f = out[-1]

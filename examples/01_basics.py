@@ -51,6 +51,7 @@ if __name__ == "__main__":
         >> energy
     )
     print(g.describe(), "\n")
+    g.draw().save("basics_graph.svg")
 
     frames = run(g, progress=True)
     f = frames[-1]

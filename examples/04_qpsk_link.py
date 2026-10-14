@@ -218,6 +218,7 @@ if __name__ == "__main__":
         rx & bits()
     ) >> ber  # the receiver's bits zipped with a second, identical bit source
     print(link.describe(), "\n")
+    link.draw().save("qpsk_link.svg")
 
     results = run(link, progress=True)
     total_err = sum(

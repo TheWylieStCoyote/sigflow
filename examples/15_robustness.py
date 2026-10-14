@@ -127,6 +127,7 @@ if __name__ == "__main__":
     )
     g = watchdog(frames=60) >> assess >> estimate
     print(g.describe(), "\n")
+    g.draw().save("robustness_graph.svg")
     out = run(g, progress=True)
     methods = [f.data["method"] for f in out if f.ok]
     print(
@@ -151,6 +152,7 @@ if __name__ == "__main__":
     # `guarded` turns estimator failures into warnings, the watchdog's restarts are warnings
     # already, and anything that still fails (none here) would be dropped by the first branch.
     g2 = watchdog(frames=40) >> assess >> guarded >> route
+    g2.draw().save("routing_graph.svg")
     out2 = run(g2)
     print(
         f"\nrouting: {len(main.frames)} to main, {len(quarantine.frames)} of them also quarantined (warnings), "

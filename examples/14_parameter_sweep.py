@@ -83,6 +83,7 @@ def theory(snr_db: np.ndarray) -> np.ndarray:
 
 if __name__ == "__main__":
     grid = [3, 5, 7, 9, 11]
+    link(grid[0]).draw().save("qpsk_sweep_graph.svg")  # the graph each worker runs
 
     # --- processes -----------------------------------------------------------
     t0 = time.perf_counter()

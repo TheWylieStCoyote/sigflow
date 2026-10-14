@@ -45,6 +45,7 @@ if __name__ == "__main__":
         >> (dsp.rms >> log | dsp.lfilter(b=[1, -0.95]) >> wav_out)[1]
     )
     print(g.describe(), "\n")
+    g.draw().save(os.path.join(WORK, "real_io_graph.svg"))
     with wav_out, log:
         out = run(g, progress=True)
     rate, y = wavfile.read(wav_out.path)

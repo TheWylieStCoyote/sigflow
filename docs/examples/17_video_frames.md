@@ -12,6 +12,18 @@ What this exercises
   * a per-row annotation (motion energy per scan line) as a second sample-level array
   * fan-out to a 2-D spectrum, a centroid tracker and an image plot with the mask overlaid
 
+## Output
+
+Files the script writes when run:
+
+![motion.gif](assets/17_video_frames/motion.gif)
+
+*`motion.gif`*
+
+![video_graph.svg](assets/17_video_frames/video_graph.svg)
+
+*`video_graph.svg`*
+
 ## Source
 
 ```python
@@ -116,6 +128,7 @@ if __name__ == "__main__":
     )
     g = camera() >> difference(threshold=0.15) >> blur >> (view | centroid | spectrum2d)
     print(g.describe(), "\n")
+    g.draw().save("video_graph.svg")
 
     out = run(g, progress=True)
     f = out[-1]

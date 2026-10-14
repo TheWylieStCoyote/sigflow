@@ -17,6 +17,14 @@ What this exercises
   * a helper that groups anomalies by (block, config, source frame) — a report
     built purely from lineage
 
+## Output
+
+Files the script writes when run:
+
+![lineage_graph.svg](assets/10_lineage_forensics/lineage_graph.svg)
+
+*`lineage_graph.svg`*
+
 ## Source
 
 ```python
@@ -143,6 +151,7 @@ if __name__ == "__main__":
     )
     g = checked >> fuse >> alarm
     print(g.describe(), "\n")
+    g.draw().save("lineage_graph.svg")
 
     out = run(g, progress=True)
 
