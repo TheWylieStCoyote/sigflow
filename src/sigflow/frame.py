@@ -149,7 +149,7 @@ class Provenance:
     def walk(self) -> Iterator["Provenance"]:
         """Depth-first walk over the lineage, each node once."""
         seen: set[int] = set()
-        stack = [self]
+        stack: list[Provenance] = [self]
         while stack:
             node = stack.pop()
             if node.id in seen:
@@ -218,6 +218,30 @@ class Provenance:
         for par in self.parents:
             lines.append(par.render(indent + "  ", seen))
         return "\n".join(lines)
+
+    # -- persistence (implemented in sigflow.persist) ----------------------- #
+    def to_dict(self) -> dict:
+        """The lineage DAG as a JSON-ready dict."""
+        from .persist import prov_to_dict
+
+        return prov_to_dict(self)
+
+    def to_json(self, **kw: Any) -> str:
+        import json
+
+        return json.dumps(self.to_dict(), **kw)
+
+    @staticmethod
+    def from_dict(d: dict) -> "Provenance":
+        from .persist import prov_from_dict
+
+        return prov_from_dict(d)
+
+    @staticmethod
+    def from_json(s: str) -> "Provenance":
+        import json
+
+        return Provenance.from_dict(json.loads(s))
 
     def __repr__(self) -> str:
         return f"Provenance({self.op!r}, seq={self.seq}, parents={len(self.parents)})"
@@ -443,6 +467,19 @@ class Frame:
 
     def __array__(self, dtype: Any = None, copy: Any = None) -> np.ndarray:
         return np.asarray(self.data, dtype=dtype)
+
+    # -- persistence (implemented in sigflow.persist) ----------------------- #
+    def save(self, path: str) -> str:
+        """Write the frame (data, annotations, issues, lineage) as ``.npz``."""
+        from .persist import save_frame
+
+        return save_frame(self, path)
+
+    @staticmethod
+    def load(path: str) -> "Frame":
+        from .persist import load_frame
+
+        return load_frame(path)
 
     def _repr_html_(self) -> str:
         from .notebook import frame_html

@@ -360,6 +360,8 @@ def type_name(o: Any) -> str:
 class Pipeline(Node):
     """A chain of nodes. Validated on construction."""
 
+    stages: list[Node]
+
     def __init__(self, stages: Iterable[Node]) -> None:
         seen: set[int] = set()
         self._init([fresh(s, seen) for s in stages])
@@ -435,6 +437,8 @@ class Pipeline(Node):
 class Fanout(Node):
     """Broadcast each input frame to several branches; outputs a tuple frame."""
 
+    branches: list[Node]
+
     def __init__(self, branches: Iterable[Node]) -> None:
         seen: set[int] = set()
         branches = [fresh(x, seen) for x in branches]
@@ -483,6 +487,8 @@ class Fanout(Node):
 
 class Zip(Node):
     """Lock-step join of several streams into tuple frames."""
+
+    parts: list[Node]
 
     def __init__(self, parts: Iterable[Node]) -> None:
         seen: set[int] = set()

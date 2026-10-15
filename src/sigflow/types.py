@@ -18,6 +18,7 @@ that ``"N"`` means the same thing everywhere in a graph.
 """
 
 from __future__ import annotations
+# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -330,7 +331,8 @@ class SignalType:
             return env
         if self.is_array:
             arr = np.asarray(value)
-            if not np.can_cast(arr.dtype, self.dtype, casting="same_kind"):
+            target: Any = self.dtype
+            if not np.can_cast(arr.dtype, target, casting="same_kind"):
                 raise TypeMismatch(
                     f"{where}: value dtype {arr.dtype} is not {self.dtype}"
                 )
@@ -347,7 +349,8 @@ class SignalType:
                     if isinstance(d, str):
                         env.bind(d, int(n), where)
         elif isinstance(self.dtype, type):
-            if not isinstance(value, self.dtype):
+            cls: Any = self.dtype
+            if not isinstance(value, cls):
                 raise TypeMismatch(
                     f"{where}: value of type {type(value).__name__} is not {self.dtype.__name__}"
                 )

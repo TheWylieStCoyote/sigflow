@@ -37,19 +37,29 @@ sigflow = ["py.typed"]
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.10"
 ignore_missing_imports = true
-# Sig[...] reads as np.ndarray to checkers (see types.py); the symbolic dimension
-# strings ("N") and tuple return annotations are the DSL parts they cannot read.
-# A block's return annotation is a *contract* (Sig[float, ()] may be returned as a
-# float, Sig[dict] as a dict, any output as a Frame), not the body's Python return
-# type, so return-value checking is off for the package.
-disable_error_code = [
-  "name-defined",
-  "valid-type",
-  "misc",
-  "type-arg",
-  "syntax",
-  "has-type",
-  "return-value",
+
+# The Sig[...] DSL puts runtime values (dimension strings, shape tuples) where a
+# checker expects types, and a block's return annotation is a contract rather than
+# the body's Python return type. Until the DSL is spelled in checker-readable form
+# (planned for 0.5.0) the modules written in it carry these exemptions; the core
+# (graph, runtime, frame, builder, ratio, persist, ...) is checked in full.
+[[tool.mypy.overrides]]
+module = ["sigflow.dsp", "sigflow.linalg", "sigflow.io", "sigflow.plot", "sigflow.types"]
+disable_error_code = ["name-defined", "valid-type", "misc", "syntax", "return-value"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+include = ["src", "tests", "examples"]
+reportMissingModuleSource = false
+# The same five modules carry a "# pyright:" header line. Tests and examples are
+# written in the DSL too, so they get the same exemptions by directory, plus the
+# two Optional rules that `Frame.prov: Provenance | None` trips on every lineage
+# access (to be addressed with the DSL in 0.5.0). CI gates `pyright src` only.
+executionEnvironments = [
+  { root = "tests", reportUndefinedVariable = false, reportInvalidTypeForm = false, reportReturnType = false, reportGeneralTypeIssues = false, reportOptionalMemberAccess = false, reportOptionalSubscript = false },
+  { root = "examples", reportUndefinedVariable = false, reportInvalidTypeForm = false, reportReturnType = false, reportGeneralTypeIssues = false, reportOptionalMemberAccess = false, reportOptionalSubscript = false },
+  { root = "src" },
 ]

@@ -18,6 +18,7 @@ Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one fr
 """
 
 from __future__ import annotations
+# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from typing import Any, Callable
 
@@ -54,7 +55,7 @@ class PlotBlock(Block):
 
     def __init__(
         self,
-        draw: Callable[[Any, Any, Frame], None],
+        draw: Callable[[Any, Any, Frame], Any],
         *,
         name: str = "plot",
         in_type: Any = None,
@@ -337,7 +338,7 @@ def constellation(
 
 
 def custom(
-    draw: Callable[[Any, Any, Frame], None],
+    draw: Callable[[Any, Any, Frame], Any],
     name: str = "plot",
     in_type: Any = None,
     **kw: Any,
@@ -348,7 +349,7 @@ def custom(
 
 def animate(
     frames: list[Frame] | list[Any],
-    draw: Callable[[Any, Any, Frame], None] | None = None,
+    draw: Callable[[Any, Any, Frame], Any] | None = None,
     interval: int = 100,
     figsize: tuple[float, float] = (7, 3.2),
 ) -> Any:
@@ -376,7 +377,8 @@ def history(
 
     def pick(f: Frame) -> float:
         if callable(key):
-            return float(key(f))
+            fn: Callable[[Frame], Any] = key
+            return float(fn(f))
         if isinstance(key, str):
             return float(f[key])
         return float(np.asarray(f.data).reshape(-1)[0])

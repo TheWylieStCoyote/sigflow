@@ -58,6 +58,8 @@ class _FramedMarker:
 if TYPE_CHECKING:
     from typing import Generic, TypeVar
 
+    from .graph import Block
+
     _F = TypeVar("_F")
 
     class Framed(

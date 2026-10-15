@@ -23,11 +23,12 @@ context manager) to flush files.
 """
 
 from __future__ import annotations
+# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 import asyncio
 import csv
 import os
-from typing import Any, Iterator
+from typing import Any, Iterator, TypeVar
 
 import numpy as np
 
@@ -204,7 +205,7 @@ async def zmq(
         k = 0
         while count is None or k < count:
             if timeout is not None:
-                if not await sock.poll(timeout * 1000):
+                if not await sock.poll(int(timeout * 1000)):
                     return
             msg = await sock.recv()
             if topic and msg.startswith(topic):
@@ -224,6 +225,9 @@ async def zmq(
 # --------------------------------------------------------------------------- #
 
 
+_SinkT = TypeVar("_SinkT", bound="_Sink")
+
+
 class _Sink(Block):
     def __init__(self, fn: Any, name: str) -> None:
         super().__init__(tap(fn, name=name, inputs=Frame))
@@ -231,7 +235,7 @@ class _Sink(Block):
     def close(self) -> Any:  # pragma: no cover - overridden
         pass
 
-    def __enter__(self) -> "_Sink":
+    def __enter__(self: _SinkT) -> _SinkT:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -340,7 +344,7 @@ class zmq_sink(_Sink):
     ) -> None:
         import zmq as _zmq
 
-        self.ctx = _zmq.Context.instance()
+        self.ctx: Any = _zmq.Context.instance()
         self.sock = self.ctx.socket(_zmq.PUB if kind.upper() == "PUB" else _zmq.PUSH)
         (self.sock.bind if bind else self.sock.connect)(address)
         self.topic = topic

@@ -204,7 +204,7 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
         for name, kind, ins, out, cfg, doc in entries
     )
     return (
-        f"<div style='font-family:system-ui,sans-serif'><h2>{html.escape(title)}</h2>"
+        f"<div style='font-family:system-ui,sans-serif'><h2>{html.escape(title or node.name)}</h2>"
         f"<div style='overflow:auto;background:white;padding:4px'>{Diagram(node).svg}</div>"
         f"<table style='{_CSS};margin-top:10px'><tr><th style='{_TD}'>block</th><th style='{_TD}'>kind</th>"
         f"<th style='{_TD}'>inputs</th><th style='{_TD}'>output</th><th style='{_TD}'>configuration</th>"

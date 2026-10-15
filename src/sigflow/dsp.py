@@ -6,6 +6,7 @@ to write stateful stream blocks as plain generators.
 """
 
 from __future__ import annotations
+# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 import asyncio
 import time as _time

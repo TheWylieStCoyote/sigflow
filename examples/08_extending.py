@@ -95,7 +95,8 @@ class Measurement:
 def measure(f: Framed[Sig[float, "N"]], rate: float = 48_000) -> Sig[Measurement]:
     X = np.abs(np.fft.rfft(f.data * np.hanning(len(f.data))))
     tone = float(np.fft.rfftfreq(len(f.data), 1 / rate)[int(np.argmax(X[1:])) + 1])
-    return Measurement(to_dbfs(f.data), tone, f.prov.seq if f.prov else -1)
+    seq = f.prov.seq if f.prov is not None and f.prov.seq is not None else -1
+    return Measurement(to_dbfs(f.data), tone, seq)
 
 
 @block

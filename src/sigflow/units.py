@@ -92,7 +92,7 @@ def parse(unit: str | None) -> tuple[str, float]:
             return _BASE[base], scale * _SPECIAL_SCALE.get(base, 1.0)
     # exponent / compound forms via pint when available
     try:
-        import pint
+        import pint  # type: ignore[import-not-found]
 
         q = pint.UnitRegistry()(u)
         return str(q.dimensionality), float(q.to_base_units().magnitude)

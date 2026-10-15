@@ -25,7 +25,7 @@ import inspect
 import queue
 import threading
 import time
-from typing import Any, AsyncIterator, Callable, Iterator
+from typing import Any, AsyncIterator, Callable, Iterator, cast
 
 import numpy as np
 
@@ -55,6 +55,13 @@ from .types import Env, TypeMismatch
 __all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
 
 _DONE = object()
+
+
+def _unwrap(item: Any) -> Any:
+    """A queue item: re-raise a forwarded ``("error", exc)``; anything else is data."""
+    if isinstance(item, tuple) and len(item) == 2 and item[0] == "error":
+        raise item[1]
+    return item
 
 
 class RunOptions:
@@ -93,12 +100,19 @@ class RunOptions:
 # --------------------------------------------------------------------------- #
 
 
+def _is_factory(obj: object) -> bool:
+    """A callable that is not itself iterable: call it to get the iterable."""
+    return (
+        callable(obj) and not hasattr(obj, "__iter__") and not hasattr(obj, "__aiter__")
+    )
+
+
 async def aiter_any(obj: Any, threaded: bool = False) -> AsyncIterator[Any]:
     """Iterate anything — sync or async iterable, generator or factory — asynchronously."""
-    if callable(obj) and not hasattr(obj, "__iter__") and not hasattr(obj, "__aiter__"):
-        obj = obj()
+    if _is_factory(obj):
+        obj = cast(Any, obj())
         if inspect.isawaitable(obj):
-            obj = await obj
+            obj = cast(Any, await obj)
     if hasattr(obj, "__aiter__"):
         async for item in obj:
             yield item
@@ -525,20 +539,21 @@ class Runner:
                         if failure.done():
                             raise failure.exception()  # type: ignore[misc]
                         return
-                    if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-                        raise it[1]
-                    f = (
-                        _select_frame(it, Select(g.members[g.outputs[0].name], key))
-                        if key is not None
-                        else it
-                    )
+                    frame: Frame = _unwrap(it)
+                    if key is not None:
+                        frame = _select_frame(
+                            frame, Select(g.members[g.outputs[0].name], key)
+                        )
                     if stats is None:
-                        yield f  # lowered operator tree: no wrapper node
+                        yield frame  # lowered operator tree: no wrapper node
                     else:
                         stats.out += 1
-                        yield f.evolve(
+                        yield frame.evolve(
                             prov=Provenance(
-                                g.name, {}, (f.prov,) if f.prov else (), stats.out - 1
+                                g.name,
+                                {},
+                                (frame.prov,) if frame.prov else (),
+                                stats.out - 1,
                             )
                         )
             else:
@@ -1376,11 +1391,12 @@ class Runner:
                 if it is _DONE:
                     live -= 1
                     continue
-                if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-                    raise it[1]
+                merged: Frame = _unwrap(it)
                 stats.out += 1
-                yield it.evolve(
-                    prov=Provenance("merge", {}, (it.prov,) if it.prov else (), seq)
+                yield merged.evolve(
+                    prov=Provenance(
+                        "merge", {}, (merged.prov,) if merged.prov else (), seq
+                    )
                 )
                 seq += 1
         finally:
@@ -1494,9 +1510,7 @@ class _SubPipe:
                 return None  # dropped by the body
         if item is _DONE:
             return None
-        if isinstance(item, tuple) and len(item) == 2 and item[0] == "error":
-            raise item[1]
-        return item
+        return _unwrap(item)
 
     async def close(self) -> None:
         await self.inq.put(_DONE)
@@ -1567,9 +1581,7 @@ async def _drain(
             if failure is not None and failure.done():
                 raise failure.exception()  # type: ignore[misc]
             return
-        if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-            raise it[1]
-        yield it
+        yield _unwrap(it)
 
 
 try:
@@ -1589,6 +1601,7 @@ async def _run_inline_stream(
     """Run a synchronous generator stream block *on the event loop* with greenlet: the
     generator's pull for input switches back here, we await the next frame, and switch it
     in. No thread, no queues — a few microseconds per frame instead of hundreds."""
+    assert _greenlet is not None  # only reached when greenlet is installed
     parent = _greenlet.getcurrent()
     NEED, OUT, DONE_ = "need", "out", "done"
 
@@ -1842,6 +1855,4 @@ def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
         it = q.get()
         if it is _DONE:
             return
-        if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-            raise it[1]
-        yield it
+        yield _unwrap(it)

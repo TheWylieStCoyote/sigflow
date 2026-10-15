@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+Changed
+
+- Static typing: the package-wide mypy error-code exemptions are replaced by
+  per-module overrides for the DSL-heavy modules (`dsp`, `linalg`, `io`,
+  `plot`, `types`); everything else is checked in full, and a `[tool.pyright]`
+  configuration is added (`pyright src` joins `mypy src/sigflow` in CI).
+  `Frame.save` / `Frame.load` and `Provenance.to_dict` / `to_json` /
+  `from_dict` / `from_json` are declared on the classes instead of attached at
+  import time, so editors see them. The `draw(ax, data, frame)` callback of
+  `plot.custom` may return a value.
+
 ## 0.4.0
 
 New

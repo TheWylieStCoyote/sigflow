@@ -34,6 +34,7 @@ def load_qpsk():
     spec = importlib.util.spec_from_file_location(
         "qpsk_link", os.path.join(HERE, "04_qpsk_link.py")
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod

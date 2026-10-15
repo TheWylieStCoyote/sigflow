@@ -402,6 +402,8 @@ class Run:
         def render() -> None:
             from .notebook import monitor_html
 
+            if handle is None:
+                return
             handle.update(
                 HTML(
                     f"<div style='font-family:monospace'><b>{self.state}</b> · {len(self.frames)} frames"

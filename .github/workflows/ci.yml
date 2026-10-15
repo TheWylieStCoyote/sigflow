@@ -1,7 +1,7 @@
 name: ci
 on:
   push:
-    branches: [master]
+    branches: [master, "050"]
   pull_request:
 jobs:
   test:
@@ -37,8 +37,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e . mypy
+      - run: python -m pip install -e . mypy pyright
       - run: mypy src/sigflow
+      - run: pyright src
   examples:
     runs-on: ubuntu-latest
     steps:

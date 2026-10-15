@@ -103,16 +103,6 @@ def prov_from_dict(d: dict) -> Provenance:
     return build(d["root"])
 
 
-def _prov_to_json(self: Provenance, **kw: Any) -> str:
-    return json.dumps(prov_to_dict(self), **kw)
-
-
-Provenance.to_dict = prov_to_dict  # type: ignore[attr-defined]
-Provenance.to_json = _prov_to_json  # type: ignore[attr-defined]
-Provenance.from_dict = staticmethod(prov_from_dict)  # type: ignore[attr-defined]
-Provenance.from_json = staticmethod(lambda s: prov_from_dict(json.loads(s)))  # type: ignore[attr-defined]
-
-
 # --------------------------------------------------------------------------- #
 # Frames on disk
 # --------------------------------------------------------------------------- #
@@ -169,10 +159,6 @@ def load_frame(path: str) -> Frame:
     )
     prov = prov_from_dict(record["prov"]) if record["prov"] else None
     return Frame(data, record["meta"], record["stream"], samples, issues, prov)
-
-
-Frame.save = save_frame  # type: ignore[attr-defined]
-Frame.load = staticmethod(load_frame)  # type: ignore[attr-defined]
 
 
 # --------------------------------------------------------------------------- #
@@ -278,8 +264,9 @@ def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
             ck.positions[key] = st.out
         if isinstance(n, Block):
             fn = n.defn.fn
-            if hasattr(fn, "state") and hasattr(fn, "restore"):
-                ck.states[key] = fn.state()
+            state, restore_ = getattr(fn, "state", None), getattr(fn, "restore", None)
+            if callable(state) and callable(restore_):
+                ck.states[key] = state()
             elif n.kind == "stream":
                 ck.skipped.append(key)
     if path:

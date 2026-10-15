@@ -496,17 +496,20 @@ different frame counts instead of silently stopping at the shortest.
 
 ## Static typing
 
-`Sig[...]` and `Stream[...]` are runtime objects — a small DSL that unification
-understands — but under `TYPE_CHECKING` they are declared as an `ndarray`
-subclass and an iterable, so mypy and pyright read `x: Sig[float, "N"]` as an
-array (`x.mean()`, `x[1:]`, `x * 2` all check) and `for x in xs` over a
-`Stream` is fine. `Framed[...]` reads as `Frame`. The package ships `py.typed`
-and `mypy src/sigflow` is clean; the few error codes disabled in
-`pyproject.toml` are the ones the DSL necessarily trips (`valid-type`,
-`type-arg`) plus `return-value`, because a block declared to return
-`Sig[float, ()]` legitimately returns a Python float. Block *bodies* are
-therefore checked as NumPy code; the signal contract itself is still checked by
-sigflow at graph construction time.
+`Sig[...]` and `Stream[...]` are runtime objects, a small DSL that unification
+understands. Under `TYPE_CHECKING` `Sig` is an `ndarray` subclass and `Stream`
+an iterable, so a block body reads as NumPy code (`x.mean()`, `x[1:]`, `x * 2`
+all check) and `Framed[...]` reads as `Frame`. What checkers cannot read today
+is the DSL itself: a dimension string such as `"N"` is a forward reference to
+them, shape tuples and tuple return annotations are not type expressions, and an
+array returned from a block does not satisfy a `Sig` return type. Those
+spellings live in `dsp`, `linalg`, `io`, `plot` and `types`, which carry the
+matching exemptions (per-module mypy overrides in `pyproject.toml` and a
+`# pyright:` header line); the rest of the package is checked in full by both
+checkers, and `mypy src/sigflow` and `pyright src` gate CI. Tests and examples
+are written in the DSL too, so `[tool.pyright]` grants them the same exemptions
+by directory for editor use. A checker-readable spelling of the DSL (dimension
+symbols, `tuple[M, N]`, `Iterator[Sig[...]]`) is planned for 0.5.0.
 
 ## Documentation site
 

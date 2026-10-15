@@ -33,16 +33,17 @@ def true_state(t: float) -> tuple[float, float, float, float]:
 
 
 SPEEDUP = 20.0  # run the simulation 20x faster than real time
-_clock = {"t0": None}
+_clock: dict[str, float | None] = {"t0": None}
 
 
 def sim_time() -> float:
     """One shared clock for every sensor (sim seconds). Sensors that stamp from
     independent counters drift apart and bias the fused velocity — try it."""
     now = time.perf_counter()
-    if _clock["t0"] is None:
-        _clock["t0"] = now
-    return (now - _clock["t0"]) * SPEEDUP
+    t0 = _clock["t0"]
+    if t0 is None:
+        _clock["t0"] = t0 = now
+    return (now - t0) * SPEEDUP
 
 
 @source(total=lambda duration, rate, **_: int(duration * rate), threaded=True)
@@ -163,9 +164,12 @@ def error_vs_truth(s: Sig[dict]) -> Sig[dict]:
     return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}
 
 
+_track_history: list[tuple[float, float, int]] = []
+
+
 def draw_track(ax, s, f: Frame) -> None:
     """Draw the estimate path up to this frame (used after the run, via plot.animate)."""
-    hist = draw_track.history
+    hist = _track_history
     hist.append((s["pos"][0], s["pos"][1], s["step"]))
     ts = np.linspace(0, DURATION, 200)
     truth = np.array([true_state(t)[:2] for t in ts])
@@ -186,9 +190,6 @@ def draw_track(ax, s, f: Frame) -> None:
     ax.set_ylabel("y [m]")
     ax.legend(loc="upper left", fontsize=8)
     ax.set_title(f"t = {s['t']:.2f} s   error = {s['err']:.2f} m")
-
-
-draw_track.history = []
 
 
 if __name__ == "__main__":

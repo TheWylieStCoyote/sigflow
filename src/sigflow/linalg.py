@@ -10,6 +10,7 @@ so ``(a & b) >> matmul`` fails to build if the inner dimensions cannot agree.
 """
 
 from __future__ import annotations
+# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from typing import Any
 

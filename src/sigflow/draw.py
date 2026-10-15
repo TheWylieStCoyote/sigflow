@@ -259,12 +259,13 @@ class _Layout:
         x = 0.0
         out = _Cell(0, h)
         prev: _Cell | None = None
+        prev_stage: Any = None
         for stage, c in zip(node.stages, cells):
             c.shift(x, (h - c.h) / 2)
             out.boxes += c.boxes
             out.edges += c.edges
             if prev is not None:
-                label = describe(prev_stage.out_type)  # type: ignore[name-defined]
+                label = describe(prev_stage.out_type)
                 for a in prev.exits:
                     for b in c.entries:
                         out.edges.append((a, b, label))

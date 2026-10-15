@@ -90,7 +90,7 @@ class Chain(Node):
         self.out_type = stages[-1].out_type
         self.port_names = tuple(getattr(stages[-1], "port_names", ()))
         if hasattr(stages[0], "join_op"):
-            self.join_op = stages[0].join_op
+            self.join_op = getattr(stages[0], "join_op")
         self.name = " >> ".join(s.name for s in stages)
 
     def validate(self, env: Any = None) -> Any:
@@ -153,12 +153,12 @@ class Graph(Node):
     def add(self, node: Any, name: str | None = None) -> Ref:
         node = as_node(node)
         base = name or node.name.split(" ")[0].split("(")[0]
-        name = base
-        while name in self.members:
+        key = base
+        while key in self.members:
             self._count += 1
-            name = f"{base}#{self._count}"
-        self.members[name] = node
-        return Ref(self, node, name)
+            key = f"{base}#{self._count}"
+        self.members[key] = node
+        return Ref(self, node, key)
 
     def connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
         """Connect ``src`` (a Ref, optionally with a port) to ``dst`` (a Ref or a node to add).
