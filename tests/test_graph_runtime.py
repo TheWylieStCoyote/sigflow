@@ -1,4 +1,4 @@
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
+from typing import AsyncIterator, Iterator, Literal
 import asyncio
 
 import numpy as np
@@ -32,7 +32,7 @@ def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
 
 
 @block
-def energy(x: Sig[T, N]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
@@ -47,7 +47,7 @@ def boom(x: Sig[float, N]) -> Sig[float, N]:
 
 
 @block
-def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:
     buf = []
     for x in xs:
         buf.append(x)
@@ -57,13 +57,13 @@ def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:
 
 
 @source(total=lambda count, **_: count)
-def ramp(count: int = 4, n: int = 3) -> Sig[float, N]:
+def ramp(count: int = 4, n: int = 3) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield np.full(n, float(i))
 
 
 @source
-async def aramp(count: int = 4, n: int = 3) -> Sig[float, N]:
+async def aramp(count: int = 4, n: int = 3) -> AsyncIterator[Sig[float, N]]:
     for i in range(count):
         await asyncio.sleep(0)
         yield np.full(n, float(10 + i))
@@ -115,11 +115,11 @@ def test_type_mismatch_is_raised_at_build_time():
 
 def test_dimension_conflict_detected_before_running():
     @source
-    def ten() -> Sig[float, (10,)]:
+    def ten() -> Iterator[Sig[float, tuple[Literal[10]]]]:
         yield np.ones(10)
 
     @source
-    def twenty() -> Sig[float, (20,)]:
+    def twenty() -> Iterator[Sig[float, tuple[Literal[20]]]]:
         yield np.ones(20)
 
     with pytest.raises(TypeMismatch, match="dimension 'N'"):
@@ -279,7 +279,7 @@ def test_monitor_and_progress(capsys):
 
 def test_stream_block_with_async_generator():
     @block
-    async def running_sum(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+    async def running_sum(xs: Stream[Sig[float, N]]) -> AsyncIterator[Sig[float, N]]:
         acc = None
         async for x in xs:
             acc = x if acc is None else acc + x
@@ -291,7 +291,7 @@ def test_stream_block_with_async_generator():
 
 def test_fanout_validates_every_branch():
     @block
-    def wants_matrix(x: Sig[float, (M, N)]) -> Sig[float, ()]:
+    def wants_matrix(x: Sig[float, tuple[M, N]]) -> Sig[float, tuple[()]]:
         return 0.0
 
     with pytest.raises(TypeMismatch):
@@ -348,7 +348,7 @@ def test_background_run_pause_step_stop():
 
 def test_source_exception_is_attributed_to_the_source():
     @source
-    def broken(count: int = 3) -> Sig[float, N]:
+    def broken(count: int = 3) -> Iterator[Sig[float, N]]:
         for i in range(count):
             if i == 1:
                 raise RuntimeError("sensor unplugged")
@@ -371,7 +371,7 @@ def test_port_selection():
     from sigflow import linalg
 
     @source
-    def mats() -> Sig[float, (3, 3)]:
+    def mats() -> Iterator[Sig[float, tuple[Literal[3], Literal[3]]]]:
         yield np.diag([1.0, 2.0, 3.0])
 
     vals = run(mats() >> linalg.eigh[0])[0]
@@ -398,8 +398,8 @@ def test_port_selection():
     # named output ports on a wrapped library function
     eigh = block(
         np.linalg.eigh,
-        inputs=Sig[T, (N, N)],
-        outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]},
+        inputs=Sig[T, tuple[N, N]],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
     )
     assert run(mats() >> eigh["vecs"] >> linalg.transpose)[0].data.shape == (3, 3)
     assert run(mats() >> eigh["vals"])[0].prov.op == "[vals]"
@@ -420,8 +420,8 @@ def test_frame_and_provenance_selection():
     )
     assert (
         [n.op for n in p[1:3]] == ["to_complex", "window"]
-        and "window" in p  # type: ignore[operator]
-        and "nope" not in p  # type: ignore[operator]
+        and "window" in p
+        and "nope" not in p
     )
     with pytest.raises(KeyError):
         p["nope"]
@@ -431,16 +431,21 @@ def test_frame_and_provenance_selection():
 
 def test_selected_port_lineage_follows_the_branch():
     post = block(
-        lambda e: e + 1.0, name="post", inputs=Sig[float, ()], outputs=Sig[float, ()]
+        lambda e: e + 1.0,
+        name="post",
+        inputs=Sig[float, tuple[()]],
+        outputs=Sig[float, tuple[()]],
     )
     f = run(ramp(count=1) >> (scale(gain=2) | energy >> post)["post"])[0]
     assert [n.op for n in f.prov.chain()] == ["[post]", "post", "energy", "ramp"]
-    assert "fanout" in f.prov  # type: ignore[operator]  # the tuple node is still in the lineage
+    assert "fanout" in f.prov  # the tuple node is still in the lineage
 
 
 def test_multi_input_framed_block_skips_failed_parts():
     @block
-    def combine(a: Framed[Sig[float, N]], b: Framed[Sig[float, N]]) -> Sig[float, ()]:
+    def combine(
+        a: Framed[Sig[float, N]], b: Framed[Sig[float, N]]
+    ) -> Sig[float, tuple[()]]:
         return float(a.data.sum() + b.data.sum())
 
     out = run(ramp(count=3) >> (scale(gain=1) | boom) >> combine)
@@ -473,7 +478,7 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 
     # a source reads the knob itself
     @source
-    def tone(level: Knob, frames: int = 10**6) -> Sig[float, ()]:
+    def tone(level: Knob, frames: int = 10**6) -> Iterator[Sig[float, tuple[()]]]:
         for _ in range(frames):
             yield float(level.value)
 

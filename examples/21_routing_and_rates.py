@@ -18,8 +18,8 @@ What this exercises
   * @block(ratio=...) declarations, g.ratio, describe() rate tags, RatioMismatch
   * run(strict=True) checking declared ratios and expected frame counts
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator, Literal
 import numpy as np
 
 from sigflow import (
@@ -48,7 +48,7 @@ rng = np.random.default_rng(3)
 
 
 @source(total=lambda bursts, **_: bursts)
-def channel(bursts: int = 24, snr_db: float = 15.0) -> Sig[complex, N]:
+def channel(bursts: int = 24, snr_db: float = 15.0) -> Iterator[Sig[complex, N]]:
     """Bursts of BPSK, QPSK or an unmodulated carrier, tagged with the truth so the
     classifier's mistakes can be counted."""
     for i in range(bursts):
@@ -92,16 +92,16 @@ def classify(f: Framed[Sig[complex, N]]) -> Sig[complex, N]:
 
 @block
 def demod_bpsk(x: Sig[complex, N]) -> Sig[int, N]:
-    return (x.real > 0).astype(int)  # type: ignore[attr-defined]
+    return (x.real > 0).astype(int)
 
 
 @block
 def demod_qpsk(x: Sig[complex, N]) -> Sig[int, N]:
-    return ((x.real > 0).astype(int) << 1) | (x.imag > 0).astype(int)  # type: ignore[attr-defined]
+    return ((x.real > 0).astype(int) << 1) | (x.imag > 0).astype(int)
 
 
 @block(ratio="1:1")
-def track_carrier(xs: Stream[Sig[complex, N]]) -> Sig[float, ()]:
+def track_carrier(xs: Stream[Sig[complex, N]]) -> Iterator[Sig[float, tuple[()]]]:
     """Stateful: a running frequency estimate across the carrier bursts *it* sees."""
     est = None
     for x in xs:
@@ -111,7 +111,7 @@ def track_carrier(xs: Stream[Sig[complex, N]]) -> Sig[float, ()]:
 
 
 @block
-def average_bursts(x: Sig[complex, (K, N)]) -> Sig[complex, N]:
+def average_bursts(x: Sig[complex, tuple[K, N]]) -> Sig[complex, N]:
     return x.mean(axis=0)
 
 
@@ -216,7 +216,7 @@ print(
 
 
 @block(ratio="1:1")
-def misdeclared(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+def misdeclared(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
     for x in xs:
         yield x
         yield -x

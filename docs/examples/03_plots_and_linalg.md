@@ -8,8 +8,8 @@
 
 ```python
 """Plot taps, animation export, and shape-checked linear algebra."""
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator
 import numpy as np
 
 from sigflow import Sig, dsp, linalg, plot, run, source
@@ -37,7 +37,7 @@ print(fall.save("chirp_waterfall.gif", interval=60))
 @source
 def snapshots(
     channels: int = 4, samples: int = 256, frames: int = 3
-) -> Sig[complex, (M, N)]:
+) -> Iterator[Sig[complex, tuple[M, N]]]:
     """M=samples x N=channels array snapshots with a plane wave + noise."""
     rng = np.random.default_rng(0)
     steering = np.exp(1j * np.pi * np.arange(channels) * np.sin(np.deg2rad(20)))

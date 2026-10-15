@@ -42,7 +42,7 @@ from .dims import (
     Y,
     Z,
 )
-from .frame import MISSING, Frame, Issue, Provenance, TimeSpan
+from .frame import MISSING, NO_PROV, Frame, Issue, Provenance, TimeSpan
 from .graph import (
     Block,
     Fanout,
@@ -105,6 +105,7 @@ __all__ = [
     "Frame",
     "Issue",
     "Provenance",
+    "NO_PROV",
     "MISSING",
     "TimeSpan",
     "block",

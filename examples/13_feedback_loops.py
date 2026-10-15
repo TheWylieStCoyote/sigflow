@@ -12,8 +12,8 @@ What this exercises
   * loop state in provenance: each output's lineage includes the previous iteration
   * a loop inside a larger graph, zipped inputs (microphone + far-end reference)
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator, Literal
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, block, dsp, feedback, plot, run, source
@@ -29,8 +29,11 @@ TAPS = 32
 
 @block
 def agc_step(
-    x: Sig[float, N], gain: Sig[float, ()], target: float = 0.3, attack: float = 0.5
-) -> (Sig[float, N], Sig[float, ()]):
+    x: Sig[float, N],
+    gain: Sig[float, tuple[()]],
+    target: float = 0.3,
+    attack: float = 0.5,
+) -> tuple[Sig[float, N], Sig[float, tuple[()]]]:
     """One AGC iteration: apply the gain, then move it toward the target level."""
     y = x * gain
     level = float(np.sqrt(np.mean(y**2)))
@@ -42,7 +45,7 @@ def agc_step(
 
 
 @source(total=lambda frames, **_: frames)
-def far_end(frames: int = 60, seed: int = 1) -> Sig[float, N]:
+def far_end(frames: int = 60, seed: int = 1) -> Iterator[Sig[float, N]]:
     """The far-end (loudspeaker) signal: coloured noise."""
     rng = np.random.default_rng(seed)
     for k in range(frames):
@@ -74,7 +77,7 @@ room.zi = np.zeros(TAPS - 1)
 @block
 def lms_filter(
     mic: Sig[float, N], ref: Sig[float, N], w: Sig[float, W]
-) -> (Sig[float, N], Sig[dict]):
+) -> tuple[Sig[float, N], Sig[dict]]:
     """Estimate the echo with the current weights and subtract it. Passes what the
     update block needs (the regressor matrix and the error) along as a dict."""
     R = np.lib.stride_tricks.sliding_window_view(
@@ -92,7 +95,7 @@ lms_filter.tail = np.zeros(TAPS - 1)
 @block
 def lms_update(
     err: Sig[float, N], aux: Sig[dict], mu: float = 0.02
-) -> (Sig[float, N], Sig[float, W]):
+) -> tuple[Sig[float, N], Sig[float, W]]:
     """Normalised LMS: new weights from the regressors and the error — the state that
     flows back around the loop to lms_filter on the next frame."""
     R, e, w = aux["R"], aux["err"], aux["w"]
@@ -107,15 +110,15 @@ lms_update.last_w = None
 
 @block
 def split_inputs(
-    pair: (Sig[float, N], Sig[float, N]), w: Sig[float, W]
-) -> (Sig[float, N], Sig[float, N], Sig[float, W]):
+    pair: tuple[Sig[float, N], Sig[float, N]], w: Sig[float, W]
+) -> tuple[Sig[float, N], Sig[float, N], Sig[float, W]]:
     """The loop input is ((mic, ref), w); flatten it for lms_filter's three parameters."""
     mic, ref = pair
     return mic, ref, w
 
 
 @block
-def erle(err: Sig[float, N], mic: Sig[float, N]) -> Sig[float, ()]:
+def erle(err: Sig[float, N], mic: Sig[float, N]) -> Sig[float, tuple[()]]:
     """Echo return loss enhancement in dB: how much of the microphone signal was removed."""
     return float(10 * np.log10(np.mean(mic**2) / (np.mean(err**2) + 1e-12)))
 
@@ -157,13 +160,13 @@ if __name__ == "__main__":
             ax.set_title(f"frame {f.prov[-1].seq}"),
         ),
         name="erle_plot",
-        in_type=Sig[float, ()],
+        in_type=Sig[float, tuple[()]],
         figsize=(3, 3),
     )
     out = run(g >> improvement, progress=True)
     e = [round(f.data, 1) for f in out]
     print("ERLE per frame (dB):", e[:5], "...", e[-5:])
-    print("learned taps :", np.round(lms_update.last_w[:8], 2))
+    print("learned taps :", np.round(np.asarray(lms_update.last_w)[:8], 2))
     print("room response:", np.round(room.h[:8], 2))
     print("lineage of the last ERLE value:", [n.op for n in out[-1].prov.chain()])
     print("saved", improvement.save("erle.gif", interval=100))

@@ -30,6 +30,7 @@ __all__ = [
     "Frame",
     "Issue",
     "Provenance",
+    "NO_PROV",
     "Missing",
     "MISSING",
     "frozen",
@@ -243,8 +244,18 @@ class Provenance:
 
         return Provenance.from_dict(json.loads(s))
 
+    def __bool__(self) -> bool:
+        """False only for :data:`NO_PROV`, the lineage of a frame no block has produced."""
+        return bool(self.op) or bool(self.parents)
+
     def __repr__(self) -> str:
         return f"Provenance({self.op!r}, seq={self.seq}, parents={len(self.parents)})"
+
+
+NO_PROV: Provenance = Provenance("")
+"""The empty lineage: what ``Frame(data).prov`` is before any block produced the frame.
+It is falsy (``if f.prov:``), has no parents and renders as ``(no provenance)``, so
+lineage code never needs an ``is None`` branch and ``f.prov.op`` always type-checks."""
 
 
 # --------------------------------------------------------------------------- #
@@ -260,7 +271,11 @@ class Issue:
     level: str = "error"  # "error" | "warning" | "info"
     origin: str = ""  # block name that raised it
     exc: BaseException | None = None
-    prov: Provenance | None = None
+    prov: Provenance = NO_PROV
+
+    def __post_init__(self) -> None:
+        if self.prov is None:  # accepted for compatibility; stored as the empty lineage
+            object.__setattr__(self, "prov", NO_PROV)
 
     @property
     def is_error(self) -> bool:
@@ -283,7 +298,7 @@ class Frame:
     stream: Mapping[str, Any] = field(default_factory=frozen)  # stream-level
     samples: Mapping[str, Any] = field(default_factory=frozen)  # sample-level
     issues: tuple[Issue, ...] = ()
-    prov: Provenance | None = None
+    prov: Provenance = NO_PROV
     parts: tuple["Frame", ...] = ()  # sub-frames of a tuple frame (fan-out / zip)
 
     # -- construction / evolution ------------------------------------------ #
@@ -292,6 +307,8 @@ class Frame:
         object.__setattr__(self, "stream", frozen(self.stream))
         object.__setattr__(self, "samples", frozen(self.samples))
         object.__setattr__(self, "issues", tuple(self.issues))
+        if self.prov is None:  # accepted for compatibility; stored as the empty lineage
+            object.__setattr__(self, "prov", NO_PROV)
 
     def evolve(self, **changes: Any) -> "Frame":
         """Copy with fields replaced. ``meta=``/``stream=``/``samples=`` are *merged*."""
@@ -363,13 +380,13 @@ class Frame:
 
     # -- lineage ----------------------------------------------------------- #
     def lineage(self) -> Iterator[Provenance]:
-        return iter(()) if self.prov is None else self.prov.walk()
+        return iter(()) if not self.prov else self.prov.walk()
 
     def sources(self) -> list[Provenance]:
-        return [] if self.prov is None else self.prov.roots()
+        return [] if not self.prov else self.prov.roots()
 
     def trace(self) -> str:
-        return "(no provenance)" if self.prov is None else self.prov.render()
+        return "(no provenance)" if not self.prov else self.prov.render()
 
     # -- time -------------------------------------------------------------- #
     @property
@@ -499,7 +516,7 @@ class Frame:
             extra.append(f"meta={dict(self.meta)}")
         if self.issues:
             extra.append(f"issues={len(self.issues)}")
-        if self.prov is not None:
+        if self.prov:
             extra.append(f"from={self.prov.op}")
         return f"Frame({ds}" + (", " + ", ".join(extra) if extra else "") + ")"
 

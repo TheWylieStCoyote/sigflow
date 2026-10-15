@@ -13,8 +13,8 @@ What this exercises
   * `on_error="drop"` on a block vs. propagating by default
   * a block that catches its own exception and emits a warning instead of failing
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator
 import numpy as np
 
 from sigflow import MISSING, Frame, Framed, Sig, Stream, block, dsp, run, source, when
@@ -49,7 +49,9 @@ class Device:
 
 
 @source(total=lambda frames, **_: frames)
-def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[float, N]:
+def watchdog(
+    frames: int = 60, max_restarts: int = 5, seed: int = 0
+) -> Iterator[Sig[float, N]]:
     """Read from the device; when it dies, re-open it and continue. The restart count
     rides along as a stream annotation and the frame right after a restart carries a
     warning so downstream (and the lineage) know the stream was interrupted."""

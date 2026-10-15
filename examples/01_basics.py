@@ -1,6 +1,6 @@
 """Basics: declare typed blocks, compose with operators, run, inspect provenance."""
-# mypy: disable-error-code="valid-type, misc, syntax, union-attr, index"
 
+from typing import Iterator, Literal
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, dsp, run, source
@@ -14,13 +14,13 @@ def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
 
 
 @block
-def energy(x: Sig[T, N]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
 # A stream block is a generator: it sees the whole stream and may keep state.
 @block
-def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:
     buf = []
     for x in xs:
         buf.append(x)

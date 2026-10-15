@@ -12,8 +12,8 @@ What this exercises
   * property-style checks across a parameter grid, error-policy behaviour, and
     a regression test pinned to a recorded golden output
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import AsyncIterator, Iterator
 import asyncio
 import os
 import sys
@@ -39,6 +39,7 @@ from sigflow import (
     source,
 )  # noqa: E402
 from sigflow.dims import M, N  # noqa: E402
+from sigflow import SignalType
 
 RATE = 1000.0
 
@@ -59,7 +60,7 @@ def peak_frequency(f: Framed[Sig[float, N]]) -> Sig[dict]:
 
 
 @block
-def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Sig[float, N]:
+def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Iterator[Sig[float, N]]:
     acc = None
     for x in xs:
         acc = x if acc is None else (1 - alpha) * acc + alpha * x
@@ -67,7 +68,9 @@ def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Sig[float, N]:
 
 
 @block
-def rate_limiter(events: Stream[Framed[Sig[dict]]], min_gap: float = 1.0) -> Sig[dict]:
+def rate_limiter(
+    events: Stream[Framed[Sig[dict]]], min_gap: float = 1.0
+) -> Iterator[Sig[dict]]:
     """Drop events that arrive within `min_gap` seconds of the last accepted one."""
     last = -np.inf
     for f in events:
@@ -133,7 +136,7 @@ def test_types_are_enforced_at_build_time():
     with pytest.raises(TypeMismatch):
         dsp.sine() >> peak_frequency >> remove_dc  # dict cannot feed a float vector
     with pytest.raises(TypeMismatch):
-        from_iterable([np.zeros((2, 2))], Sig[float, (M, N)]) >> remove_dc
+        from_iterable([np.zeros((2, 2))], Sig[float, tuple[M, N]]) >> remove_dc
 
 
 def test_every_frame_is_checked_against_the_contract():
@@ -165,7 +168,7 @@ class FakeClock:
 
 
 @source
-async def events(clock: FakeClock, schedule: tuple = ()) -> Sig[dict]:
+async def events(clock: FakeClock, schedule: tuple = ()) -> AsyncIterator[Sig[dict]]:
     """Emit one event per scheduled time, advancing the fake clock to it."""
     for t in schedule:
         clock.tick(t - clock.now)

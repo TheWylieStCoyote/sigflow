@@ -23,20 +23,19 @@ context manager) to flush files.
 """
 
 from __future__ import annotations
-# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 import asyncio
 import csv
 import os
-from typing import Any, Iterator, TypeVar
+from typing import Any, AsyncIterator, Iterator, TypeVar
 
 import numpy as np
 
 from .block import source, tap
+from .dims import N, T
 from .frame import Frame
 from .graph import Block
-from .types import Sig
-from .dims import N, T
+from .types import Sig, SignalType
 
 __all__ = [
     "wav",
@@ -75,11 +74,11 @@ def _frames_of(
 
 @source(
     total=lambda path, n, **_: _wav_frames(path, n),
-    refine=lambda n, **_: Sig[T, (n,)],
+    refine=lambda n, **_: SignalType(T, (n,)),
 )
 def wav(
     path: str, n: int = 1024, channel: int | None = None, float32: bool = True
-) -> Sig[T, N]:
+) -> Iterator[Sig[T, N]]:
     """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one."""
     from scipy.io import wavfile
 
@@ -103,11 +102,11 @@ def _wav_frames(path: str, n: int) -> int | None:
 
 @source(
     total=lambda path, dtype, n, **_: _raw_frames(path, dtype, n),
-    refine=lambda n, dtype, **_: Sig[dtype, (n,)],
+    refine=lambda n, dtype, **_: SignalType(dtype, (n,)),
 )
 def raw(
     path: str, dtype: Any = np.complex64, n: int = 1024, rate: float | None = None
-) -> Sig[T, N]:
+) -> Iterator[Sig[T, N]]:
     """Stream a raw binary file (what a GNU Radio file sink writes), memory-mapped."""
     data = np.memmap(path, dtype=np.dtype(dtype), mode="r")
     yield from _frames_of(data, n, rate, "raw", path)
@@ -120,15 +119,15 @@ def _raw_frames(path: str, dtype: Any, n: int) -> int | None:
         return None
 
 
-@source(refine=lambda n, **_: Sig[T, (n,)])
-def npy(path: str, n: int = 1024, rate: float | None = None) -> Sig[T, N]:
+@source(refine=lambda n, **_: SignalType(T, (n,)))
+def npy(path: str, n: int = 1024, rate: float | None = None) -> Iterator[Sig[T, N]]:
     """Stream a 1-D ``.npy`` array without loading it all (memory-mapped)."""
     data = np.load(path, mmap_mode="r")
     yield from _frames_of(data, n, rate, "npy", path)
 
 
 @source
-def csv_rows(path: str, numeric: bool = True) -> Sig[dict]:
+def csv_rows(path: str, numeric: bool = True) -> Iterator[Sig[dict]]:
     """One dict per row; numeric-looking fields are converted to float when ``numeric``."""
     with open(path, newline="") as fh:
         for i, row in enumerate(csv.DictReader(fh)):
@@ -153,7 +152,7 @@ async def udp(
     host: str = "127.0.0.1",
     count: int | None = None,
     timeout: float | None = None,
-) -> Sig[T, None]:
+) -> AsyncIterator[Sig[T, None]]:
     """Asynchronous UDP receiver: each datagram becomes one frame (array of ``dtype``).
     Stops after ``count`` datagrams, or ``timeout`` seconds of silence."""
     loop = asyncio.get_running_loop()
@@ -190,7 +189,7 @@ async def zmq(
     count: int | None = None,
     timeout: float | None = None,
     connect: bool = True,
-) -> Sig[T, None]:
+) -> AsyncIterator[Sig[T, None]]:
     """Asynchronous ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a
     GNU Radio *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes
     one frame of ``dtype``. ``connect=False`` binds instead of connecting."""

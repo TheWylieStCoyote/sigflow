@@ -25,7 +25,7 @@ import inspect
 import queue
 import threading
 import time
-from typing import Any, AsyncIterator, Callable, Iterator, cast
+from typing import Any, AsyncIterator, Callable, Iterator, NoReturn, cast
 
 import numpy as np
 
@@ -55,6 +55,13 @@ from .types import Env, TypeMismatch
 __all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
 
 _DONE = object()
+
+
+def _reraise(failure: "asyncio.Future[Any]") -> NoReturn:
+    """Raise the error a member recorded in the shared failure future."""
+    exc = failure.exception()
+    assert exc is not None
+    raise exc
 
 
 def _unwrap(item: Any) -> Any:
@@ -514,7 +521,7 @@ class Runner:
                 assert direct_stream is not None
                 async for f in direct_stream:
                     if failure.done():
-                        raise failure.exception()  # type: ignore[misc]
+                        _reraise(failure)
                     if sel is not None:
                         f = _select_frame(f, sel)
                     if stats is None:
@@ -527,17 +534,17 @@ class Runner:
                             )
                         )
                 if failure.done():
-                    raise failure.exception()  # type: ignore[misc]
+                    _reraise(failure)
             elif len(g.outputs) == 1:
                 q = out_qs[g.outputs[0].name]
                 key = g.outputs[0].key
                 while True:
                     if failure.done():
-                        raise failure.exception()  # type: ignore[misc]
+                        _reraise(failure)
                     it = await q.get()
                     if it is _DONE:
                         if failure.done():
-                            raise failure.exception()  # type: ignore[misc]
+                            _reraise(failure)
                         return
                     frame: Frame = _unwrap(it)
                     if key is not None:
@@ -829,7 +836,7 @@ class Runner:
                 # the selected branch comes first so lineage follows it; the tuple node stays reachable
                 if node.single:
                     part = parts[node.indices[0]]
-                    parents = _unique(p for p in (part.prov, f.prov) if p is not None)
+                    parents = _unique(p for p in (part.prov, f.prov) if p)
                     yield part.evolve(prov=Provenance(node.name, {}, parents, seq))
                 else:
                     chosen = [parts[i] for i in node.indices]
@@ -1575,11 +1582,11 @@ async def _drain(
 ) -> AsyncIterator[Frame]:
     while True:
         if failure is not None and failure.done():
-            raise failure.exception()  # type: ignore[misc]
+            _reraise(failure)
         it = await q.get()
         if it is _DONE:
             if failure is not None and failure.done():
-                raise failure.exception()  # type: ignore[misc]
+                _reraise(failure)
             return
         yield _unwrap(it)
 

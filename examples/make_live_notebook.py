@@ -34,13 +34,14 @@ The same things are available from code: `run.pause()`, `run.step(5)`, `run.set_
 `run.set_recording(True)`, `run.snapshot()`, `knob.value = ...`.""")
 
 code("""import sys, pathlib, time
-try:
-    import sigflow
-except ModuleNotFoundError:
-    sys.path.insert(0, str(pathlib.Path.cwd().resolve().parent / "src")); import sigflow
+_src = pathlib.Path.cwd().resolve().parent / "src"  # prefer the checkout next to this notebook
+if (_src / "sigflow").is_dir():  # first, ahead of any installed or PYTHONPATH copy
+    sys.path[:] = [str(_src)] + [p for p in sys.path if p != str(_src)]
+import sigflow
 import numpy as np
 %matplotlib inline
 from sigflow import Sig, Stream, Frame, Framed, Knob, block, source, run, port, dashboard, require_widgets
+from typing import Iterator, Literal
 from sigflow.dims import N
 from sigflow import dsp, plot
 require_widgets()          # green = panels will work; red = what to install""")
@@ -65,7 +66,7 @@ A tone drifts across the band. Tick **throttle** and drag **max fps** down to ~5
 frame by frame; the spectrum and waterfall are refreshed inside the panel. This source declares its
 length (`total=`), so the progress bar shows percent.""")
 code("""@source(total=lambda frames, **_: frames)
-def drifting_tone(rate: float = 48_000, n: int = 1024, frames: int = 3000) -> Sig[float, N]:
+def drifting_tone(rate: float = 48_000, n: int = 1024, frames: int = 3000) -> Iterator[Sig[float, N]]:
     t0 = 0
     for k in range(frames):
         f = 6000 + 4000 * np.sin(2 * np.pi * k / 150)                 # sweeps 2-10 kHz every 150 frames
@@ -95,7 +96,7 @@ notch  = Knob(True, "notch 5 kHz")
 floor  = Knob(-70.0, "plot floor dB", min=-120.0, max=-10.0, step=5.0)
 
 @source
-def tunable_tone(freq: Knob, rate: float = 48_000, n: int = 1024, frames: int = 10**9) -> Sig[float, N]:
+def tunable_tone(freq: Knob, rate: float = 48_000, n: int = 1024, frames: int = 10**9) -> Iterator[Sig[float, N]]:
     t0 = 0
     for k in range(frames):
         t = (np.arange(n) + t0) / rate; t0 += n
@@ -168,7 +169,7 @@ md("""## 7. Stopping on a condition
 `start(sink=fn)` calls `fn` for every frame on the runtime thread; it may call `run.stop()`.
 `run.wait(timeout)` blocks the cell until the run ends.""")
 code("""@source
-def random_walk(frames: int = 10**9, seed: int = 0) -> Sig[float, ()]:
+def random_walk(frames: int = 10**9, seed: int = 0) -> Iterator[Sig[float,tuple[()]]]:
     rng = np.random.default_rng(seed); x = 0.0
     for _ in range(frames):
         x += rng.normal(); yield x

@@ -31,10 +31,11 @@ Existing library functions are reused without modification::
 
 from __future__ import annotations
 
+import collections.abc
 import functools
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import Any, Callable, Mapping, TYPE_CHECKING, get_args, get_origin
 
 from .frame import Frame
 from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
@@ -102,6 +103,8 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
         return inner, False, True
     if is_signal_type(annotation):
         return annotation, False, False
+    if get_origin(annotation) is tuple:  # tuple[Sig[...], Sig[...]]
+        annotation = get_args(annotation)
     if (
         isinstance(annotation, tuple)
         and annotation
@@ -117,15 +120,35 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
     return None
 
 
+_ITERATORS = (
+    collections.abc.Iterator,
+    collections.abc.AsyncIterator,
+    collections.abc.Generator,
+    collections.abc.AsyncGenerator,
+    collections.abc.Iterable,
+    collections.abc.AsyncIterable,
+)
+
+
+def _unwrap_iterator(annotation: Any) -> Any:
+    """``Iterator[X]`` / ``AsyncIterator[X]`` (a generator block's element type) -> X."""
+    if get_origin(annotation) in _ITERATORS and get_args(annotation):
+        return get_args(annotation)[0]
+    return annotation
+
+
 def _output_type(annotation: Any) -> Any:
     if annotation is inspect.Signature.empty or annotation is None:
         return SignalType()
+    annotation = _unwrap_iterator(annotation)
     if isinstance(annotation, StreamType):
         annotation = annotation.item
     if isinstance(annotation, _FramedMarker):
         return annotation.item
     if annotation is Frame:
         return SignalType()
+    if get_origin(annotation) is tuple:  # tuple[Sig[...], Sig[...]]
+        annotation = get_args(annotation)
     if isinstance(annotation, tuple):
         return TupleType(tuple(as_type(a) for a in annotation))
     return as_type(annotation)

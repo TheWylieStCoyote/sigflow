@@ -7,8 +7,8 @@ rate and physical units.  Types are written with a subscript syntax that reads
 like a type annotation::
 
     Sig[np.complex64, N]             # 1-D complex vector of symbolic length N
-    Sig[float, (M, N)]             # M x N real matrix
-    Sig[float, (1024,), 48_000, Literal["V"]]   # fixed-length frame at 48 kHz, in volts
+    Sig[float, tuple[M, N]]             # M x N real matrix
+    Sig[float, tuple[Literal[1024]], Literal[48_000], Literal["V"]]   # fixed-length frame at 48 kHz, in volts
     Sig[dict]                          # any Python dict (non-array payload)
     Sig[Any]                           # anything at all
 
@@ -18,7 +18,6 @@ that ``"N"`` means the same thing everywhere in a graph.
 """
 
 from __future__ import annotations
-# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
@@ -51,7 +50,9 @@ __all__ = [
 ]
 
 # A dimension is a fixed int, a symbolic name (str), or None (= any length).
-Dim = int | str | None
+Dim = (
+    int | str | type | None
+)  # ``type``: a ``sigflow.dims`` symbol as a checker sees it
 
 
 class TypeMismatch(TypeError):
@@ -223,10 +224,15 @@ def _norm_dtype(dt: Any) -> Any:
 def _norm_shape(shape: Any) -> tuple[Dim, ...] | None:
     if shape is None or shape is Any:
         return None
+    if get_origin(shape) is tuple:  # tuple[M, N], tuple[()], tuple[Literal[1024]]
+        args = get_args(shape)
+        shape = () if args == ((),) else args
+    shape = _unlit(shape)
     if isinstance(shape, (str, int)):
         return (shape,)
     out: list[Dim] = []
     for d in shape:
+        d = _unlit(d)
         if d is None or isinstance(d, (int, str)):
             out.append(d)
         else:
@@ -276,6 +282,8 @@ class SignalType:
     def __post_init__(self) -> None:
         object.__setattr__(self, "dtype", _norm_dtype(self.dtype))
         object.__setattr__(self, "shape", _norm_shape(self.shape))
+        object.__setattr__(self, "rate", _unlit(self.rate))
+        object.__setattr__(self, "units", _unlit(self.units))
 
     # -- derived views ----------------------------------------------------- #
     @property
@@ -389,21 +397,21 @@ class SignalType:
 
 
 if TYPE_CHECKING:
-    # To a static type checker a block parameter annotated ``Sig[...]`` is a NumPy
-    # array, so block bodies type-check (``x * gain``, ``x.mean()``); at runtime ``Sig``
-    # is :class:`SignalType`, whose subscription builds the contract. The symbolic
-    # dimension strings ("N") are the one thing checkers cannot read, which is why the
-    # package's mypy config disables ``name-defined`` / ``valid-type``.
+    # ``Sig[...]`` is a *contract*: what a block body returns for it may be an array, a
+    # NumPy scalar, a float, a dict or a Frame, so to a checker it is ``Any`` carrying the
+    # DSL's parameters. Signatures then type-check as written (``Sig[float, N]``,
+    # ``Sig[T, tuple[M, N]]``, ``Sig[float, N, None, Literal["V"]]``) and bodies are not
+    # second-guessed; at runtime ``Sig`` is :class:`SignalType`, whose subscription
+    # builds the contract. ``Stream[X]`` is an iterable of X to a checker.
     from typing import Generic
 
-    from typing_extensions import TypeVarTuple, Unpack
+    from typing_extensions import TypeAliasType, TypeVarTuple, Unpack
 
     _Ts = TypeVarTuple("_Ts")
 
-    class Sig(np.ndarray, Generic[Unpack[_Ts]]):  # type: ignore[misc,type-arg]
-        ...
+    Sig = TypeAliasType("Sig", Any, type_params=(_Ts,))
 
-    class Stream(Generic[Unpack[_Ts]]):  # Stream[X] is an iterable of X to a checker
+    class Stream(Generic[Unpack[_Ts]]):
         def __iter__(self) -> Any: ...
         def __aiter__(self) -> Any: ...
 else:
@@ -436,12 +444,12 @@ class TupleType:
         return TupleType(tuple(t.resolve(env) for t in self.items))
 
     def check(self, value: Any, env: Env | None = None, where: str = "") -> Env:
-        env = env if env is not None else Env()
+        bound: Env = env if env is not None else Env()
         if not isinstance(value, tuple) or len(value) != len(self.items):
             raise TypeMismatch(f"{where}: expected a {len(self.items)}-tuple")
         for i, (t, v) in enumerate(zip(self.items, value)):
-            env = t.check(v, env, f"{where}[{i}]")
-        return env
+            bound = t.check(v, bound, f"{where}[{i}]")
+        return bound
 
     def __str__(self) -> str:
         return "(" + ", ".join(str(t) for t in self.items) + ")"
@@ -489,6 +497,8 @@ def _as_type(obj: Any) -> Any:
         return obj
     if obj is Any or obj is None:
         return SignalType()
+    if get_origin(obj) is tuple:  # tuple[Sig[...], Sig[...]]
+        obj = get_args(obj)
     if isinstance(obj, tuple):
         return TupleType(tuple(_as_type(o) for o in obj))
     if isinstance(obj, (type, np.dtype, str)):
@@ -692,9 +702,9 @@ def describe(t: Any) -> str:
 # Handy aliases for linear-algebra primitives
 # --------------------------------------------------------------------------- #
 
-Scalar = Sig[float, ()]
-Vector = Sig[float, (N,)]
-Matrix = Sig[float, (M, N)]
+Scalar = Sig[float, tuple[()]]
+Vector = Sig[float, tuple[N]]
+Matrix = Sig[float, tuple[M, N]]
 Tensor = Sig[float, None]
-CVector = Sig[complex, (N,)]
-CMatrix = Sig[complex, (M, N)]
+CVector = Sig[complex, tuple[N]]
+CMatrix = Sig[complex, tuple[M, N]]

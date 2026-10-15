@@ -1,6 +1,6 @@
 """Stream-rate contracts (ratio) and keyed routing (switch) — 0.4 features."""
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator, Literal
 from fractions import Fraction
 
 import numpy as np
@@ -27,7 +27,7 @@ from sigflow.ratio import as_ratio
 
 
 @source
-def ramp(count: int = 8, n: int = 4, rate: float = 100.0) -> Sig[float, N]:
+def ramp(count: int = 8, n: int = 4, rate: float = 100.0) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield Frame(
             np.full(n, float(i)),
@@ -91,13 +91,13 @@ def test_block_ratios_and_pipeline_composition():
     assert "[1:4]" in (src >> dsp.chunk(256)).describe()
 
     @block(ratio="N:1")
-    def gate(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+    def gate(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         for x in xs:
             if x[0] > 2:
                 yield x
 
     @block
-    def unknown(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+    def unknown(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         yield from xs
 
     assert (ramp() >> gate).ratio == Ratio.DOWN and (
@@ -131,8 +131,8 @@ def test_builder_graph_tracks_rates_per_member():
     pair = g.add(
         block(
             lambda x, y: x.mean() + y,
-            inputs=(Sig[float, N], Sig[float, ()]),
-            outputs=Sig[float, ()],
+            inputs=(Sig[float, N], Sig[float, tuple[()]]),
+            outputs=Sig[float, tuple[()]],
             name="pair",
         )
     )
@@ -149,7 +149,7 @@ def test_builder_graph_tracks_rates_per_member():
 
 def test_strict_run_enforces_declared_ratio_and_expected_count():
     @block(ratio="1:1")
-    def liar(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+    def liar(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         for x in xs:
             yield x
             yield x
@@ -210,7 +210,7 @@ def test_switch_branches_are_real_streams():
     @block(ratio="1:1")
     def accum(
         xs: Stream[Sig[float, N]],
-    ) -> Sig[float, N]:  # stateful: only sees its own frames
+    ) -> Iterator[Sig[float, N]]:  # stateful: only sees its own frames
         acc = np.zeros(4)
         for x in xs:
             acc = acc + x

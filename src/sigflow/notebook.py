@@ -120,7 +120,7 @@ def frame_html(frame: Any) -> str:
         rows.append(
             f"<tr><td style='{_TD}'><b>issues</b></td><td style='{_TD};color:#c33'>{body}</td></tr>"
         )
-    if frame.prov is not None:
+    if frame.prov:
         body = (
             html.escape(frame.trace())
             .replace("\n", "<br>")

@@ -79,7 +79,7 @@ class Lineage:
         c: Counter = Counter()
         for f in self.failed():
             for issue in f.errors:
-                root = issue.prov[-1] if issue.prov is not None else None
+                root = issue.prov[-1] if issue.prov else None
                 c[
                     (issue.origin, root.op if root else "?", root.seq if root else None)
                 ] += 1

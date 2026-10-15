@@ -41,7 +41,6 @@ What this exercises
   * `start()`-based concurrency and polling several Run handles
   * `f.prov["channel"].params` to recover the configuration from a result
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import importlib.util
 import os

@@ -6,12 +6,11 @@ to write stateful stream blocks as plain generators.
 """
 
 from __future__ import annotations
-# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 import asyncio
 import time as _time
 from fractions import Fraction
-from typing import Any, Literal
+from typing import Any, AsyncIterator, Iterator, Literal
 
 import numpy as np
 import scipy.signal as ss
@@ -20,7 +19,7 @@ from .block import Framed, block, source, tap
 from .frame import Frame
 from .graph import Block
 from .ratio import Ratio
-from .types import Sig, Stream
+from .types import Sig, SignalType, Stream
 from .dims import K, M, N, T
 
 complex_ = complex
@@ -75,7 +74,7 @@ Complex = Sig[complex, N]
 # --------------------------------------------------------------------------- #
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
 def sine(
     freq: float = 1000.0,
     rate: float = 48_000.0,
@@ -83,7 +82,7 @@ def sine(
     frames: int = 10,
     amplitude: float = 1.0,
     phase: float = 0.0,
-) -> Sig[float, N]:
+) -> Iterator[Sig[float, N]]:
     """Continuous sine wave delivered in frames of ``n`` samples."""
     t0 = 0
     for i in range(frames):
@@ -97,7 +96,7 @@ def sine(
 
 
 @source(
-    refine=lambda n, complex, **_: Sig[complex_ if complex else float, (n,)],
+    refine=lambda n, complex, **_: SignalType(complex_ if complex else float, (n,)),
     total=lambda frames, **_: frames,
 )
 def noise(
@@ -107,7 +106,7 @@ def noise(
     seed: int | None = None,
     rate: float = 48_000.0,
     complex: bool = False,
-) -> Sig[float, N]:
+) -> Iterator[Sig[float, N]]:
     """White Gaussian noise frames."""
     rng = np.random.default_rng(seed)
     for i in range(frames):
@@ -117,14 +116,14 @@ def noise(
         yield Frame(x, meta={"seq": i}, stream={"rate": rate, "source": "noise"})
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
 def chirp(
     f0: float = 100.0,
     f1: float = 5000.0,
     rate: float = 48_000.0,
     n: int = 1024,
     frames: int = 10,
-) -> Sig[float, N]:
+) -> Iterator[Sig[float, N]]:
     """Linear chirp sweeping f0 -> f1 across all frames (computed lazily, frame by frame)."""
     t1 = n * frames / rate
     for i in range(frames):
@@ -136,8 +135,8 @@ def chirp(
         )
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
-def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Sig[float, N]:
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
+def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Iterator[Sig[float, N]]:
     for i in range(frames):
         x = np.zeros(n)
         if i == 0:
@@ -146,7 +145,9 @@ def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Sig[float, N]:
 
 
 @source
-def from_array(x: Any, n: int | None = None, rate: float | None = None) -> Sig[T, N]:
+def from_array(
+    x: Any, n: int | None = None, rate: float | None = None
+) -> Iterator[Sig[T, N]]:
     """Emit an array as one frame, or sliced into frames of ``n`` samples."""
     x = np.asarray(x)
     stream = {"rate": rate} if rate else {}
@@ -158,7 +159,7 @@ def from_array(x: Any, n: int | None = None, rate: float | None = None) -> Sig[T
 
 
 @source(total=lambda count, **_: count)
-async def ticker(period: float = 0.1, count: int = 10) -> Sig[dict]:
+async def ticker(period: float = 0.1, count: int = 10) -> AsyncIterator[Sig[dict]]:
     """Asynchronous source: a dict event every ``period`` seconds (e.g. telemetry)."""
     for i in range(count):
         await asyncio.sleep(period)
@@ -204,8 +205,8 @@ def _reframe_ratio(
     return Ratio.of(1, Fraction(n_in, hop or n)) if n_in else Ratio.ANY
 
 
-@block(refine=lambda n, **_: Sig[T, (n,)], ratio=_reframe_ratio)
-def chunk(xs: Stream[Framed[Sig[T, None]]], n: int = 256) -> Sig[T, N]:
+@block(refine=lambda n, **_: SignalType(T, (n,)), ratio=_reframe_ratio)
+def chunk(xs: Stream[Framed[Sig[T, None]]], n: int = 256) -> Iterator[Sig[T, N]]:
     """Re-frame a stream of 1-D arrays into fixed-length frames of ``n`` samples (time kept)."""
     r = _Reframer()
     for f in xs:
@@ -214,8 +215,10 @@ def chunk(xs: Stream[Framed[Sig[T, None]]], n: int = 256) -> Sig[T, N]:
             yield r.take(f, n, n)
 
 
-@block(refine=lambda n, **_: Sig[T, (n,)], ratio=_reframe_ratio)
-def overlap(xs: Stream[Framed[Sig[T, N]]], n: int = 256, hop: int = 128) -> Sig[T, M]:
+@block(refine=lambda n, **_: SignalType(T, (n,)), ratio=_reframe_ratio)
+def overlap(
+    xs: Stream[Framed[Sig[T, N]]], n: int = 256, hop: int = 128
+) -> Iterator[Sig[T, M]]:
     """Sliding windows of length ``n`` advanced by ``hop`` samples; each window's ``t0``
     is exact (computed from the sample position), not inherited from the input chunk."""
     r = _Reframer()
@@ -226,10 +229,12 @@ def overlap(xs: Stream[Framed[Sig[T, N]]], n: int = 256, hop: int = 128) -> Sig[
 
 
 @block(
-    refine=lambda count, **_: Sig[T, (count, N)],
+    refine=lambda count, **_: SignalType(T, (count, N)),
     ratio=lambda count, **_: Ratio.of(count, 1),
 )
-def buffer(xs: Stream[Framed[Sig[T, N]]], count: int = 8) -> Sig[T, (K, N)]:
+def buffer(
+    xs: Stream[Framed[Sig[T, N]]], count: int = 8
+) -> Iterator[Sig[T, tuple[K, N]]]:
     """Stack ``count`` consecutive frames into a matrix (K x N); ``t0`` of the first row."""
     buf: list[Frame] = []
     for f in xs:
@@ -243,7 +248,7 @@ def buffer(xs: Stream[Framed[Sig[T, N]]], count: int = 8) -> Sig[T, (K, N)]:
 
 
 @block(ratio=lambda every, **_: Ratio.of(every, 1))
-def decimate(xs: Stream[Sig[T, N]], every: int = 2) -> Sig[T, N]:
+def decimate(xs: Stream[Sig[T, N]], every: int = 2) -> Iterator[Sig[T, N]]:
     """Keep one frame in ``every`` (frames keep their own time)."""
     x: Any
     for i, x in enumerate(xs):
@@ -252,7 +257,9 @@ def decimate(xs: Stream[Sig[T, N]], every: int = 2) -> Sig[T, N]:
 
 
 @block(ratio="1:1")
-def running_mean(xs: Stream[Sig[float, N]], alpha: float = 0.1) -> Sig[float, N]:
+def running_mean(
+    xs: Stream[Sig[float, N]], alpha: float = 0.1
+) -> Iterator[Sig[float, N]]:
     """Exponential moving average across frames (stateful stream block)."""
     acc = None
     for x in xs:
@@ -263,7 +270,7 @@ def running_mean(xs: Stream[Sig[float, N]], alpha: float = 0.1) -> Sig[float, N]
 
 
 @block(ratio="1:1")
-def timestamp(xs: Stream[Frame]) -> Frame:
+def timestamp(xs: Stream[Frame]) -> Iterator[Frame]:
     """Annotate frames with a running sequence number, wall-clock arrival time and — when
     the stream has a rate and the frame no ``t0`` yet — a ``t0`` from the sample count."""
     pos = 0
@@ -319,7 +326,7 @@ def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 
-@block(refine=lambda to, **_: Sig[T, N, None, to])
+@block(refine=lambda to, **_: SignalType(T, (N,), None, to))
 def to_units(
     f: Framed[Sig[T, N]], to: str = "V", assume: str | None = None
 ) -> Sig[T, N, None, None]:
@@ -356,7 +363,7 @@ def lfilter(x: Sig[float, N], b: Any = (1.0,), a: Any = (1.0,)) -> Sig[float, N]
 
 
 @block(ratio="1:1")
-def fir(xs: Stream[Sig[float, N]], taps: Any = (1.0,)) -> Sig[float, N]:
+def fir(xs: Stream[Sig[float, N]], taps: Any = (1.0,)) -> Iterator[Sig[float, N]]:
     """Streaming FIR filter that carries filter state across frames."""
     b = np.asarray(taps, dtype=float)
     zi = np.zeros(len(b) - 1)
@@ -376,12 +383,12 @@ def resample(f: Framed[Sig[float, N]], up: int = 1, down: int = 1) -> Sig[float,
 
 
 @block
-def energy(x: Sig[T, N]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
 @block
-def rms(x: Sig[T, N]) -> Sig[float, ()]:
+def rms(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sqrt(np.mean(np.abs(x) ** 2)))
 
 

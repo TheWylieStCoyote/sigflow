@@ -1,4 +1,4 @@
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
+from typing import Iterator, Literal
 import os
 
 import numpy as np
@@ -45,11 +45,11 @@ def test_collect_sink():
 
 def test_linalg_shape_contracts():
     @source
-    def A() -> Sig[float, (3, 4)]:
+    def A() -> Iterator[Sig[float, tuple[Literal[3], Literal[4]]]]:
         yield np.arange(12.0).reshape(3, 4)
 
     @source
-    def b() -> Sig[float, (4,)]:
+    def b() -> Iterator[Sig[float, tuple[Literal[4]]]]:
         yield np.ones(4)
 
     out = run((A() & b()) >> linalg.matvec)

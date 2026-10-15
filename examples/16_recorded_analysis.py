@@ -14,7 +14,6 @@ What this exercises
   * provenance on offline results points at the in-memory source and offset
   * a scrubber built from `Knob` + `on_change` driving a plot block
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import numpy as np
 

@@ -7,22 +7,30 @@ New
 - `sigflow.dims`: dimension and dtype-variable symbols (`N`, `M`, `T`, the
   whole alphabet; also exported from `sigflow`). `Sig[float, N]` builds the
   same contract as `Sig[float, "N"]`, which keeps working, but checkers read
-  `N` as a type instead of an undefined name. Rate and units accept
-  `Literal[48_000]` / `Literal["V"]` for the same reason. The package, tests,
-  examples and docs use the symbol spelling; the `name-defined` /
-  `reportUndefinedVariable` exemptions are gone.
+  `N` as a type instead of an undefined name.
+- Checker-readable spellings for the rest of the DSL, all equivalent at
+  runtime to the old ones: shapes `tuple[M, N]`, `tuple[()]`,
+  `tuple[Literal[1024]]`; rate and units `Literal[48_000]`, `Literal["V"]`;
+  several outputs `tuple[Sig[...], Sig[...]]`; generator blocks
+  `Iterator[Sig[...]]` / `AsyncIterator[...]`; a type built from configuration
+  (`refine=`) as a call, `SignalType(float, (n,), rate)`.
+- `NO_PROV`: every frame carries a `Provenance`; the empty one is falsy and
+  renders as `(no provenance)`.
 
 Changed
 
-- Static typing: the package-wide mypy error-code exemptions are replaced by
-  per-module overrides for the DSL-heavy modules (`dsp`, `linalg`, `io`,
-  `plot`, `types`); everything else is checked in full, and a `[tool.pyright]`
-  configuration is added; tests and examples carry a matching mypy header
-  line, and `mypy src/sigflow tests examples` plus `pyright` gate CI.
-  `Frame.save` / `Frame.load` and `Provenance.to_dict` / `to_json` /
-  `from_dict` / `from_json` are declared on the classes instead of attached at
-  import time, so editors see them. The `draw(ax, data, frame)` callback of
-  `plot.custom` may return a value.
+- `Frame.prov` and `Issue.prov` are `Provenance`, never `None` (passing `None`
+  still works and stores `NO_PROV`); test with `if f.prov:` rather than
+  `is None`.
+- Under `TYPE_CHECKING`, `Sig` is a variadic type alias to `Any` rather than an
+  `ndarray` subclass: block bodies are no longer checked as NumPy code, and
+  returning an array, scalar or dict for a `Sig` output is no longer an error.
+- The package, tests, examples, notebooks and docs use the new spellings. No
+  mypy error codes are disabled anywhere; `mypy src/sigflow tests examples`
+  and `pyright` (standard mode) gate CI. `Frame.save` / `Frame.load` and
+  `Provenance.to_dict` / `to_json` / `from_dict` / `from_json` are declared on
+  the classes instead of attached at import time, so editors see them. The
+  `draw(ax, data, frame)` callback of `plot.custom` may return a value.
 
 ## 0.4.0
 

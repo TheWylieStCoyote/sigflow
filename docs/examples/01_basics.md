@@ -8,8 +8,8 @@
 
 ```python
 """Basics: declare typed blocks, compose with operators, run, inspect provenance."""
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator, Literal
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, dsp, run, source
@@ -23,13 +23,13 @@ def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
 
 
 @block
-def energy(x: Sig[T, N]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
 # A stream block is a generator: it sees the whole stream and may keep state.
 @block
-def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:
     buf = []
     for x in xs:
         buf.append(x)
@@ -72,13 +72,13 @@ if __name__ == "__main__":
 
     # Type errors are raised while *building* the graph:
     try:
-        dsp.sine() >> energy >> scale
+        _ = dsp.sine() >> energy >> scale
     except TypeMismatch as e:
         print("\nrejected:", e)
 
     # Dimensions derived from configuration are checked too:
     try:
-        (dsp.sine(n=64) & dsp.sine(n=128)) >> (lambda ab: ab)
+        _ = (dsp.sine(n=64) & dsp.sine(n=128)) >> (lambda ab: ab)
         print(((dsp.sine(n=64) & dsp.noise(n=64)) >> scale).describe())
     except TypeMismatch as e:
         print("rejected:", e)

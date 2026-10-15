@@ -39,28 +39,13 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.10"
 ignore_missing_imports = true
-
-# The Sig[...] DSL puts runtime values (dimension strings, shape tuples) where a
-# checker expects types, and a block's return annotation is a contract rather than
-# the body's Python return type. Until the DSL is spelled in checker-readable form
-# (planned for 0.5.0) the modules written in it carry these exemptions; the core
-# (graph, runtime, frame, builder, ratio, persist, ...) is checked in full.
-[[tool.mypy.overrides]]
-module = ["sigflow.dsp", "sigflow.linalg", "sigflow.io", "sigflow.plot", "sigflow.types"]
-disable_error_code = ["valid-type", "misc", "syntax", "return-value"]
+mypy_path = "src"             # resolve sigflow from this checkout, installed or not
 
 [tool.pyright]
 pythonVersion = "3.10"
 typeCheckingMode = "standard"
 include = ["src", "tests", "examples"]
+extraPaths = [
+  "src",
+] # resolve sigflow from this checkout, whatever interpreter is selected
 reportMissingModuleSource = false
-# The same five modules carry a "# pyright:" header line. Tests and examples are
-# written in the DSL too, so they get the same exemptions by directory, plus the
-# two Optional rules that `Frame.prov: Provenance | None` trips on every lineage
-# access (to be addressed with the DSL in 0.5.0). For mypy, every test and example
-# file carries a "# mypy: disable-error-code=..." header with the same codes.
-executionEnvironments = [
-  { root = "tests", reportInvalidTypeForm = false, reportReturnType = false, reportGeneralTypeIssues = false, reportOptionalMemberAccess = false, reportOptionalSubscript = false },
-  { root = "examples", reportInvalidTypeForm = false, reportReturnType = false, reportGeneralTypeIssues = false, reportOptionalMemberAccess = false, reportOptionalSubscript = false },
-  { root = "src" },
-]

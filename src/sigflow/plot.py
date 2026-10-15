@@ -18,7 +18,6 @@ Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one fr
 """
 
 from __future__ import annotations
-# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from typing import Any, Callable
 

@@ -15,7 +15,7 @@ def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 @block
-def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:   # a stateful stream block
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:   # a stateful stream block
     buf = []
     for x in xs:
         buf.append(x)
@@ -297,8 +297,8 @@ signals — exposes **output ports**, selected with the subscript operator:
 cov >> linalg.eigh[0] >> plot.line()              # eigenvalues only
 src >> (fft >> power_db | rms | peak)["rms"]      # a fan-out branch by name
 src >> (fft >> power_db | rms | peak)[0, 2]       # a tuple of two ports; [1:] also works
-eigh = block(np.linalg.eigh, inputs=Sig[T, (N, N)],
-             outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]})
+eigh = block(np.linalg.eigh, inputs=Sig[T, tuple[N, N]],
+             outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]})
 mats >> eigh["vecs"]                              # named ports on a wrapped library function
 ```
 
@@ -502,24 +502,23 @@ different frame counts instead of silently stopping at the shortest.
 ## Static typing
 
 `Sig[...]` and `Stream[...]` are runtime objects, a small DSL that unification
-understands. Under `TYPE_CHECKING` `Sig` is an `ndarray` subclass and `Stream`
-an iterable, so a block body reads as NumPy code (`x.mean()`, `x[1:]`, `x * 2`
-all check) and `Framed[...]` reads as `Frame`. Dimensions and dtype variables
-are spelled as symbols (`Sig[float, N]`, from `sigflow.dims`) and units as
-`Literal["V"]`, both of which checkers read as types. What they cannot read yet
-is the rest of the DSL: shape tuples and tuple return annotations are not type
-expressions, generator blocks are annotated with their element type, and an
-array returned from a block does not satisfy a `Sig` return type. Those
-spellings live in `dsp`, `linalg`, `io`, `plot` and `types`, which carry the
-matching exemptions (per-module mypy overrides in `pyproject.toml` and a
-`# pyright:` header line); the rest of the package is checked in full by both
-checkers. Tests and examples are written in the DSL too: `[tool.pyright]` grants
-them the same exemptions by directory, each file carries a matching
-`# mypy: disable-error-code=...` header, and the few remaining DSL-caused
-lines are marked `# type: ignore[...]`, so `mypy src/sigflow tests examples`
-and `pyright` are both clean and gate CI. A checker-readable spelling of the
-DSL (dimension symbols, `tuple[M, N]`, `Iterator[Sig[...]]`) is planned for
-0.5.0 and removes those exemptions.
+understands, and they are spelled so that mypy and pyright read them as types:
+dimensions and dtype variables are symbols from `sigflow.dims` (`Sig[float, N]`,
+`Sig[T, N]`), shapes are `tuple[M, N]` / `tuple[()]` / `tuple[Literal[1024]]`,
+rate and units are `Literal[48_000]` / `Literal["V"]`, several outputs are
+`tuple[Sig[...], Sig[...]]`, and a generator block returns `Iterator[Sig[...]]`
+(`AsyncIterator` for async). A type built from configuration values, as in a
+`refine=` hook, is a call: `SignalType(float, (n,), rate)`. Under
+`TYPE_CHECKING` `Sig` is a variadic type alias to `Any`, because a `Sig`
+annotation is a contract the runtime checks against frames, not the Python type
+of what the body returns (an array, a float, a dict or a `Frame`); `Stream[X]`
+is an iterable of `X` and `Framed[X]` is a `Frame`. Every frame carries a
+`Provenance` (the empty, falsy `NO_PROV` until a block produces it), so lineage
+access needs no `None` guards. The package ships `py.typed`; `mypy src/sigflow
+tests examples` and `pyright` run with no error codes disabled and gate CI. The
+older string spellings (`Sig[float, "N"]`, `("M", "N")`, a bare `Sig[...]` on a
+generator) still build the same contracts at runtime, but checkers cannot read
+them.
 
 ## Documentation site
 

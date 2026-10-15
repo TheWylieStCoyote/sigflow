@@ -1,4 +1,4 @@
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
+from typing import Iterator, Literal
 import os
 
 import numpy as np
@@ -23,7 +23,7 @@ from sigflow.dims import N
 
 
 @source
-def ramp(count: int = 6, n: int = 3) -> Sig[float, N]:
+def ramp(count: int = 6, n: int = 3) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield np.full(n, float(i))
 
@@ -31,7 +31,7 @@ def ramp(count: int = 6, n: int = 3) -> Sig[float, N]:
 @block
 def accumulate(
     x: Sig[float, N], total: Sig[float, N]
-) -> (Sig[float, N], Sig[float, N]):
+) -> tuple[Sig[float, N], Sig[float, N]]:
     s = x + total
     return s, s
 
@@ -40,18 +40,22 @@ def test_feedback_carries_state_between_frames():
     loop = feedback(accumulate, init=np.zeros(3))
     out = run(ramp() >> loop)
     assert [f.data[0] for f in out] == [0.0, 1.0, 3.0, 6.0, 10.0, 15.0]
-    assert "loop" in out[-1].prov and out[-1].prov[-1].op == "ramp"  # type: ignore[operator]
+    assert "loop" in out[-1].prov and out[-1].prov[-1].op == "ramp"
     with pytest.raises(TypeMismatch):
         feedback(dsp.scale(gain=2), init=0.0)  # body must take (x, state)
 
 
 def test_feedback_body_can_span_blocks():
     @block
-    def step(x: Sig[float, N], s: Sig[float, ()]) -> (Sig[float, N], Sig[float, ()]):
+    def step(
+        x: Sig[float, N], s: Sig[float, tuple[()]]
+    ) -> tuple[Sig[float, N], Sig[float, tuple[()]]]:
         return x * s, float(s + 1)
 
     @block
-    def tag(y: Sig[float, N], s: Sig[float, ()]) -> (Sig[float, N], Sig[float, ()]):
+    def tag(
+        y: Sig[float, N], s: Sig[float, tuple[()]]
+    ) -> tuple[Sig[float, N], Sig[float, tuple[()]]]:
         return y + s, s
 
     out = run(ramp(count=4) >> feedback(step >> tag, init=1.0))

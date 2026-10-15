@@ -12,8 +12,8 @@ What this exercises
   * graph.draw() to picture the topology; a waterfall plot of the result; the
     provenance of a segment lists exactly the frames that made it up
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator, Literal
 import numpy as np
 import scipy.signal as ss
 
@@ -25,13 +25,15 @@ FRAME, HOP = 512, 256
 
 
 @source(total=lambda seconds, chunk, **_: int(seconds * RATE / chunk))
-def microphone(seconds: float = 4.0, chunk: int = 1024, seed: int = 7) -> Sig[float, N]:
+def microphone(
+    seconds: float = 4.0, chunk: int = 1024, seed: int = 7
+) -> Iterator[Sig[float, N]]:
     """Synthetic 'speech': tone bursts with harmonics over pink-ish noise, in irregular chunks."""
     rng = np.random.default_rng(seed)
     n = int(seconds * RATE)
     t = np.arange(n) / RATE
-    audio = 0.004 * rng.normal(size=n) + 0.004 * ss.lfilter(  # type: ignore[operator]
-        [1.0], [1.0, -0.9], rng.normal(size=n)
+    audio = 0.004 * rng.normal(size=n) + 0.004 * np.asarray(
+        ss.lfilter([1.0], [1.0, -0.9], rng.normal(size=n))
     )
     for start, dur, f0 in [
         (0.4, 0.5, 180),
@@ -55,17 +57,17 @@ def microphone(seconds: float = 4.0, chunk: int = 1024, seed: int = 7) -> Sig[fl
 
 
 @block
-def short_time_energy(x: Sig[float, N]) -> Sig[float, ()]:
+def short_time_energy(x: Sig[float, N]) -> Sig[float, tuple[()]]:
     return float(10 * np.log10(np.mean(x**2) + 1e-12))
 
 
 @block
-def zero_crossings(x: Sig[float, N]) -> Sig[float, ()]:
+def zero_crossings(x: Sig[float, N]) -> Sig[float, tuple[()]]:
     return float(np.mean(np.abs(np.diff(np.signbit(x)))))
 
 
 @block
-def spectral_centroid(x: Sig[float, N], rate: float = RATE) -> Sig[float, ()]:
+def spectral_centroid(x: Sig[float, N], rate: float = RATE) -> Sig[float, tuple[()]]:
     X = np.abs(np.fft.rfft(x * np.hanning(len(x))))
     f = np.fft.rfftfreq(len(x), 1 / rate)
     return float(np.sum(f * X) / (np.sum(X) + 1e-12))
@@ -74,9 +76,9 @@ def spectral_centroid(x: Sig[float, N], rate: float = RATE) -> Sig[float, ()]:
 @block
 def features(
     x: Framed[Sig[float, N]],
-    energy: Sig[float, ()],
-    zcr: Sig[float, ()],
-    centroid: Sig[float, ()],
+    energy: Sig[float, tuple[()]],
+    zcr: Sig[float, tuple[()]],
+    centroid: Sig[float, tuple[()]],
 ) -> Sig[float, N]:
     """Collect the three features into frame metadata; the audio passes through.
     `seq` was added by dsp.timestamp after re-framing, so it indexes 256-sample hops."""
@@ -91,7 +93,7 @@ def activity(
     on_db: float = -30.0,
     off_db: float = -36.0,
     hang: int = 3,
-) -> Sig[float, N]:
+) -> Iterator[Sig[float, N]]:
     """Two-threshold detector with hang-over. Annotates each frame with `active`
     and a running `segment` id, and marks clipped samples at sample level."""
     state, hold, segment = False, 0, 0
@@ -121,7 +123,7 @@ def activity(
 @block
 def segments(
     frames: Stream[Framed[Sig[float, N]]], rate: float = RATE, hop: int = HOP
-) -> Sig[dict]:
+) -> Iterator[Sig[dict]]:
     """Collapse per-frame activity into (start, end) segments, emitted when a segment closes."""
     current = None
     for f in frames:

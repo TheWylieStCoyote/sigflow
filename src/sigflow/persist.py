@@ -25,7 +25,7 @@ from typing import Any
 
 import numpy as np
 
-from .frame import Frame, Issue, Provenance, frozen
+from .frame import NO_PROV, Frame, Issue, Provenance, frozen
 
 __all__ = [
     "prov_to_dict",
@@ -131,7 +131,7 @@ def save_frame(f: Frame, path: str) -> str:
             {"message": i.message, "level": i.level, "origin": i.origin}
             for i in f.issues
         ],
-        "prov": prov_to_dict(f.prov) if f.prov is not None else None,
+        "prov": prov_to_dict(f.prov) if f.prov else None,
         "object": _jsonable(data) if kind == "object" else None,
     }
     arrays["__record__"] = np.array(json.dumps(record))
@@ -157,7 +157,7 @@ def load_frame(path: str) -> Frame:
     issues = tuple(
         Issue(i["message"], i["level"], i["origin"]) for i in record["issues"]
     )
-    prov = prov_from_dict(record["prov"]) if record["prov"] else None
+    prov = prov_from_dict(record["prov"]) if record["prov"] else NO_PROV
     return Frame(data, record["meta"], record["stream"], samples, issues, prov)
 
 
@@ -175,7 +175,7 @@ def replay(graph: Any, target: Any, strict: bool = True, **options: Any) -> Fram
     ``target`` (a Frame or Provenance). Deterministic graphs give the same data back;
     ``strict`` checks that the graph's source configuration equals the recorded one."""
     prov = target.prov if isinstance(target, Frame) else target
-    if prov is None:
+    if not prov:
         raise ReplayMismatch("target has no provenance")
     wanted = {(r.op, r.seq) for r in prov.roots()}
     recorded = {r.op: dict(r.params) for r in prov.roots()}

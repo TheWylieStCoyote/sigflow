@@ -29,8 +29,8 @@ What this exercises
   * reports for sub-graphs, feedback loops and routed graphs
   * a tiny "docs site": one HTML page per graph plus an index, from a script
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Literal
 import os
 import tempfile
 
@@ -73,8 +73,8 @@ hilbert = block(
 
 @block
 def agc_step(
-    x: Sig[float, N], gain: Sig[float, ()], target: float = 0.3
-) -> (Sig[float, N], Sig[float, ()]):
+    x: Sig[float, N], gain: Sig[float, tuple[()]], target: float = 0.3
+) -> tuple[Sig[float, N], Sig[float, tuple[()]]]:
     """One AGC iteration: apply ``gain`` and nudge it toward ``target`` rms."""
     y = x * gain
     return y, float(

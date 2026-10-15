@@ -4,8 +4,8 @@
 
 ```python
 Sig[np.complex64, N]             # 1-D complex, symbolic length N
-Sig[float, (M, N)]             # M x N real matrix
-Sig[float, (1024,), 48_000, Literal["V"]]   # fixed length, 48 kHz, volts
+Sig[float, tuple[M, N]]             # M x N real matrix
+Sig[float, tuple[Literal[1024]], Literal[48_000], Literal["V"]]   # fixed length, 48 kHz, volts
 Sig[T, N]                      # any dtype T (preserved in -> out), length N
 Sig[dict]                          # a Python object
 Sig[Any]                           # anything (gradual: checked against the first frame)

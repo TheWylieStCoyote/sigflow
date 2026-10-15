@@ -25,8 +25,8 @@ What this exercises
   * shape symbols flowing through: (M snapshots x N sensors) -> (N x N) -> (N, K)
   * provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Iterator
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, block, linalg, plot, port, run, source
@@ -44,7 +44,7 @@ def steering(theta_deg: float, n: int = N_SENSORS) -> np.ndarray:
 @source(total=lambda frames, **_: frames)
 def array_snapshots(
     frames: int = 6, snr_db: float = 10.0, seed: int = 4
-) -> Sig[complex, (M, N)]:
+) -> Iterator[Sig[complex, tuple[M, N]]]:
     """M snapshots of an N-element uniform linear array with three sources; the
     middle source fades out over the frames so the model order changes."""
     rng = np.random.default_rng(seed)
@@ -70,8 +70,8 @@ def array_snapshots(
 eigh = block(
     np.linalg.eigh,
     name="eigh",
-    inputs=Sig[T, (N, N)],
-    outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]},
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
 )
 
 
@@ -83,13 +83,13 @@ def model_order(vals: Sig[float, N], gap_db: float = 10.0) -> Sig[int]:
 
 
 @block
-def noise_subspace(vecs: Sig[T, (N, N)], order: Sig[int]) -> Sig[T, (N, K)]:
+def noise_subspace(vecs: Sig[T, tuple[N, N]], order: Sig[int]) -> Sig[T, tuple[N, K]]:
     """Eigenvectors spanning the noise subspace: all but the `order` largest."""
     return vecs[:, : vecs.shape[1] - order]
 
 
 @block
-def music_spectrum(En: Sig[T, (N, K)]) -> Sig[float, G]:
+def music_spectrum(En: Sig[T, tuple[N, K]]) -> Sig[float, G]:
     A = np.stack([steering(th) for th in GRID], axis=1)  # N x G
     proj = En.conj().T @ A  # K x G
     return 1.0 / np.maximum(np.sum(np.abs(proj) ** 2, axis=0), 1e-12)

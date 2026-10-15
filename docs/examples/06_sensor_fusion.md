@@ -30,8 +30,8 @@ What this exercises
   * frame annotations (innovation per update) and an animation built after
     the run from the recorded frames (plot.animate)
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import AsyncIterator, Iterator
 import asyncio
 import math
 import time
@@ -72,7 +72,7 @@ def imu(
     rate: float = IMU_RATE,
     sigma: float = 0.3,
     seed: int = 1,
-) -> Sig[dict]:
+) -> Iterator[Sig[dict]]:
     """Synchronous accelerometer stream, paced like a blocking device read.
     ``threaded=True`` keeps its time.sleep() from stalling the async GPS source."""
     rng = np.random.default_rng(seed)
@@ -94,7 +94,7 @@ async def gps(
     sigma: float = 0.8,
     corrupt_every: int = 5,
     seed: int = 2,
-) -> Sig[dict]:
+) -> AsyncIterator[Sig[dict]]:
     """Asynchronous position fixes with jitter; every ``corrupt_every``-th message is garbage."""
     rng = np.random.default_rng(seed)
     k = 0
@@ -118,7 +118,7 @@ async def gps(
 def parse(ev: Sig[dict]) -> Sig[dict]:
     """Decode raw GPS text; IMU events pass through. Raises on corrupt input."""
     if ev["kind"] == "gps":
-        x, y = (float(v) for v in ev["raw"].split(","))  # type: ignore[attr-defined]  # ValueError on "GARBAGE"
+        x, y = (float(v) for v in ev["raw"].split(","))  # ValueError on "GARBAGE"
         return {"kind": "gps", "t": ev["t"], "pos": np.array([x, y])}
     return ev
 
@@ -126,7 +126,7 @@ def parse(ev: Sig[dict]) -> Sig[dict]:
 @block
 def kalman(
     events: Stream[Framed[Sig[dict]]], q: float = 1.0, r_gps: float = 0.8
-) -> Sig[dict]:
+) -> Iterator[Sig[dict]]:
     """Constant-velocity Kalman filter. IMU events predict; GPS events update.
     Emits the state after every event, annotated with the innovation on updates."""
     x = np.zeros(4)  # [px, py, vx, vy]
@@ -180,8 +180,8 @@ def kalman(
 
 @block
 def error_vs_truth(s: Sig[dict]) -> Sig[dict]:
-    tx, ty, *_ = true_state(s["t"])  # type: ignore[arg-type]
-    return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}  # type: ignore[dict-item]
+    tx, ty, *_ = true_state(s["t"])
+    return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}
 
 
 _track_history: list[tuple[float, float, int]] = []

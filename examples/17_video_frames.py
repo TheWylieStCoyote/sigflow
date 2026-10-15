@@ -10,21 +10,22 @@ What this exercises
   * a per-row annotation (motion energy per scan line) as a second sample-level array
   * fan-out to a 2-D spectrum, a centroid tracker and an image plot with the mask overlaid
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
-from typing import Literal
+from typing import Iterator, Literal
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
 from sigflow.dims import H, W
+from sigflow import SignalType
 
 HEIGHT, WIDTH = 64, 96
 
 
 @source(
-    total=lambda frames, **_: frames, refine=lambda **_: Sig[float, (HEIGHT, WIDTH)]
+    total=lambda frames, **_: frames,
+    refine=lambda **_: SignalType(float, (HEIGHT, WIDTH)),
 )
-def camera(frames: int = 40, seed: int = 0) -> Sig[float, (H, W)]:
+def camera(frames: int = 40, seed: int = 0) -> Iterator[Sig[float, tuple[H, W]]]:
     """A bright blob drifting diagonally over a static textured background, with noise."""
     rng = np.random.default_rng(seed)
     yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH]
@@ -38,8 +39,8 @@ def camera(frames: int = 40, seed: int = 0) -> Sig[float, (H, W)]:
 
 @block
 def difference(
-    frames: Stream[Framed[Sig[float, (H, W)]]], threshold: float = 0.15
-) -> Sig[float, (H, W)]:
+    frames: Stream[Framed[Sig[float, tuple[H, W]]]], threshold: float = 0.15
+) -> Iterator[Sig[float, tuple[H, W]]]:
     """|frame - previous| with a motion mask (sample level, 2-D) and per-row motion energy."""
     prev = None
     for f in frames:
@@ -54,14 +55,16 @@ def difference(
 
 
 @block
-def blur(img: Sig[float, (H, W)]) -> Sig[float, (H, W)]:
+def blur(img: Sig[float, tuple[H, W]]) -> Sig[float, tuple[H, W]]:
     """3x3 box blur — same shape in and out, so sample-level masks are kept."""
     p = np.pad(img, 1, mode="edge")
     return sum(p[i : i + HEIGHT, j : j + WIDTH] for i in range(3) for j in range(3)) / 9
 
 
 @block
-def spectrum2d(img: Sig[float, (H, W)]) -> Sig[float, (H, W), None, Literal["dB"]]:
+def spectrum2d(
+    img: Sig[float, tuple[H, W]],
+) -> Sig[float, tuple[H, W], None, Literal["dB"]]:
     """Shifted 2-D power spectrum. Also (H, W): the runtime would keep masks here too,
     which is wrong for a spectrum — so this block opts out with keep_samples=False."""
     return 20 * np.log10(np.abs(np.fft.fftshift(np.fft.fft2(img))) + 1e-6)
@@ -71,7 +74,7 @@ spectrum2d = block(spectrum2d.fn, name="spectrum2d", keep_samples=False)
 
 
 @block
-def centroid(f: Framed[Sig[float, (H, W)]]) -> Sig[dict]:
+def centroid(f: Framed[Sig[float, tuple[H, W]]]) -> Sig[dict]:
     """Centre of the motion mask: where the moving object is."""
     mask = f.samples["motion"]
     if mask.sum() < 5:
@@ -99,7 +102,7 @@ def draw_frame(ax, img, f: Frame) -> None:
 
 if __name__ == "__main__":
     view = plot.custom(
-        draw_frame, name="view", in_type=Sig[float, (H, W)], figsize=(4.5, 3.2)
+        draw_frame, name="view", in_type=Sig[float, tuple[H, W]], figsize=(4.5, 3.2)
     )
     g = camera() >> difference(threshold=0.15) >> blur >> (view | centroid | spectrum2d)
     print(g.describe(), "\n")

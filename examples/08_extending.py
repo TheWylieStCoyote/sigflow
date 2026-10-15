@@ -9,11 +9,10 @@ What this exercises
   * runtime checking modes: check="first" (default) vs "all"
   * blocks are functions: unit-test them with plain asserts, no graph needed
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 from dataclasses import dataclass
 
-from typing import Literal
+from typing import Iterator, Literal
 import numpy as np
 import scipy.signal as ss
 
@@ -30,19 +29,22 @@ from sigflow import (
     source,
 )
 from sigflow.dims import N
+from sigflow import SignalType
 
 # ------------------------------------------------------------- rate and units
 
-Audio48k = Sig[float, N, 48_000, Literal["V"]]  # type aliases read well in signatures
+Audio48k = Sig[
+    float, N, Literal[48_000], Literal["V"]
+]  # type aliases read well in signatures
 
 
 @source(
     total=lambda frames, **_: frames,
-    refine=lambda n, rate, **_: Sig[float, (n,), rate, Literal["V"]],
+    refine=lambda n, rate, **_: SignalType(float, (n,), rate, "V"),
 )
 def adc(
     rate: float = 48_000, n: int = 480, frames: int = 20, seed: int = 0
-) -> Sig[float, N, None, Literal["V"]]:
+) -> Iterator[Sig[float, N, None, Literal["V"]]]:
     """An ADC whose declared output rate comes from its configuration (via refine)."""
     rng = np.random.default_rng(seed)
     for i in range(frames):
@@ -63,7 +65,7 @@ def de_emphasis(x: Audio48k, tau_us: float = 50.0) -> Audio48k:
 @block
 def to_dbfs(
     x: Sig[float, N, None, Literal["V"]], full_scale: float = 1.0
-) -> Sig[float, (), None, Literal["dBFS"]]:
+) -> Sig[float, tuple[()], None, Literal["dBFS"]]:
     return float(20 * np.log10(np.sqrt(np.mean(x**2)) / full_scale + 1e-12))
 
 
@@ -73,7 +75,7 @@ def to_dbfs(
 def sos_filter(sos: np.ndarray, name: str = "sos_filter"):
     """Factory: a streaming IIR block around scipy.signal.sosfilt with carried state."""
 
-    def fn(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
+    def fn(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         zi = np.zeros((sos.shape[0], 2))
         for x in xs:
             y, zi = ss.sosfilt(sos, x, zi=zi)
@@ -82,7 +84,9 @@ def sos_filter(sos: np.ndarray, name: str = "sos_filter"):
     return block(fn, name=name)
 
 
-lowpass_2k = sos_filter(ss.butter(6, 2000, fs=48_000, output="sos"), name="lowpass_2k")  # type: ignore[arg-type]
+lowpass_2k = sos_filter(
+    np.asarray(ss.butter(6, 2000, fs=48_000, output="sos")), name="lowpass_2k"
+)
 
 # ------------------------------------------------- a custom payload dataclass
 
@@ -98,13 +102,13 @@ class Measurement:
 def measure(f: Framed[Sig[float, N]], rate: float = 48_000) -> Sig[Measurement]:
     X = np.abs(np.fft.rfft(f.data * np.hanning(len(f.data))))
     tone = float(np.fft.rfftfreq(len(f.data), 1 / rate)[int(np.argmax(X[1:])) + 1])
-    seq = f.prov.seq if f.prov is not None and f.prov.seq is not None else -1
+    seq = f.prov.seq if f.prov.seq is not None else -1
     return Measurement(to_dbfs(f.data), tone, seq)
 
 
 @block
 def report(m: Sig[Measurement]) -> Sig[str]:
-    return f"frame {m.frame:2d}: {m.level_dbfs:6.1f} dBFS, tone {m.tone_hz:7.1f} Hz"  # type: ignore[attr-defined]
+    return f"frame {m.frame:2d}: {m.level_dbfs:6.1f} dBFS, tone {m.tone_hz:7.1f} Hz"
 
 
 # ------------------------------------------------------------- error policies

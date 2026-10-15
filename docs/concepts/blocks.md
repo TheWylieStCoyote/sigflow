@@ -30,8 +30,8 @@ reusable on their own.
 
 ```python
 fft   = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
-eigh  = block(np.linalg.eigh, inputs=Sig[T, (N, N)],
-              outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]})   # named ports
+eigh  = block(np.linalg.eigh, inputs=Sig[T, tuple[N, N]],
+              outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]})   # named ports
 anything = lift(some_function)                     # Any -> Any, checked at run time
 ```
 

@@ -27,7 +27,6 @@ What this exercises
   * provenance across the file boundary: the output frame knows the file and offset it
     came from
 """
-# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import os
 import tempfile
