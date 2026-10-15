@@ -18,7 +18,7 @@ Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one fr
 """
 
 from __future__ import annotations
-# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
+# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from typing import Any, Callable
 
@@ -28,6 +28,7 @@ from .block import tap
 from .frame import Frame
 from .graph import Block
 from .types import Sig
+from .dims import N, T
 
 __all__ = [
     "PlotBlock",
@@ -255,7 +256,7 @@ def line(
             ax.set_ylim(*_v(ylim))
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="line", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="line", in_type=Sig[T, N], title=title, **kw)
 
 
 def spectrum(
@@ -285,7 +286,7 @@ def spectrum(
             ax.set_ylim(*_v(ylim))
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="spectrum", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="spectrum", in_type=Sig[T, N], title=title, **kw)
 
 
 def waterfall(
@@ -308,7 +309,7 @@ def waterfall(
         ax.set_ylabel("frame")
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="waterfall", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="waterfall", in_type=Sig[T, N], title=title, **kw)
 
 
 def constellation(
@@ -330,7 +331,7 @@ def constellation(
     return PlotBlock(
         draw,
         name="constellation",
-        in_type=Sig[complex, "N"],
+        in_type=Sig[complex, N],
         title=title,
         figsize=kw.pop("figsize", (4, 4)),
         **kw,

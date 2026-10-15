@@ -3,12 +3,14 @@
 A sampled signal (synchronous generator) is zipped with an asynchronous
 telemetry ticker; a merged stream interleaves both as they arrive.
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import asyncio
 
 import numpy as np
 
 from sigflow import Sig, Stream, block, dsp, merge, run, source
+from sigflow.dims import N
 
 
 @source(total=lambda count, **_: count)
@@ -20,12 +22,12 @@ async def gain_control(count: int = 5, period: float = 0.02) -> Sig[dict]:
 
 
 @block
-def apply_gain(x: Sig[float, "N"], cmd: Sig[dict]) -> Sig[float, "N"]:
+def apply_gain(x: Sig[float, N], cmd: Sig[dict]) -> Sig[float, N]:
     return x * cmd["gain"]
 
 
 @block
-async def smooth(xs: Stream[Sig[float, "N"]], alpha: float = 0.5) -> Sig[float, "N"]:
+async def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Sig[float, N]:
     """An *async* stream block: identical shape to a sync one, with `async for`."""
     acc = None
     async for x in xs:

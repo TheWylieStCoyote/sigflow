@@ -1,5 +1,7 @@
 """Unified scheduler, provenance modes, inline stream blocks, parallel(), zmq, Lineage (0.3 features)."""
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Literal
 import asyncio
 import pickle
 import threading
@@ -20,12 +22,13 @@ from sigflow import (
     run,
     source,
 )
+from sigflow.dims import N
 from sigflow.builder import Chain, lower
 from sigflow.frame import PROVENANCE_MODE
 
 
 @source
-def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
+def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, N]:
     for i in range(count):
         yield Frame(
             np.full(n, float(i)),
@@ -35,12 +38,12 @@ def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
 
 
 @block
-def scale(x: Sig[float, "N"], gain: float = 2.0) -> Sig[float, "N"]:
+def scale(x: Sig[float, N], gain: float = 2.0) -> Sig[float, N]:
     return x * gain
 
 
 @block
-def boom(x: Sig[float, "N"], at: int = 2) -> Sig[float, "N"]:
+def boom(x: Sig[float, N], at: int = 2) -> Sig[float, N]:
     if int(x[0]) == at:
         raise ValueError("boom")
     return x
@@ -116,7 +119,7 @@ def test_provenance_modes():
 
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
     prev = None
     for x in xs:
         if prev is not None:
@@ -129,7 +132,7 @@ def test_sync_generator_stream_block_runs_inline_or_threaded():
     seen = []
 
     @block
-    def where(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+    def where(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
         for x in xs:
             seen.append(threading.get_ident())
             yield x
@@ -222,12 +225,10 @@ def test_lineage_queries():
 
 
 def test_sig_dsl_still_builds_signal_types():
-    t = Sig[np.complex64, ("N", 2), 1e6, "V"]
-    assert t.dtype == np.dtype(np.complex64) and t.rate == 1e6 and t.units == "V"
-    assert t.shape[1] == 2
-    c = block(
-        lambda x: x, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"], name="c"
-    )
+    t = Sig[np.complex64, (N, 2), 1e6, Literal["V"]]
+    assert t.dtype == np.dtype(np.complex64) and t.rate == 1e6 and t.units == "V"  # type: ignore[attr-defined]
+    assert t.shape[1] == 2  # type: ignore[index]
+    c = block(lambda x: x, inputs=Sig[complex, N], outputs=Sig[complex, N], name="c")
     ramp() >> c  # float -> complex is a safe cast
     with pytest.raises(TypeMismatch, match="dtype"):
         ramp() >> c >> scale  # complex -> float is not
@@ -237,7 +238,7 @@ def test_fused_framed_block_sees_upstream_result():
     from sigflow import Framed
 
     @block
-    def mean_of(f: Framed[Sig[float, "N"]]) -> Sig[float, ()]:
+    def mean_of(f: Framed[Sig[float, N]]) -> Sig[float, ()]:
         return float(f.data.mean()) + (0.0 if f.prov.op == "scale" else 1000.0)
 
     out = run(ramp() >> scale(gain=3.0) >> mean_of)

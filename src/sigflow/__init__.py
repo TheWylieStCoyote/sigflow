@@ -1,19 +1,47 @@
 """sigflow — a small, typed, functional framework for signal-processing graphs.
 
-from sigflow import block, Sig, run
+from sigflow import N, Sig, block, run
 import numpy as np
 
 @block
-def scale(x: Sig[float, "N"], gain: float = 1.0) -> Sig[float, "N"]:
+def scale(x: Sig[float, N], gain: float = 1.0) -> Sig[float, N]:
     return x * gain
 
-frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, "N"]) >> scale(gain=2)).run()
+frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, N]) >> scale(gain=2)).run()
 """
 
 from . import io
 from .block import BlockDef, Framed, block, lift, source, tap
 from .builder import Graph
 from .control import Knob, Run
+from .dims import (
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+)
 from .frame import MISSING, Frame, Issue, Provenance, TimeSpan
 from .graph import (
     Block,
@@ -122,4 +150,31 @@ __all__ = [
     "Checkpoint",
     "load_checkpoint",
     "ReplayMismatch",
+    # dimension / dtype-variable symbols (sigflow.dims)
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
 ]

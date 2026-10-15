@@ -15,6 +15,7 @@ What this exercises
   * a helper that groups anomalies by (block, config, source frame) — a report
     built purely from lineage
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 from collections import Counter
 
@@ -79,7 +80,7 @@ def alarm(d: Sig[dict], limit: float = 0.5) -> Sig[dict]:
         raise RuntimeError(
             "level out of range"
         )  # a downstream failure to attribute later
-    return {**d, "alarm": bool(d["disagree"])}
+    return {**d, "alarm": bool(d["disagree"])}  # type: ignore[dict-item]
 
 
 def attribute(frame: Frame) -> str:
@@ -166,5 +167,5 @@ if __name__ == "__main__":
         "ancestors on the main line:",
         [n.op for n in f.prov.chain()],
         "| 'fuse' in lineage:",
-        "fuse" in f.prov,
+        "fuse" in f.prov,  # type: ignore[operator]
     )

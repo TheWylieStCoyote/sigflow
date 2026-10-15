@@ -1,5 +1,7 @@
 """Units, slicing, time axis, align, Graph builder, plotting, persistence (0.2 features)."""
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Literal
 import time
 
 import numpy as np
@@ -26,10 +28,11 @@ from sigflow import (
     source,
     units,
 )
+from sigflow.dims import N, T
 
 
 @source
-def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
+def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, N]:
     for i in range(count):
         yield Frame(
             np.full(n, float(i)),
@@ -50,11 +53,11 @@ def test_units_registry_and_type_contract():
     assert units.factor("mV", "V") == pytest.approx(1e-3)
 
     @block
-    def volts(x: Sig[float, "N", None, "V"]) -> Sig[float, ()]:
+    def volts(x: Sig[float, N, None, Literal["V"]]) -> Sig[float, ()]:
         return float(x.mean())
 
     @source
-    def mv() -> Sig[float, "N", None, "mV"]:
+    def mv() -> Sig[float, N, None, Literal["mV"]]:
         yield Frame(np.full(3, 1500.0), stream={"units": "mV"})
 
     with pytest.raises(TypeMismatch, match="to_units"):
@@ -143,17 +146,17 @@ def test_graph_builder_diamond_ports_and_cycles():
     eigh = block(
         np.linalg.eigh,
         name="eigh",
-        inputs=Sig["T", ("N", "N")],
-        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+        inputs=Sig[T, (N, N)],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]},
     )
 
     @block
-    def count_big(v: Sig[float, "N"]) -> Sig[int]:
+    def count_big(v: Sig[float, N]) -> Sig[int]:
         return int((v > 1).sum())
 
     @block
     def combine(
-        vecs: Sig["T", ("N", "N")], k: Sig[int], raw: Sig[float, ("N", "N")]
+        vecs: Sig[T, (N, N)], k: Sig[int], raw: Sig[float, (N, N)]
     ) -> Sig[dict]:
         return {"k": k, "n": vecs.shape[0], "trace": float(np.trace(raw))}
 
@@ -172,7 +175,7 @@ def test_graph_builder_diamond_ports_and_cycles():
     g.output(c)
     out = run(g)
     assert out[0].data == {"k": 2, "n": 3, "trace": 6.0}
-    assert "eigh" in out[0].prov and out[0].prov[-1].op == "spd"
+    assert "eigh" in out[0].prov and out[0].prov[-1].op == "spd"  # type: ignore[operator]
     with pytest.raises(TypeMismatch, match="cycle"):
         h = Graph()
         a = h.add(dsp.scale(gain=1))
@@ -185,7 +188,7 @@ def test_graph_builder_diamond_ports_and_cycles():
         b = h.add(dsp.rms)
         h.connect(a, b)  # matrix into a vector block
     sub = Graph("front")
-    i = sub.input(Sig[float, "N"])
+    i = sub.input(Sig[float, N])
     w = i >> dsp.window
     sub.output(w)
     assert run(ramp(count=2) >> sub)[0].data.shape == (4,)
@@ -238,7 +241,7 @@ def test_checkpoint_and_resume(tmp_path):
         def __init__(self) -> None:
             self.total = 0.0
 
-        def __call__(self, x: Sig[float, "N"]) -> Sig[float, ()]:
+        def __call__(self, x: Sig[float, N]) -> Sig[float, ()]:
             self.total += float(x.sum())
             return self.total
 
@@ -268,7 +271,7 @@ def test_strict_fanout():
         ramp(count=6) >> (dsp.rms | dsp.buffer(count=2))
 
     @block  # no declared ratio: caught at run time
-    def halve(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+    def halve(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
         for i, x in enumerate(xs):
             if i % 2:
                 yield x

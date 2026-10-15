@@ -1,3 +1,4 @@
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 import os
 
 import numpy as np

@@ -11,6 +11,7 @@ What this exercises
   * reports for sub-graphs, feedback loops and routed graphs
   * a tiny "docs site": one HTML page per graph plus an index, from a script
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import os
 import tempfile
@@ -19,12 +20,13 @@ import numpy as np
 import scipy.signal as ss
 
 from sigflow import Framed, Sig, Stream, block, dsp, feedback, linalg, port, run, when
+from sigflow.dims import N
 
 
 @block
 def deemphasis(
-    x: Sig[float, "N"], tau_us: float = 50.0, rate: float = 48_000
-) -> Sig[float, "N"]:
+    x: Sig[float, N], tau_us: float = 50.0, rate: float = 48_000
+) -> Sig[float, N]:
     """FM de-emphasis: first-order low-pass with time constant ``tau_us`` microseconds.
 
     Applied after demodulation to undo the transmitter's pre-emphasis.
@@ -34,7 +36,7 @@ def deemphasis(
 
 
 @block
-def squelch(f: Framed[Sig[float, "N"]], threshold_db: float = -40.0) -> Sig[float, "N"]:
+def squelch(f: Framed[Sig[float, N]], threshold_db: float = -40.0) -> Sig[float, N]:
     """Mute frames whose level is below ``threshold_db`` dBFS (tagged ``muted`` in meta)."""
     level = 20 * np.log10(np.sqrt(np.mean(f.data**2)) + 1e-12)
     return f.annotate(muted=level < threshold_db).evolve(
@@ -45,16 +47,16 @@ def squelch(f: Framed[Sig[float, "N"]], threshold_db: float = -40.0) -> Sig[floa
 hilbert = block(
     ss.hilbert,
     name="hilbert",
-    inputs=Sig[float, "N"],
-    outputs=Sig[complex, "N"],
+    inputs=Sig[float, N],
+    outputs=Sig[complex, N],
     doc="Analytic signal via scipy.signal.hilbert (positive-frequency half of the spectrum).",
 )
 
 
 @block
 def agc_step(
-    x: Sig[float, "N"], gain: Sig[float, ()], target: float = 0.3
-) -> (Sig[float, "N"], Sig[float, ()]):
+    x: Sig[float, N], gain: Sig[float, ()], target: float = 0.3
+) -> (Sig[float, N], Sig[float, ()]):
     """One AGC iteration: apply ``gain`` and nudge it toward ``target`` rms."""
     y = x * gain
     return y, float(

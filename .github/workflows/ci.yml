@@ -38,8 +38,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e . mypy pyright
-      - run: mypy src/sigflow
-      - run: pyright src
+      - run: mypy src/sigflow tests examples
+      - run: pyright
   examples:
     runs-on: ubuntu-latest
     steps:

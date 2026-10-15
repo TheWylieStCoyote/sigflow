@@ -212,7 +212,7 @@ class Stateful:
 
         class Smoother(Stateful):
             def __init__(self, alpha=0.1): self.alpha, self.acc = alpha, None
-            def __call__(self, x: Sig[float, "N"]) -> Sig[float, "N"]:
+            def __call__(self, x: Sig[float, N]) -> Sig[float, N]:
                 self.acc = x if self.acc is None else (1 - self.alpha) * self.acc + self.alpha * x
                 return self.acc
 

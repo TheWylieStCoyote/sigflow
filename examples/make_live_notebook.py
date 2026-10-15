@@ -41,6 +41,7 @@ except ModuleNotFoundError:
 import numpy as np
 %matplotlib inline
 from sigflow import Sig, Stream, Frame, Framed, Knob, block, source, run, port, dashboard, require_widgets
+from sigflow.dims import N
 from sigflow import dsp, plot
 require_widgets()          # green = panels will work; red = what to install""")
 
@@ -64,7 +65,7 @@ A tone drifts across the band. Tick **throttle** and drag **max fps** down to ~5
 frame by frame; the spectrum and waterfall are refreshed inside the panel. This source declares its
 length (`total=`), so the progress bar shows percent.""")
 code("""@source(total=lambda frames, **_: frames)
-def drifting_tone(rate: float = 48_000, n: int = 1024, frames: int = 3000) -> Sig[float, "N"]:
+def drifting_tone(rate: float = 48_000, n: int = 1024, frames: int = 3000) -> Sig[float, N]:
     t0 = 0
     for k in range(frames):
         f = 6000 + 4000 * np.sin(2 * np.pi * k / 150)                 # sweeps 2-10 kHz every 150 frames
@@ -94,7 +95,7 @@ notch  = Knob(True, "notch 5 kHz")
 floor  = Knob(-70.0, "plot floor dB", min=-120.0, max=-10.0, step=5.0)
 
 @source
-def tunable_tone(freq: Knob, rate: float = 48_000, n: int = 1024, frames: int = 10**9) -> Sig[float, "N"]:
+def tunable_tone(freq: Knob, rate: float = 48_000, n: int = 1024, frames: int = 10**9) -> Sig[float, N]:
     t0 = 0
     for k in range(frames):
         t = (np.arange(n) + t0) / rate; t0 += n
@@ -102,7 +103,7 @@ def tunable_tone(freq: Knob, rate: float = 48_000, n: int = 1024, frames: int = 
                     meta={"seq": k}, stream={"rate": rate})
 
 @block
-def notch_5k(x: Sig[float, "N"], on: bool = True, rate: float = 48_000) -> Sig[float, "N"]:
+def notch_5k(x: Sig[float, N], on: bool = True, rate: float = 48_000) -> Sig[float, N]:
     if not on:
         return x
     X = np.fft.rfft(x); f = np.fft.rfftfreq(len(x), 1 / rate)

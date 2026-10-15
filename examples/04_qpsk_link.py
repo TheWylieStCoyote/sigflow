@@ -9,11 +9,13 @@ What this exercises
   * constellation plots before and after carrier recovery, exported as GIFs
   * provenance: which transmitted frame a BER figure came from
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import numpy as np
 import scipy.signal as ss
 
 from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow.dims import B, M, N
 
 SPS = 8  # samples per symbol
 N_SYM = 256  # symbols per frame
@@ -23,14 +25,14 @@ FRAMES = 30
 
 
 @source(total=lambda frames, **_: frames, refine=lambda n, **_: Sig[np.int8, (2 * n,)])
-def bits(n: int = N_SYM, frames: int = FRAMES, seed: int = 1) -> Sig[np.int8, "B"]:
+def bits(n: int = N_SYM, frames: int = FRAMES, seed: int = 1) -> Sig[np.int8, B]:
     rng = np.random.default_rng(seed)
     for i in range(frames):
         yield Frame(rng.integers(0, 2, 2 * n).astype(np.int8), meta={"seq": i})
 
 
 @block
-def qpsk_map(b: Sig[np.int8, "B"]) -> Sig[complex, "N"]:
+def qpsk_map(b: Sig[np.int8, B]) -> Sig[complex, N]:
     """Gray-coded QPSK: two bits -> one unit-energy symbol."""
     i, q = 1 - 2 * b[0::2].astype(float), 1 - 2 * b[1::2].astype(float)
     return (i + 1j * q) / np.sqrt(2)
@@ -58,7 +60,7 @@ def rrc_taps(beta: float = 0.35, span: int = 8, sps: int = SPS) -> np.ndarray:
 
 
 @block
-def pulse_shape(syms: Stream[Sig[complex, "N"]], sps: int = SPS) -> Sig[complex, "M"]:
+def pulse_shape(syms: Stream[Sig[complex, N]], sps: int = SPS) -> Sig[complex, M]:
     """Upsample and root-raised-cosine filter; filter state carries across frames."""
     h = rrc_taps(sps=sps)
     zi = np.zeros(len(h) - 1, dtype=complex)
@@ -74,12 +76,12 @@ def pulse_shape(syms: Stream[Sig[complex, "N"]], sps: int = SPS) -> Sig[complex,
 
 @block
 def channel(
-    x: Stream[Sig[complex, "M"]],
+    x: Stream[Sig[complex, M]],
     snr_db: float = 15.0,
     cfo: float = 0.002,
     phase: float = 0.7,
     seed: int = 2,
-) -> Sig[complex, "M"]:
+) -> Sig[complex, M]:
     """AWGN + carrier frequency offset (cycles/sample) + phase, continuous across frames."""
     rng = np.random.default_rng(seed)
     n0 = 0
@@ -98,7 +100,7 @@ def channel(
 
 
 @block
-def matched_filter(x: Stream[Sig[complex, "M"]], sps: int = SPS) -> Sig[complex, "M"]:
+def matched_filter(x: Stream[Sig[complex, M]], sps: int = SPS) -> Sig[complex, M]:
     h = rrc_taps(sps=sps)
     zi = np.zeros(len(h) - 1, dtype=complex)
     for frame in x:
@@ -108,11 +110,11 @@ def matched_filter(x: Stream[Sig[complex, "M"]], sps: int = SPS) -> Sig[complex,
 
 @block
 def symbol_sync(
-    x: Stream[Sig[complex, "M"]],
+    x: Stream[Sig[complex, M]],
     sps: int = SPS,
     n: int = N_SYM,
     delay: int = 2 * 8 * SPS,
-) -> Sig[complex, "N"]:
+) -> Sig[complex, N]:
     """Compensate the two filters' group delay, pick one sample per symbol and
     re-frame to exactly ``n`` symbols so output frame k lines up with transmitted frame k."""
     samples = np.zeros(0, dtype=complex)
@@ -133,8 +135,8 @@ def symbol_sync(
 
 @block
 def coarse_cfo(
-    syms: Stream[Framed[Sig[complex, "N"]]], nfft: int = 8192
-) -> Sig[complex, "N"]:
+    syms: Stream[Framed[Sig[complex, N]]], nfft: int = 8192
+) -> Sig[complex, N]:
     """4th-power frequency estimate per frame (QPSK modulation is removed by s**4), applied
     with a phase accumulator that stays continuous across frames.  Annotates each frame
     with the estimate (cycles / symbol) so it is visible downstream and in provenance."""
@@ -151,8 +153,8 @@ def coarse_cfo(
 
 @block
 def carrier_recovery(
-    syms: Stream[Sig[complex, "N"]], bw: float = 0.02
-) -> Sig[complex, "N"]:
+    syms: Stream[Sig[complex, N]], bw: float = 0.02
+) -> Sig[complex, N]:
     """Decision-directed PLL for QPSK (second order loop), state kept across frames."""
     phase, freq = 0.0, 0.0
     alpha, beta = bw, bw * bw / 4
@@ -169,15 +171,15 @@ def carrier_recovery(
 
 
 @block
-def qpsk_demap(s: Sig[complex, "N"]) -> Sig[np.int8, "B"]:
+def qpsk_demap(s: Sig[complex, N]) -> Sig[np.int8, B]:
     b = np.empty(2 * len(s), dtype=np.int8)
-    b[0::2] = s.real < 0
-    b[1::2] = s.imag < 0
+    b[0::2] = s.real < 0  # type: ignore[attr-defined]
+    b[1::2] = s.imag < 0  # type: ignore[attr-defined]
     return b
 
 
 @block
-def ber(rx: Framed[Sig[np.int8, "B"]], tx: Framed[Sig[np.int8, "B"]]) -> Sig[dict]:
+def ber(rx: Framed[Sig[np.int8, B]], tx: Framed[Sig[np.int8, B]]) -> Sig[dict]:
     """Bit error rate with the QPSK 4-fold phase ambiguity resolved (try the 4 rotations)."""
     r, t = rx.data, tx.data
     best = min(_rotations(r), key=lambda cand: np.count_nonzero(cand != t))

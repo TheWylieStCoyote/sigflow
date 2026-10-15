@@ -7,14 +7,15 @@ with generators. It depends only on NumPy, SciPy and matplotlib.
 ```python
 import numpy as np
 from sigflow import block, Sig, Stream, run
+from sigflow.dims import N, T
 from sigflow import dsp, plot
 
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:   # a stateful stream block
+def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:   # a stateful stream block
     buf = []
     for x in xs:
         buf.append(x)
@@ -47,27 +48,27 @@ and select it from the Kernel menu. The tour notebook also falls back to the
 
 ## What is in the box
 
-| module             | contents                                                                                         |
-| ------------------ | ------------------------------------------------------------------------------------------------ |
+| module             | contents |
+|--------------------|----------|
 | `sigflow.types`    | `Sig[dtype, shape, rate, units]` signal types, symbolic dimensions, dtype variables, unification |
-| `sigflow.frame`    | immutable `Frame`: data + three annotation levels + issues + provenance                          |
-| `sigflow.block`    | `@block`, `@source`, `@tap`, `lift` — turn functions (yours or NumPy/SciPy's) into blocks        |
-| `sigflow.graph`    | operators `>>`, `\|`, `&`, `merge()`, `parallel()`, `switch()`; compile-time validation          |
-| `sigflow.runtime`  | one asyncio scheduler for every graph; sync generators run inline (greenlet) or threaded         |
-| `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display                            |
-| `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters     |
-| `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets                        |
-| `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks                               |
-| `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output)                                           |
-| `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion                                          |
-| `sigflow.persist`  | provenance JSON, frame save/load, `replay()`, `Stateful`, checkpoints                            |
-| `sigflow.lineage`  | `Lineage`: query provenance across a run (through / blame / diff / descendants)                  |
-| `sigflow.ratio`    | `Ratio`: stream-rate contracts (frames out per frame in), composed and checked at build time     |
-| `sigflow.dsp`      | sources (sine, noise, chirp, async ticker…), reframing, FFT, filters, taps                       |
-| `sigflow.linalg`   | shape-checked matmul / solve / eig / svd / covariance …                                          |
-| `sigflow.plot`     | line / spectrum / waterfall / constellation taps, animations, live notebook plots                |
-| `sigflow.draw`     | `g.draw()` SVG diagrams and `g.to_dot()` Graphviz export                                         |
-| `sigflow.notebook` | HTML representations for graphs, frames and monitors                                             |
+| `sigflow.frame`    | immutable `Frame`: data + three annotation levels + issues + provenance |
+| `sigflow.block`    | `@block`, `@source`, `@tap`, `lift` — turn functions (yours or NumPy/SciPy's) into blocks |
+| `sigflow.graph`    | operators `>>`, `\|`, `&`, `merge()`, `parallel()`, `switch()`; compile-time validation |
+| `sigflow.runtime`  | one asyncio scheduler for every graph; sync generators run inline (greenlet) or threaded |
+| `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display |
+| `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters |
+| `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets |
+| `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks |
+| `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output) |
+| `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion |
+| `sigflow.persist`  | provenance JSON, frame save/load, `replay()`, `Stateful`, checkpoints |
+| `sigflow.lineage`  | `Lineage`: query provenance across a run (through / blame / diff / descendants) |
+| `sigflow.ratio`    | `Ratio`: stream-rate contracts (frames out per frame in), composed and checked at build time |
+| `sigflow.dsp`      | sources (sine, noise, chirp, async ticker…), reframing, FFT, filters, taps |
+| `sigflow.linalg`   | shape-checked matmul / solve / eig / svd / covariance … |
+| `sigflow.plot`     | line / spectrum / waterfall / constellation taps, animations, live notebook plots |
+| `sigflow.draw`     | `g.draw()` SVG diagrams and `g.to_dot()` Graphviz export |
+| `sigflow.notebook` | HTML representations for graphs, frames and monitors |
 
 ## Design notes
 
@@ -82,10 +83,10 @@ blocks are unit-testable and reusable outside any graph.
 
 Three kinds are inferred, never declared:
 
-- **map** blocks are called once per frame and must be pure.
-- **stream** blocks are generator functions (sync or async) that receive the
+* **map** blocks are called once per frame and must be pure.
+* **stream** blocks are generator functions (sync or async) that receive the
   whole stream and may hold state — windows, filters with memory, decimators.
-- **sources** have no signal inputs and yield the stream.
+* **sources** have no signal inputs and yield the stream.
 
 Existing library code is wrapped, not rewritten:
 `fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])`.
@@ -99,9 +100,13 @@ against the signature (unknown or missing parameters fail at build time).
 
 `Sig[dtype, shape, rate, units]` describes an edge. `dtype` is a NumPy dtype, a
 Python class (`Sig[dict]`) or `Any`; `shape` mixes integers, `None` (any
-length) and **symbolic dimensions** (`"N"`); `"T"`-style single letters in the
-dtype slot are **dtype variables**, so `Sig["T", "N"] -> Sig["T", "N"]` says
-"same dtype and length in as out" without committing to either.
+length) and **symbolic dimensions** (`N`); a single letter in the dtype slot
+such as `T` is a **dtype variable**, so `Sig[T, N] -> Sig[T, N]` says "same
+dtype and length in as out" without committing to either. The symbols come
+from `sigflow.dims` (the whole alphabet; `from sigflow import N, M` works too)
+and are plain one-letter strings at runtime, so the older `Sig[float, "N"]`
+spelling still builds the same contract; the difference is that a type checker
+reads a string in a type position as an undefined name and reads `N` as a type.
 
 Symbols are scoped to the block that declares them — `N` in `fft` is unrelated
 to `N` in `scale` — and become equal only where edges meet. Validation is a
@@ -205,7 +210,7 @@ and the runtime feeds `new_state` back for the next frame, so an AGC is
 `feedback(agc_step, init=0.1)` and an LMS canceller is
 `feedback(split >> lms_filter >> lms_update, init=zeros)` — the loop spans
 blocks, and the loop state shows up in provenance. `when(pred, then,
-otherwise=...)` routes each frame by a predicate on the _frame_ (so it can look
+otherwise=...)` routes each frame by a predicate on the *frame* (so it can look
 at `f.failed`, `f.warnings` or annotations) through one of two 1:1 branches,
 preserving order; a branch that returns `None` drops the frame. Both keep the
 rest of the graph type-checked.
@@ -267,7 +272,7 @@ sensors with different rates and jitter — recording the `skew` of each pair.
 The fourth slot of `Sig` is a unit. `sigflow.units` knows SI prefixes on the
 usual bases (V, A, W, Hz, s, m, rad, deg, dB, dBm, dBV, dBFS …; `pint` is used
 for anything else when installed). Unification rejects different units; when
-they are _convertible_ the error says which `dsp.to_units("V")` to insert, and
+they are *convertible* the error says which `dsp.to_units("V")` to insert, and
 that block converts the data, the stream annotation and the type.
 
 ### Saving, replaying, checkpointing
@@ -292,12 +297,12 @@ signals — exposes **output ports**, selected with the subscript operator:
 cov >> linalg.eigh[0] >> plot.line()              # eigenvalues only
 src >> (fft >> power_db | rms | peak)["rms"]      # a fan-out branch by name
 src >> (fft >> power_db | rms | peak)[0, 2]       # a tuple of two ports; [1:] also works
-eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-             outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
+eigh = block(np.linalg.eigh, inputs=Sig[T, (N, N)],
+             outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]})
 mats >> eigh["vecs"]                              # named ports on a wrapped library function
 ```
 
-When several ports of one producer must reach _different_ consumers, fan out
+When several ports of one producer must reach *different* consumers, fan out
 port selectors — `port(key)` is a selection that resolves to a typed `Select`
 once it is placed after a tuple-typed node, including inside a branch:
 
@@ -358,12 +363,12 @@ Jupyter kernel, where it uses a helper thread); from async code,
 `await g.arun()` or `async for f in g`.
 
 There is one scheduler. Operator trees (`>>`, `|`, `&`, `feedback`, `when`,
-…) are _lowered_ to the same `Graph` the explicit builder produces, and that
+…) are *lowered* to the same `Graph` the explicit builder produces, and that
 graph is what runs: members connected by bounded queues, a failure future that
 cancels everything on the first unhandled error, and direct iteration of the
 output edge. Linear runs of map blocks are fused into one member so a chain of
 five blocks costs little more than one. A synchronous generator stream block
-runs _inline on the event loop_ when `greenlet` is installed (`pip install
+runs *inline on the event loop* when `greenlet` is installed (`pip install
 sigflow[perf]`) — the generator is suspended at each `next()` instead of
 hopping through a worker thread — and falls back to a thread otherwise (or when
 declared `threaded=True`, which is right for a block that blocks on I/O).
@@ -411,7 +416,7 @@ shows the typed node table, the annotation/provenance card, or the status table.
 ### Controlling long-running graphs
 
 `g.start()` runs a graph in the background and returns a `Run` handle:
-`run.pause()`, `run.resume()`, `run.step(n)` (let _n_ source frames through,
+`run.pause()`, `run.resume()`, `run.step(n)` (let *n* source frames through,
 then stay paused), `run.stop()`, `run.wait()`; `run.frames` holds the outputs so
 far and `run.state` is `running`, `paused`, `stopped`, `done` or `failed`.
 `g.start(paused=True)` arms a graph without releasing any data. In a notebook,
@@ -453,7 +458,7 @@ can be written from the middle of a chain. Sources take positional
 configuration (`io.wav("x.wav")` makes a node).
 
 The ZeroMQ pair (`pip install sigflow[zmq]`) speaks the same wire format as
-GNU Radio's _ZMQ PUB/PUSH Sink_ and _ZMQ SUB/PULL Source_ blocks — one message
+GNU Radio's *ZMQ PUB/PUSH Sink* and *ZMQ SUB/PULL Source* blocks — one message
 per frame, raw samples, optional topic prefix — so a sigflow graph can sit on
 either end of a GNU Radio flowgraph over TCP or IPC.
 
@@ -496,17 +501,25 @@ different frame counts instead of silently stopping at the shortest.
 
 ## Static typing
 
-`Sig[...]` and `Stream[...]` are runtime objects — a small DSL that unification
-understands — but under `TYPE_CHECKING` they are declared as an `ndarray`
-subclass and an iterable, so mypy and pyright read `x: Sig[float, "N"]` as an
-array (`x.mean()`, `x[1:]`, `x * 2` all check) and `for x in xs` over a
-`Stream` is fine. `Framed[...]` reads as `Frame`. The package ships `py.typed`
-and `mypy src/sigflow` is clean; the few error codes disabled in
-`pyproject.toml` are the ones the DSL necessarily trips (`valid-type`,
-`type-arg`) plus `return-value`, because a block declared to return
-`Sig[float, ()]` legitimately returns a Python float. Block _bodies_ are
-therefore checked as NumPy code; the signal contract itself is still checked by
-sigflow at graph construction time.
+`Sig[...]` and `Stream[...]` are runtime objects, a small DSL that unification
+understands. Under `TYPE_CHECKING` `Sig` is an `ndarray` subclass and `Stream`
+an iterable, so a block body reads as NumPy code (`x.mean()`, `x[1:]`, `x * 2`
+all check) and `Framed[...]` reads as `Frame`. Dimensions and dtype variables
+are spelled as symbols (`Sig[float, N]`, from `sigflow.dims`) and units as
+`Literal["V"]`, both of which checkers read as types. What they cannot read yet
+is the rest of the DSL: shape tuples and tuple return annotations are not type
+expressions, generator blocks are annotated with their element type, and an
+array returned from a block does not satisfy a `Sig` return type. Those
+spellings live in `dsp`, `linalg`, `io`, `plot` and `types`, which carry the
+matching exemptions (per-module mypy overrides in `pyproject.toml` and a
+`# pyright:` header line); the rest of the package is checked in full by both
+checkers. Tests and examples are written in the DSL too: `[tool.pyright]` grants
+them the same exemptions by directory, each file carries a matching
+`# mypy: disable-error-code=...` header, and the few remaining DSL-caused
+lines are marked `# type: ignore[...]`, so `mypy src/sigflow tests examples`
+and `pyright` are both clean and gate CI. A checker-readable spelling of the
+DSL (dimension symbols, `tuple[M, N]`, `Iterator[Sig[...]]`) is planned for
+0.5.0 and removes those exemptions.
 
 ## Documentation site
 
@@ -523,20 +536,20 @@ mkdocs serve                       # http://127.0.0.1:8000
 
 ## Conventions worth knowing
 
-- Config lambdas (`refine=`, `total=`) receive the full configuration as keyword
+* Config lambdas (`refine=`, `total=`) receive the full configuration as keyword
   arguments; accept `**_` for the ones you do not use.
-- Fan-out and zip pair branches by count. Branches whose declared _ratios_
+* Fan-out and zip pair branches by count. Branches whose declared *ratios*
   disagree (`dsp.chunk(256)` beside `dsp.rms`) are refused at build time;
   undeclared stream blocks are trusted and the run stops at the shortest
   branch unless `strict=True`.
-- A source that blocks (hardware reads, `time.sleep` pacing) should be declared
+* A source that blocks (hardware reads, `time.sleep` pacing) should be declared
   `@source(threaded=True)` so it cannot stall async sources beside it.
-- A stream block that yields several outputs from one input gives them all the
+* A stream block that yields several outputs from one input gives them all the
   same parents (provenance and annotations are inherited); a source that raises
   mid-stream ends its stream with a failed frame in its own name.
-- `Frame.evolve(meta=...)` merges annotation dicts; `Frame.without(*keys)`
+* `Frame.evolve(meta=...)` merges annotation dicts; `Frame.without(*keys)`
   removes keys.
-- A tap sees the frame (`inputs=Frame`) and passes it on unchanged; a map block
+* A tap sees the frame (`inputs=Frame`) and passes it on unchanged; a map block
   annotated `Framed[...]` can return an evolved frame to control annotations and
   issues precisely.
 

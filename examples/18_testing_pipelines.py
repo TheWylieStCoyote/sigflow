@@ -12,6 +12,7 @@ What this exercises
   * property-style checks across a parameter grid, error-policy behaviour, and
     a regression test pinned to a recorded golden output
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import asyncio
 import os
@@ -37,6 +38,7 @@ from sigflow import (
     run,
     source,
 )  # noqa: E402
+from sigflow.dims import M, N  # noqa: E402
 
 RATE = 1000.0
 
@@ -45,19 +47,19 @@ RATE = 1000.0
 
 
 @block
-def remove_dc(x: Sig[float, "N"]) -> Sig[float, "N"]:
+def remove_dc(x: Sig[float, N]) -> Sig[float, N]:
     return x - x.mean()
 
 
 @block
-def peak_frequency(f: Framed[Sig[float, "N"]]) -> Sig[dict]:
+def peak_frequency(f: Framed[Sig[float, N]]) -> Sig[dict]:
     X = np.abs(np.fft.rfft(f.data * np.hanning(len(f.data))))
     k = int(np.argmax(X[1:])) + 1
     return {"freq_hz": float(k * f["rate"] / len(f.data)), "frame": f.get("seq", None)}
 
 
 @block
-def smooth(xs: Stream[Sig[float, "N"]], alpha: float = 0.5) -> Sig[float, "N"]:
+def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Sig[float, N]:
     acc = None
     for x in xs:
         acc = x if acc is None else (1 - alpha) * acc + alpha * x
@@ -131,22 +133,22 @@ def test_types_are_enforced_at_build_time():
     with pytest.raises(TypeMismatch):
         dsp.sine() >> peak_frequency >> remove_dc  # dict cannot feed a float vector
     with pytest.raises(TypeMismatch):
-        from_iterable([np.zeros((2, 2))], Sig[float, ("M", "N")]) >> remove_dc
+        from_iterable([np.zeros((2, 2))], Sig[float, (M, N)]) >> remove_dc
 
 
 def test_every_frame_is_checked_against_the_contract():
     @block
-    def lies(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def lies(x: Sig[float, N]) -> Sig[float, N]:
         lies.n += 1
         return np.zeros(len(x) + (lies.n > 1))
 
     lies.n = 0
     assert (
-        len(run(from_iterable([np.ones(4)] * 3, Sig[float, "N"]) >> lies)) == 3
+        len(run(from_iterable([np.ones(4)] * 3, Sig[float, N]) >> lies)) == 3
     )  # default: first frame only
     lies.n = 0
     with pytest.raises(TypeMismatch, match="runtime check"):
-        run(from_iterable([np.ones(4)] * 3, Sig[float, "N"]) >> lies, check="all")
+        run(from_iterable([np.ones(4)] * 3, Sig[float, N]) >> lies, check="all")
 
 
 # ------------------------------------------------------------- 3. a fake clock
@@ -192,10 +194,10 @@ def test_peak_frequency_within_one_bin_for_any_tone(freq):
 
 def test_error_policies_are_what_the_docs_say():
     @block
-    def boom(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def boom(x: Sig[float, N]) -> Sig[float, N]:
         raise RuntimeError("no")
 
-    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, "N"])  # noqa: E731
+    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, N])  # noqa: E731
     out = run(src() >> boom >> remove_dc)
     assert (
         all(f.failed and f.data is MISSING for f in out)

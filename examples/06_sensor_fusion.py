@@ -11,6 +11,7 @@ What this exercises
   * frame annotations (innovation per update) and an animation built after
     the run from the recorded frames (plot.animate)
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import asyncio
 import math
@@ -98,7 +99,7 @@ async def gps(
 def parse(ev: Sig[dict]) -> Sig[dict]:
     """Decode raw GPS text; IMU events pass through. Raises on corrupt input."""
     if ev["kind"] == "gps":
-        x, y = (float(v) for v in ev["raw"].split(","))  # ValueError on "GARBAGE"
+        x, y = (float(v) for v in ev["raw"].split(","))  # type: ignore[attr-defined]  # ValueError on "GARBAGE"
         return {"kind": "gps", "t": ev["t"], "pos": np.array([x, y])}
     return ev
 
@@ -160,8 +161,8 @@ def kalman(
 
 @block
 def error_vs_truth(s: Sig[dict]) -> Sig[dict]:
-    tx, ty, *_ = true_state(s["t"])
-    return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}
+    tx, ty, *_ = true_state(s["t"])  # type: ignore[arg-type]
+    return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}  # type: ignore[dict-item]
 
 
 _track_history: list[tuple[float, float, int]] = []

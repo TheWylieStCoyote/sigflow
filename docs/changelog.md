@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+New
+
+- `sigflow.dims`: dimension and dtype-variable symbols (`N`, `M`, `T`, the
+  whole alphabet; also exported from `sigflow`). `Sig[float, N]` builds the
+  same contract as `Sig[float, "N"]`, which keeps working, but checkers read
+  `N` as a type instead of an undefined name. Rate and units accept
+  `Literal[48_000]` / `Literal["V"]` for the same reason. The package, tests,
+  examples and docs use the symbol spelling; the `name-defined` /
+  `reportUndefinedVariable` exemptions are gone.
+
+Changed
+
+- Static typing: the package-wide mypy error-code exemptions are replaced by
+  per-module overrides for the DSL-heavy modules (`dsp`, `linalg`, `io`,
+  `plot`, `types`); everything else is checked in full, and a `[tool.pyright]`
+  configuration is added; tests and examples carry a matching mypy header
+  line, and `mypy src/sigflow tests examples` plus `pyright` gate CI.
+  `Frame.save` / `Frame.load` and `Provenance.to_dict` / `to_json` /
+  `from_dict` / `from_json` are declared on the classes instead of attached at
+  import time, so editors see them. The `draw(ax, data, frame)` callback of
+  `plot.custom` may return a value.
+
 ## 0.4.0
 
 New

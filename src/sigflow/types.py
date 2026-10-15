@@ -6,9 +6,9 @@ dimensions such as ``"N"`` that must agree across a graph), an optional sample
 rate and physical units.  Types are written with a subscript syntax that reads
 like a type annotation::
 
-    Sig[np.complex64, "N"]             # 1-D complex vector of symbolic length N
-    Sig[float, ("M", "N")]             # M x N real matrix
-    Sig[float, (1024,), 48_000, "V"]   # fixed-length frame at 48 kHz, in volts
+    Sig[np.complex64, N]             # 1-D complex vector of symbolic length N
+    Sig[float, (M, N)]             # M x N real matrix
+    Sig[float, (1024,), 48_000, Literal["V"]]   # fixed-length frame at 48 kHz, in volts
     Sig[dict]                          # any Python dict (non-array payload)
     Sig[Any]                           # anything at all
 
@@ -18,12 +18,13 @@ that ``"N"`` means the same thing everywhere in a graph.
 """
 
 from __future__ import annotations
-# pyright: reportUndefinedVariable=false, reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
+# pyright: reportInvalidTypeForm=false, reportReturnType=false, reportGeneralTypeIssues=false
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
 
 import numpy as np
+from .dims import M, N, T
 
 __all__ = [
     "Any",
@@ -59,7 +60,7 @@ class TypeMismatch(TypeError):
 
 @dataclass(frozen=True)
 class DVar:
-    """A dtype variable: ``Sig["T", "N"] -> Sig["T", "N"]`` preserves the input dtype."""
+    """A dtype variable: ``Sig[T, N] -> Sig[T, N]`` preserves the input dtype."""
 
     name: str
 
@@ -204,7 +205,7 @@ def _norm_dtype(dt: Any) -> Any:
     if isinstance(dt, DVar):
         return dt
     if isinstance(dt, str):
-        # Single letters are dtype *variables* (Sig["T", "N"]); longer names are
+        # Single letters are dtype *variables* (Sig[T, N]); longer names are
         # NumPy dtype names ("float32", "complex128", ...).
         if len(dt) == 1 and dt.isalpha():
             return DVar(dt)
@@ -233,6 +234,11 @@ def _norm_shape(shape: Any) -> tuple[Dim, ...] | None:
     return tuple(out)
 
 
+def _unlit(x: Any) -> Any:
+    """``Literal["V"]`` -> ``"V"``: the checker-readable spelling of a rate or unit."""
+    return get_args(x)[0] if get_origin(x) is Literal else x
+
+
 @dataclass(frozen=True)
 class SignalType:
     """Description of the data carried along one edge of a graph.
@@ -259,8 +265,8 @@ class SignalType:
             params = (params,)
         dtype = params[0] if len(params) > 0 else Any
         shape = params[1] if len(params) > 1 else None
-        rate = params[2] if len(params) > 2 else None
-        units = params[3] if len(params) > 3 else None
+        rate = _unlit(params[2]) if len(params) > 2 else None
+        units = _unlit(params[3]) if len(params) > 3 else None
         if len(params) > 4:
             raise TypeError(
                 "Sig[dtype, shape, rate, units] takes at most four parameters"
@@ -687,8 +693,8 @@ def describe(t: Any) -> str:
 # --------------------------------------------------------------------------- #
 
 Scalar = Sig[float, ()]
-Vector = Sig[float, ("N",)]
-Matrix = Sig[float, ("M", "N")]
+Vector = Sig[float, (N,)]
+Matrix = Sig[float, (M, N)]
 Tensor = Sig[float, None]
-CVector = Sig[complex, ("N",)]
-CMatrix = Sig[complex, ("M", "N")]
+CVector = Sig[complex, (N,)]
+CMatrix = Sig[complex, (M, N)]

@@ -4,7 +4,7 @@ The ``@block`` decorator turns an ordinary function into a :class:`BlockDef`.
 Inputs and outputs are declared with annotations::
 
     @block
-    def scale(x: Sig[float, "N"], gain: float = 1.0) -> Sig[float, "N"]:
+    def scale(x: Sig[float, N], gain: float = 1.0) -> Sig[float, N]:
         return x * gain
 
 * Parameters annotated with a signal type (``Sig[...]``, a tuple of them,
@@ -26,7 +26,7 @@ Kinds of block (inferred automatically):
 
 Existing library functions are reused without modification::
 
-    fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
+    fft = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
 """
 
 from __future__ import annotations
@@ -506,7 +506,7 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
 
     Usable bare (``@block``), with options (``@block(on_error="skip")``) or as
     a wrapper for existing code
-    (``block(scipy.signal.hilbert, inputs=Sig[float, "N"], outputs=Sig[complex, "N"])``).
+    (``block(scipy.signal.hilbert, inputs=Sig[float, N], outputs=Sig[complex, N])``).
 
     Options:
         name:         display name (defaults to the function name)

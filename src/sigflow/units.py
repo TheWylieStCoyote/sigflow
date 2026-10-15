@@ -1,6 +1,6 @@
 """Units for signal types: a small SI registry, compatibility and conversion.
 
-    Sig[float, "N", None, "mV"]           # a type with units
+    Sig[float, N, None, Literal["mV"]]           # a type with units
     units.compatible("mV", "V")           # True (same dimension, different scale)
     units.factor("mV", "V")               # 0.001
     dsp.to_units("V")                     # a block that converts (and retypes) a stream

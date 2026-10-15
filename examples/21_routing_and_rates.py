@@ -18,6 +18,7 @@ What this exercises
   * @block(ratio=...) declarations, g.ratio, describe() rate tags, RatioMismatch
   * run(strict=True) checking declared ratios and expected frame counts
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import numpy as np
 
@@ -36,9 +37,10 @@ from sigflow import (
     source,
     switch,
 )
+from sigflow.dims import K, N
 
 RATE = 1e6
-N = 512
+N_SAMPLES = 512
 rng = np.random.default_rng(3)
 
 
@@ -46,31 +48,33 @@ rng = np.random.default_rng(3)
 
 
 @source(total=lambda bursts, **_: bursts)
-def channel(bursts: int = 24, snr_db: float = 15.0) -> Sig[complex, "N"]:
+def channel(bursts: int = 24, snr_db: float = 15.0) -> Sig[complex, N]:
     """Bursts of BPSK, QPSK or an unmodulated carrier, tagged with the truth so the
     classifier's mistakes can be counted."""
     for i in range(bursts):
         kind = ("bpsk", "qpsk", "carrier")[i % 3]
         if kind == "bpsk":
-            sym = rng.choice([-1, 1], N).astype(complex)
+            sym = rng.choice([-1, 1], N_SAMPLES).astype(complex)
         elif kind == "qpsk":
-            sym = (rng.choice([-1, 1], N) + 1j * rng.choice([-1, 1], N)) / np.sqrt(2)
+            sym = (
+                rng.choice([-1, 1], N_SAMPLES) + 1j * rng.choice([-1, 1], N_SAMPLES)
+            ) / np.sqrt(2)
         else:
-            sym = np.exp(1j * 2 * np.pi * 0.1 * np.arange(N))
+            sym = np.exp(1j * 2 * np.pi * 0.1 * np.arange(N_SAMPLES))
         noise = (
-            (rng.standard_normal(N) + 1j * rng.standard_normal(N))
+            (rng.standard_normal(N_SAMPLES) + 1j * rng.standard_normal(N_SAMPLES))
             / np.sqrt(2)
             * 10 ** (-snr_db / 20)
         )
         yield Frame(
             sym + noise,
-            meta={"seq": i, "truth": kind, "t0": i * N / RATE},
+            meta={"seq": i, "truth": kind, "t0": i * N_SAMPLES / RATE},
             stream={"rate": RATE},
         )
 
 
 @block
-def classify(f: Framed[Sig[complex, "N"]]) -> Sig[complex, "N"]:
+def classify(f: Framed[Sig[complex, N]]) -> Sig[complex, N]:
     """Cheap modulation classifier (spectral line -> carrier, else the |m2| / |m4| moments);
     tags ``modulation``. Deliberately simple: a few misclassifications show the default branch."""
     x = f.data / np.sqrt(np.mean(np.abs(f.data) ** 2))
@@ -87,17 +91,17 @@ def classify(f: Framed[Sig[complex, "N"]]) -> Sig[complex, "N"]:
 
 
 @block
-def demod_bpsk(x: Sig[complex, "N"]) -> Sig[int, "N"]:
-    return (x.real > 0).astype(int)
+def demod_bpsk(x: Sig[complex, N]) -> Sig[int, N]:
+    return (x.real > 0).astype(int)  # type: ignore[attr-defined]
 
 
 @block
-def demod_qpsk(x: Sig[complex, "N"]) -> Sig[int, "N"]:
-    return ((x.real > 0).astype(int) << 1) | (x.imag > 0).astype(int)
+def demod_qpsk(x: Sig[complex, N]) -> Sig[int, N]:
+    return ((x.real > 0).astype(int) << 1) | (x.imag > 0).astype(int)  # type: ignore[attr-defined]
 
 
 @block(ratio="1:1")
-def track_carrier(xs: Stream[Sig[complex, "N"]]) -> Sig[float, ()]:
+def track_carrier(xs: Stream[Sig[complex, N]]) -> Sig[float, ()]:
     """Stateful: a running frequency estimate across the carrier bursts *it* sees."""
     est = None
     for x in xs:
@@ -107,12 +111,12 @@ def track_carrier(xs: Stream[Sig[complex, "N"]]) -> Sig[float, ()]:
 
 
 @block
-def average_bursts(x: Sig[complex, ("K", "N")]) -> Sig[complex, "N"]:
+def average_bursts(x: Sig[complex, (K, N)]) -> Sig[complex, N]:
     return x.mean(axis=0)
 
 
 @block
-def log_unknown(f: Framed[Sig[complex, "N"]]) -> Sig[str]:
+def log_unknown(f: Framed[Sig[complex, N]]) -> Sig[str]:
     return f"unclassified burst #{f['seq']}"
 
 
@@ -134,7 +138,7 @@ print()
 
 out = run(g)
 L = Lineage(out)
-by_branch = {}
+by_branch: dict[str, list] = {}
 for f in out:
     by_branch.setdefault(f.prov.op, []).append(f)
 for op, frames in sorted(by_branch.items()):
@@ -212,7 +216,7 @@ print(
 
 
 @block(ratio="1:1")
-def misdeclared(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+def misdeclared(xs: Stream[Sig[float, N]]) -> Sig[float, N]:
     for x in xs:
         yield x
         yield -x

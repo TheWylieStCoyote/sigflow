@@ -7,14 +7,15 @@ with generators. It depends only on NumPy, SciPy and matplotlib.
 ```python
 import numpy as np
 from sigflow import block, Sig, Stream, run
+from sigflow.dims import N, T
 from sigflow import dsp, plot
 
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:   # a stateful stream block
+def pairs(xs: Stream[Sig[float, N]]) -> Sig[float, (2, N)]:   # a stateful stream block
     buf = []
     for x in xs:
         buf.append(x)
@@ -99,9 +100,13 @@ against the signature (unknown or missing parameters fail at build time).
 
 `Sig[dtype, shape, rate, units]` describes an edge. `dtype` is a NumPy dtype, a
 Python class (`Sig[dict]`) or `Any`; `shape` mixes integers, `None` (any
-length) and **symbolic dimensions** (`"N"`); `"T"`-style single letters in the
-dtype slot are **dtype variables**, so `Sig["T", "N"] -> Sig["T", "N"]` says
-"same dtype and length in as out" without committing to either.
+length) and **symbolic dimensions** (`N`); a single letter in the dtype slot
+such as `T` is a **dtype variable**, so `Sig[T, N] -> Sig[T, N]` says "same
+dtype and length in as out" without committing to either. The symbols come
+from `sigflow.dims` (the whole alphabet; `from sigflow import N, M` works too)
+and are plain one-letter strings at runtime, so the older `Sig[float, "N"]`
+spelling still builds the same contract; the difference is that a type checker
+reads a string in a type position as an undefined name and reads `N` as a type.
 
 Symbols are scoped to the block that declares them — `N` in `fft` is unrelated
 to `N` in `scale` — and become equal only where edges meet. Validation is a
@@ -292,8 +297,8 @@ signals — exposes **output ports**, selected with the subscript operator:
 cov >> linalg.eigh[0] >> plot.line()              # eigenvalues only
 src >> (fft >> power_db | rms | peak)["rms"]      # a fan-out branch by name
 src >> (fft >> power_db | rms | peak)[0, 2]       # a tuple of two ports; [1:] also works
-eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-             outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
+eigh = block(np.linalg.eigh, inputs=Sig[T, (N, N)],
+             outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]})
 mats >> eigh["vecs"]                              # named ports on a wrapped library function
 ```
 
@@ -499,17 +504,22 @@ different frame counts instead of silently stopping at the shortest.
 `Sig[...]` and `Stream[...]` are runtime objects, a small DSL that unification
 understands. Under `TYPE_CHECKING` `Sig` is an `ndarray` subclass and `Stream`
 an iterable, so a block body reads as NumPy code (`x.mean()`, `x[1:]`, `x * 2`
-all check) and `Framed[...]` reads as `Frame`. What checkers cannot read today
-is the DSL itself: a dimension string such as `"N"` is a forward reference to
-them, shape tuples and tuple return annotations are not type expressions, and an
+all check) and `Framed[...]` reads as `Frame`. Dimensions and dtype variables
+are spelled as symbols (`Sig[float, N]`, from `sigflow.dims`) and units as
+`Literal["V"]`, both of which checkers read as types. What they cannot read yet
+is the rest of the DSL: shape tuples and tuple return annotations are not type
+expressions, generator blocks are annotated with their element type, and an
 array returned from a block does not satisfy a `Sig` return type. Those
 spellings live in `dsp`, `linalg`, `io`, `plot` and `types`, which carry the
 matching exemptions (per-module mypy overrides in `pyproject.toml` and a
 `# pyright:` header line); the rest of the package is checked in full by both
-checkers, and `mypy src/sigflow` and `pyright src` gate CI. Tests and examples
-are written in the DSL too, so `[tool.pyright]` grants them the same exemptions
-by directory for editor use. A checker-readable spelling of the DSL (dimension
-symbols, `tuple[M, N]`, `Iterator[Sig[...]]`) is planned for 0.5.0.
+checkers. Tests and examples are written in the DSL too: `[tool.pyright]` grants
+them the same exemptions by directory, each file carries a matching
+`# mypy: disable-error-code=...` header, and the few remaining DSL-caused
+lines are marked `# type: ignore[...]`, so `mypy src/sigflow tests examples`
+and `pyright` are both clean and gate CI. A checker-readable spelling of the
+DSL (dimension symbols, `tuple[M, N]`, `Iterator[Sig[...]]`) is planned for
+0.5.0 and removes those exemptions.
 
 ## Documentation site
 

@@ -3,17 +3,20 @@
 `Sig[dtype, shape, rate, units]` describes what flows along an edge:
 
 ```python
-Sig[np.complex64, "N"]             # 1-D complex, symbolic length N
-Sig[float, ("M", "N")]             # M x N real matrix
-Sig[float, (1024,), 48_000, "V"]   # fixed length, 48 kHz, volts
-Sig["T", "N"]                      # any dtype T (preserved in -> out), length N
+Sig[np.complex64, N]             # 1-D complex, symbolic length N
+Sig[float, (M, N)]             # M x N real matrix
+Sig[float, (1024,), 48_000, Literal["V"]]   # fixed length, 48 kHz, volts
+Sig[T, N]                      # any dtype T (preserved in -> out), length N
 Sig[dict]                          # a Python object
 Sig[Any]                           # anything (gradual: checked against the first frame)
 ```
 
 - **dtype**: a NumPy dtype, a Python class, `Any`, or a single-letter
-  _variable_ (`"T"`) that binds to whatever arrives and is preserved.
-- **shape**: integers, `None` (any length) and **symbolic dimensions** (`"N"`).
+  _variable_ (`T`) that binds to whatever arrives and is preserved.
+- **shape**: integers, `None` (any length) and **symbolic dimensions** (`N`).
+  Symbols come from `sigflow.dims` (`from sigflow import N, M`); at runtime they
+  are the one-letter strings, so `Sig[float, "N"]` still works, but only the
+  symbol spelling type-checks.
   Symbols are scoped to the block that declares them — `N` in `fft` is unrelated
   to `N` in `scale` — and become equal only where edges meet.
 - **rate** and **units**: equal or unspecified; units of the same dimension but a

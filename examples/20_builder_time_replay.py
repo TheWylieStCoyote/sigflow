@@ -9,7 +9,9 @@ What this exercises
   * Stateful blocks with run.checkpoint() and resume=
   * plot.multi and plot.history in one figure
 """
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
+from typing import Literal
 import os
 import tempfile
 import time
@@ -31,13 +33,14 @@ from sigflow import (
     run,
     source,
 )
+from sigflow.dims import N, T
 
 WORK = tempfile.mkdtemp(prefix="sigflow_v02_")
 RATE = 1000.0
 
 
 @source(total=lambda frames, **_: frames)
-def adc(frames: int = 40, n: int = 100) -> Sig[float, "N", None, "mV"]:
+def adc(frames: int = 40, n: int = 100) -> Sig[float, N, None, Literal["mV"]]:
     """A sensor in millivolts with a timestamp on every frame."""
     for k in range(frames):
         t = (np.arange(n) + k * n) / RATE
@@ -58,7 +61,7 @@ async def gps_fixes(count: int = 10) -> Sig[dict]:
 
 
 @block
-def volts_rms(x: Sig[float, "N", None, "V"]) -> Sig[float, ()]:
+def volts_rms(x: Sig[float, N, None, Literal["V"]]) -> Sig[float, ()]:
     return float(np.sqrt(np.mean(x**2)))
 
 
@@ -68,7 +71,7 @@ class Integrator(Stateful):
     def __init__(self) -> None:
         self.total = 0.0
 
-    def __call__(self, x: Sig[float, "N"]) -> Sig[float, ()]:
+    def __call__(self, x: Sig[float, N]) -> Sig[float, ()]:
         self.total += float(np.sum(x**2))
         return self.total
 
@@ -115,13 +118,13 @@ if __name__ == "__main__":
     eigh = block(
         np.linalg.eigh,
         name="eigh",
-        inputs=Sig["T", ("N", "N")],
-        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+        inputs=Sig[T, (N, N)],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]},
     )
 
     @block
     def summarize(
-        vals: Sig[float, "N"], vecs: Sig["T", ("N", "N")], raw: Sig[float, ("N", "N")]
+        vals: Sig[float, N], vecs: Sig[T, (N, N)], raw: Sig[float, (N, N)]
     ) -> Sig[dict]:
         return {
             "top": round(float(vals[-1]), 1),

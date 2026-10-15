@@ -1,5 +1,6 @@
 """Make the tests runnable without installing the package (adds src/ to sys.path)
 and keep matplotlib headless so plot tests never try to open a window."""
+# mypy: disable-error-code="valid-type, misc, syntax, return-value, union-attr, index"
 
 import os
 import sys

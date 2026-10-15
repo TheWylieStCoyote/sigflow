@@ -4,7 +4,7 @@ A block is an ordinary Python function with a typed signature:
 
 ```python
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 ```
 
@@ -29,9 +29,9 @@ reusable on their own.
 ## Reusing existing code
 
 ```python
-fft   = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
-eigh  = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-              outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})   # named ports
+fft   = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
+eigh  = block(np.linalg.eigh, inputs=Sig[T, (N, N)],
+              outputs={"vals": Sig[float, N], "vecs": Sig[T, (N, N)]})   # named ports
 anything = lift(some_function)                     # Any -> Any, checked at run time
 ```
 
