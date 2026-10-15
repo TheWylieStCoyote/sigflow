@@ -33,10 +33,10 @@ from __future__ import annotations
 
 import functools
 import inspect
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-from .frame import Frame, frozen
+from .frame import Frame
 from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
 
 __all__ = ["block", "source", "tap", "BlockDef", "Framed", "InputSpec", "lift"]

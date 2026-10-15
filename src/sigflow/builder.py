@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .frame import Frame
 from .graph import Node, Select, TupleType, as_node, describe
 from .ratio import Ratio, RatioMismatch
 from .types import Env, SignalType, TypeMismatch, unify

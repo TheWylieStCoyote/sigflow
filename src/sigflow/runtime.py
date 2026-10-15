@@ -25,13 +25,13 @@ import inspect
 import queue
 import threading
 import time
-from typing import Any, AsyncIterator, Callable, Iterable, Iterator
+from typing import Any, AsyncIterator, Callable, Iterator
 
 import numpy as np
 
 from .block import BlockDef
-from .control import Knob, live
-from .frame import MISSING, Frame, Issue, Provenance, frozen, merge_annotations
+from .control import live
+from .frame import MISSING, Frame, Issue, Provenance, merge_annotations
 from .graph import (
     Align,
     Block,
@@ -50,7 +50,7 @@ from .graph import (
     Zip,
 )
 from .progress import Monitor, Reporter
-from .types import Env, SignalType, TupleType, TypeMismatch
+from .types import Env, TypeMismatch
 
 __all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
 

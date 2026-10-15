@@ -10,18 +10,19 @@ from __future__ import annotations
 import asyncio
 import time as _time
 from fractions import Fraction
-from typing import Any, Iterable, Iterator
+from typing import Any
 
 import numpy as np
 import scipy.signal as ss
-
-complex_ = complex
 
 from .block import Framed, block, source, tap
 from .frame import Frame
 from .graph import Block
 from .ratio import Ratio
 from .types import Sig, Stream
+
+complex_ = complex
+
 
 __all__ = [
     "sine",

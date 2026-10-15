@@ -20,7 +20,7 @@ that ``"N"`` means the same thing everywhere in a graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
