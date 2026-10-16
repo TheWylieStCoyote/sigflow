@@ -1,16 +1,16 @@
 # Composing graphs
 
 ```python
-a >> b                 # chain
-a | b                  # fan-out: every frame to both; output is a tuple frame
-a & b                  # zip: lock-step join of two streams
-merge(a, b)            # interleave sources as they arrive
-align(a, b, tolerance=0.02)   # join by timestamp
-(a | b | c)["rms"]     # select a port; port("vals") inside a fan-out
-feedback(body, init)   # a loop: body maps (x, state) -> (y, new_state)
-when(pred, then, otherwise)   # per-frame routing; a branch returning None drops
-parallel(block, workers=4)    # a map block on several cores, order kept
-g.take(n), g.skip(n), g.every(k), g.until(pred)   # stream slicing
+a >> b  # chain
+a | b  # fan-out: every frame to both; output is a tuple frame
+a & b  # zip: lock-step join of two streams
+merge(a, b)  # interleave sources as they arrive
+align(a, b, tolerance=0.02)  # join by timestamp
+(a | b | c)["rms"]  # select a port; port("vals") inside a fan-out
+feedback(body, init)  # a loop: body maps (x, state) -> (y, new_state)
+when(pred, then, otherwise)  # per-frame routing; a branch returning None drops
+parallel(block, workers=4)  # a map block on several cores, order kept
+g.take(n), g.skip(n), g.every(k), g.until(pred)  # stream slicing
 ```
 
 Graphs are nodes: `front = dsp.window >> dsp.to_complex >> dsp.fft` is reusable
@@ -23,9 +23,11 @@ instance used twice is cloned automatically.
 ```python
 g = Graph("diamond")
 cov = g.add(src >> linalg.covariance, "cov")
-e   = g.add(eigh)
-s   = g.add(summarize)
-g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(cov, s, "raw")
+e = g.add(eigh)
+s = g.add(summarize)
+g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").connect(
+    cov, s, "raw"
+)
 g.output(s)
 ```
 
@@ -69,6 +71,9 @@ unchanged) or `None` (drop; `strict=True` raises on an unknown key). With
 `ordered=True` output order follows input order and every branch must be 1:1.
 
 ```python
-demod = switch("modulation", {"bpsk": demod_bpsk, "qpsk": demod_qpsk,
-                              "carrier": track_carrier}, default=log_unknown)
+demod = switch(
+    "modulation",
+    {"bpsk": demod_bpsk, "qpsk": demod_qpsk, "carrier": track_carrier},
+    default=log_unknown,
+)
 ```

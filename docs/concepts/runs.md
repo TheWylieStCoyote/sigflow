@@ -3,11 +3,13 @@
 Graphs are values; running one is explicit:
 
 ```python
-frames = run(g)                   # synchronously, returns the output frames
-frames = await g.arun()           # from async code (a Jupyter cell)
-for f in g: ...                   # stream the outputs lazily
-async for f in g: ...
-r = g.start()                     # in the background: a Run handle
+frames = run(g)  # synchronously, returns the output frames
+frames = await g.arun()  # from async code (a Jupyter cell)
+for f in g:
+    ...  # stream the outputs lazily
+async for f in g:
+    ...
+r = g.start()  # in the background: a Run handle
 ```
 
 `run()` and `start()` take the same options: `on_error=` (override every

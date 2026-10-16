@@ -7,11 +7,11 @@ input; stream blocks exactly the frames consumed since their previous output;
 selections record the selected branch first so `chain()` follows it.
 
 ```python
-f.prov[0], f.prov[2], f.prov[-1]     # this node, two steps up, the root
-f.prov["fft"].params                 # the nearest fft's configuration
-f.prov.chain(), f.prov.roots()       # main line of descent; the source frames
+f.prov[0], f.prov[2], f.prov[-1]  # this node, two steps up, the root
+f.prov["fft"].params  # the nearest fft's configuration
+f.prov.chain(), f.prov.roots()  # main line of descent; the source frames
 "fft" in f.prov
-f.trace()                            # rendered tree; shared ancestors marked once
+f.trace()  # rendered tree; shared ancestors marked once
 ```
 
 ## Across many frames

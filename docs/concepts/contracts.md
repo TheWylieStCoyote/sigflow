@@ -3,12 +3,14 @@
 `Sig[dtype, shape, rate, units]` describes what flows along an edge:
 
 ```python
-Sig[np.complex64, N]             # 1-D complex, symbolic length N
-Sig[float, tuple[M, N]]             # M x N real matrix
-Sig[float, tuple[Literal[1024]], Literal[48_000], Literal["V"]]   # fixed length, 48 kHz, volts
-Sig[T, N]                      # any dtype T (preserved in -> out), length N
-Sig[dict]                          # a Python object
-Sig[Any]                           # anything (gradual: checked against the first frame)
+Sig[np.complex64, N]  # 1-D complex, symbolic length N
+Sig[float, tuple[M, N]]  # M x N real matrix
+Sig[
+    float, tuple[Literal[1024]], Literal[48_000], Literal["V"]
+]  # fixed length, 48 kHz, volts
+Sig[T, N]  # any dtype T (preserved in -> out), length N
+Sig[dict]  # a Python object
+Sig[Any]  # anything (gradual: checked against the first frame)
 ```
 
 - **dtype**: a NumPy dtype, a Python class, `Any`, or a single-letter

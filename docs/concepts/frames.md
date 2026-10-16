@@ -42,9 +42,9 @@ stamps exact.
 ## Reading a frame
 
 ```python
-f["rate"]          # annotation lookup: meta, then stream, then samples
-f.get("snr", 0)    # with a default
-f[1]               # part 1 of a tuple frame (from a fan-out / zip)
-f.prov["fft"]      # the nearest ancestor made by a block called fft
-f.trace()          # the lineage as a tree
+f["rate"]  # annotation lookup: meta, then stream, then samples
+f.get("snr", 0)  # with a default
+f[1]  # part 1 of a tuple frame (from a fan-out / zip)
+f.prov["fft"]  # the nearest ancestor made by a block called fft
+f.trace()  # the lineage as a tree
 ```

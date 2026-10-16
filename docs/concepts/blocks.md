@@ -29,10 +29,13 @@ reusable on their own.
 ## Reusing existing code
 
 ```python
-fft   = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
-eigh  = block(np.linalg.eigh, inputs=Sig[T, tuple[N, N]],
-              outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]})   # named ports
-anything = lift(some_function)                     # Any -> Any, checked at run time
+fft = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
+eigh = block(
+    np.linalg.eigh,
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
+)  # named ports
+anything = lift(some_function)  # Any -> Any, checked at run time
 ```
 
 ## Options worth knowing
