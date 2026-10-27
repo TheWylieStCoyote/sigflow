@@ -424,6 +424,58 @@ pickle by import path, so anything defined in a module works; `backend="thread"`
 works for lambdas and notebook-defined blocks, and pays off when the function
 releases the GIL (NumPy and SciPy do).
 
+### CPU / CUDA transfers
+
+`to_device(device=0)` and `to_host()` are explicit transfer blocks, exported
+from `sigflow`. CuPy is optional: a normal installation of sigflow does not
+install or import it. If CuPy is already installed, no extra installation is needed.
+The `cupy` extra (`python -m pip install -e ".[cupy]"`) installs the CuPy source
+distribution. Alternatively, install a prebuilt wheel matching your CUDA
+installation (for example, `python -m pip install cupy-cuda12x` for a compatible
+CUDA 12 environment) alongside a normal sigflow installation. Choose one CuPy
+distribution, rather than installing both the source package and a CUDA wheel.
+CPU-only `to_host()` needs no CuPy.
+
+```python
+from sigflow import Sig, block, dsp, run, to_device, to_host
+from sigflow.dims import N
+
+
+@block
+def gpu_fft(x: Sig[complex, N]) -> Sig[complex, N]:
+    import cupy as cp
+
+    return cp.fft.fft(x)
+
+
+g = (
+    dsp.sine(n=4096)
+    >> dsp.to_complex
+    >> to_device(device="cuda:0")
+    >> gpu_fft
+    >> to_host()
+)
+frames = run(g, on_error="raise")  # output payloads are NumPy arrays
+```
+
+Device indices may be nonnegative integers or `"cuda:N"` strings. Transfers
+preserve dtype, shape, frame annotations and issues, and add provenance like any
+other map block. Arrays already at the destination can be reused; `copy=True`
+forces an independent copy. `to_device()` synchronizes the current CUDA stream
+before returning, and `to_host()` waits for its GPU-to-CPU copy to finish.
+
+For an xarray `DataArray`, only its sample payload is transferred; dimensions,
+coordinates, name and attributes are retained. Coordinates and frame-level sample
+annotation arrays keep their existing device placement. `Dataset` transfers are
+not supported. xarray remains optional.
+
+Runtime contract checks inspect array metadata without converting GPU data to
+NumPy. This does not make the built-in NumPy/SciPy DSP blocks GPU-aware: use
+CuPy-compatible blocks between the transfers, and return to the CPU before
+NumPy-based reframing, plotting, file sinks or persistence. The existing run error
+policy applies to transfers too; `on_error="raise"` surfaces installation or CUDA
+errors immediately.
+
 ### Seeing the graph
 
 `g.draw()` returns an SVG diagram that displays inline in Jupyter (and

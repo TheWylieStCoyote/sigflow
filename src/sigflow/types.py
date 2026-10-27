@@ -245,6 +245,14 @@ def _unlit(x: Any) -> Any:
     return get_args(x)[0] if get_origin(x) is Literal else x
 
 
+def _array_metadata(value: Any) -> tuple[np.dtype, tuple[int, ...]]:
+    """Inspect arrays without materializing their data (including CUDA/lazy arrays)."""
+    if hasattr(value, "dtype") and hasattr(value, "shape"):
+        return np.dtype(value.dtype), tuple(value.shape)
+    array = np.asarray(value)
+    return array.dtype, array.shape
+
+
 @dataclass(frozen=True)
 class SignalType:
     """Description of the data carried along one edge of a graph.
@@ -338,24 +346,24 @@ class SignalType:
         if self.dtype is Any and self.shape is None:
             return env
         if isinstance(self.dtype, DVar):
-            arr = np.asarray(value)
-            env.bind_dtype(self.dtype.name, arr.dtype, where)
+            dtype, _ = _array_metadata(value)
+            env.bind_dtype(self.dtype.name, dtype, where)
             if self.shape is not None:
-                self.with_(dtype=arr.dtype).check(value, env, where)
+                self.with_(dtype=dtype).check(value, env, where)
             return env
         if self.is_array:
-            arr = np.asarray(value)
+            dtype, shape = _array_metadata(value)
             target: Any = self.dtype
-            if not np.can_cast(arr.dtype, target, casting="same_kind"):
+            if not np.can_cast(dtype, target, casting="same_kind"):
                 raise TypeMismatch(
-                    f"{where}: value dtype {arr.dtype} is not {self.dtype}"
+                    f"{where}: value dtype {dtype} is not {self.dtype}"
                 )
             if self.shape is not None:
-                if arr.ndim != len(self.shape):
+                if len(shape) != len(self.shape):
                     raise TypeMismatch(
-                        f"{where}: value has rank {arr.ndim}, type requires {len(self.shape)}"
+                        f"{where}: value has rank {len(shape)}, type requires {len(self.shape)}"
                     )
-                for i, (d, n) in enumerate(zip(self.shape, arr.shape)):
+                for i, (d, n) in enumerate(zip(self.shape, shape)):
                     if isinstance(d, int) and d != n:
                         raise TypeMismatch(
                             f"{where}: axis {i} has length {n}, expected {d}"

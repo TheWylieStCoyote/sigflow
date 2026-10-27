@@ -14,6 +14,7 @@ from . import io
 from .block import BlockDef, Framed, block, lift, source, tap
 from .builder import Graph
 from .control import Knob, Run
+from .device import to_device, to_host
 from .dims import (
     A,
     B,
@@ -129,6 +130,8 @@ __all__ = [
     "when",
     "align",
     "parallel",
+    "to_device",
+    "to_host",
     "switch",
     "Ratio",
     "RatioMismatch",

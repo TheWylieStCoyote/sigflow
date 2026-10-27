@@ -15,6 +15,7 @@ notebook = ["ipython", "jupyter", "ipywidgets"]
 test = ["pytest"]
 perf = ["greenlet"] # sync generator stream blocks run inline on the event loop
 zmq = ["pyzmq"] # io.zmq / io.zmq_sink
+cupy = ["cupy"] # optional CUDA transfers; CUDA-specific wheels may be installed separately
 docs = ["mkdocs-material", "pytest"] # python docs/build_docs.py && mkdocs build
 dev = [
   "pytest",

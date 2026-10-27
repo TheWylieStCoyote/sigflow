@@ -194,6 +194,7 @@ class Node:
 
         if (
             isinstance(items, (_np.ndarray,))
+            or all(hasattr(items, attr) for attr in ("shape", "dtype", "ndim"))
             or not hasattr(items, "__iter__")
             or isinstance(items, (str, bytes, dict))
         ):
