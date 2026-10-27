@@ -72,19 +72,40 @@ def _frames_of(
         )
 
 
+def _wav_type(path: str, n: int, channel: int | None, **_: Any) -> SignalType:
+    if channel is not None:
+        return SignalType(T, (n,))
+    from scipy.io import wavfile
+
+    try:
+        _, data = wavfile.read(path, mmap=True)
+    except (OSError, ValueError):
+        # Some WAV encodings (notably 24-bit PCM) cannot be memory-mapped.
+        # Keep their rank gradual rather than loading the recording at build time.
+        return SignalType(T, None)
+    return SignalType(T, (n, *data.shape[1:]))
+
+
 @source(
     total=lambda path, n, **_: _wav_frames(path, n),
-    refine=lambda n, **_: SignalType(T, (n,)),
+    refine=_wav_type,
 )
 def wav(
     path: str, n: int = 1024, channel: int | None = None, float32: bool = True
 ) -> Iterator[Sig[T, N]]:
-    """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one."""
+    """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one.
+    Integer PCM is normalized to floating point when ``float32=True``; unsigned
+    PCM is centered on zero before scaling.
+    """
     from scipy.io import wavfile
 
     rate, data = wavfile.read(path)
     if float32 and data.dtype.kind in "iu":
-        data = data.astype(np.float32) / np.iinfo(data.dtype).max
+        if data.dtype.kind == "u":
+            midpoint = (np.iinfo(data.dtype).max + 1) / 2
+            data = (data.astype(np.float32) - midpoint) / midpoint
+        else:
+            data = data.astype(np.float32) / np.iinfo(data.dtype).max
     if channel is not None and data.ndim == 2:
         data = data[:, channel]
     yield from _frames_of(data, n, float(rate), "wav", path)
@@ -264,7 +285,15 @@ class wav_sink(_Sink):
             return self.path
         x = np.concatenate(self.chunks)
         if self.dtype.kind in "iu" and x.dtype.kind == "f":
-            x = (np.clip(x, -1, 1) * np.iinfo(self.dtype).max).astype(self.dtype)
+            info = np.iinfo(self.dtype)
+            if self.dtype.kind == "u":
+                midpoint = (info.max + 1) / 2
+                x = np.clip(
+                    np.rint(np.clip(x, -1, 1) * midpoint + midpoint), 0, info.max
+                )
+                x = x.astype(self.dtype)
+            else:
+                x = (np.clip(x, -1, 1) * info.max).astype(self.dtype)
         wavfile.write(self.path, int(self.rate or 1), x)
         return self.path
 

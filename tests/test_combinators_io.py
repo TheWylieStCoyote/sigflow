@@ -126,6 +126,83 @@ def test_file_io_roundtrips(tmp_path):
     assert np.load(tmp_path / "s.npy").shape == (3, 3)
 
 
+@pytest.mark.parametrize("channels", [1, 2])
+@pytest.mark.parametrize("float32", [False, True])
+def test_wav_channel_shapes(tmp_path, channels, float32):
+    from scipy.io import wavfile
+
+    data = np.arange(16 * channels, dtype=np.int16)
+    if channels > 1:
+        data = data.reshape(16, channels)
+    path = tmp_path / "channels.wav"
+    wavfile.write(path, 8000, data)
+
+    src = io.wav(str(path), n=4, float32=float32)
+    assert src.out_type.shape == (4, *data.shape[1:])
+    out = run(src, check="all")
+    expected = data.astype(np.float32) / 32767 if float32 else data
+    np.testing.assert_allclose(np.concatenate([f.data for f in out]), expected)
+    assert [f["t0"] for f in out] == [i / 8000 for i in range(0, 16, 4)]
+
+    if channels > 1:
+        with pytest.raises(TypeMismatch):
+            src >> dsp.window  # a one-dimensional block cannot consume stereo frames
+        selected = io.wav(str(path), n=4, channel=1, float32=float32)
+        assert selected.out_type.shape == (4,)
+        out = run(selected, check="all")
+        np.testing.assert_allclose(np.concatenate([f.data for f in out]), expected[:, 1])
+
+
+def test_stereo_wav_without_mmap_support(tmp_path):
+    import wave
+
+    data = np.arange(32, dtype="<i4").reshape(16, 2)
+    pcm = data.view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
+    path = tmp_path / "24bit.wav"
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(2)
+        wav.setsampwidth(3)
+        wav.setframerate(8000)
+        wav.writeframes(pcm)
+
+    src = io.wav(str(path), n=4, float32=False)
+    assert src.out_type.shape is None
+    out = run(src, check="all")
+    np.testing.assert_array_equal(np.concatenate([f.data for f in out]), data << 8)
+
+
+def test_unsigned_wav_decoding_and_roundtrip(tmp_path):
+    from scipy.io import wavfile
+
+    data = np.arange(256, dtype=np.uint8)
+    path = tmp_path / "unsigned.wav"
+    wavfile.write(path, 8000, data)
+    out = run(io.wav(str(path), n=64), check="all")
+    decoded = np.concatenate([f.data for f in out])
+    assert decoded.dtype == np.float32
+    np.testing.assert_array_equal(decoded, (data.astype(np.float32) - 128) / 128)
+    assert decoded[128] == 0
+
+    raw = run(io.wav(str(path), n=64, float32=False), check="all")
+    np.testing.assert_array_equal(np.concatenate([f.data for f in raw]), data)
+
+    output = tmp_path / "roundtrip.wav"
+    with io.wav_sink(str(output), dtype=np.uint8) as sink:
+        run(from_iterable(out) >> sink)
+    rate, encoded = wavfile.read(output)
+    assert rate == 8000
+    np.testing.assert_array_equal(encoded, data)
+
+
+def test_unsigned_wav_sink_clips_and_centers(tmp_path):
+    from scipy.io import wavfile
+
+    path = tmp_path / "clipped.wav"
+    with io.wav_sink(str(path), rate=8000, dtype=np.uint8) as sink:
+        run(from_iterable([np.array([-2.0, -1.0, 0.0, 1.0, 2.0])]) >> sink)
+    np.testing.assert_array_equal(wavfile.read(path)[1], [0, 0, 128, 255, 255])
+
+
 def test_udp_source_and_sink():
     import time
 
