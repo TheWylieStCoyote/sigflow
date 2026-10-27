@@ -27,7 +27,7 @@ jobs:
       - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq]"
         env:
           MPLBACKEND: Agg
-      - run: python -m pytest -q examples/18_testing_pipelines.py
+      - run: python -m pytest -q tests examples/18_testing_pipelines.py
         env:
           MPLBACKEND: Agg
   typecheck:
