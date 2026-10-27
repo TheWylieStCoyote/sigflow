@@ -86,6 +86,7 @@ from .types import (
     unify,
 )
 from .ui import dashboard, require_widgets
+from .xarray import xarray_aware
 
 __version__ = "0.4.0"
 __all__ = [
@@ -132,6 +133,7 @@ __all__ = [
     "parallel",
     "to_device",
     "to_host",
+    "xarray_aware",
     "switch",
     "Ratio",
     "RatioMismatch",

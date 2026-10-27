@@ -24,7 +24,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq]"
+      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq,xarray]"
         env:
           MPLBACKEND: Agg
       - run: python -m pytest -q tests examples/18_testing_pipelines.py

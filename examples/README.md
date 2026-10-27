@@ -36,6 +36,7 @@ run it in Jupyter with `ipywidgets` installed (regenerate with
 | `21_routing_and_rates.py` | routing / rates | `switch()` by annotation or callable with pipeline branches (a stateful tracker, a 4:1 re-framer), `default=`, `ordered=True`; `ratio=` contracts, `g.ratio`, `RatioMismatch` at build time, `strict=True` verification |
 | `20_builder_time_replay.py` | 0.2 tour | units in the contract, data + stream slicing, `Frame.time`, `align()`, an explicit `Graph` diamond, `frame.save`/`replay`, `Stateful` checkpoint/resume, `plot.multi`/`history` |
 | `22_cpu_gpu.py` | CPU / CUDA processing | NumPy generation and preprocessing, explicit `to_device` / `to_host` transfers, CuPy FFT and power, CPU peak detection, numerical comparison and provenance; skips CUDA when unavailable |
+| `23_xarray_blocks.py` | labeled arrays | `@xarray_aware` under `@block`, named time-axis processing, preserved coordinates and dimension order, per-channel reductions, NumPy direct calls and graph provenance |
 
 A few lessons the examples were written to make visible:
 

@@ -72,6 +72,7 @@ and select it from the Kernel menu. The tour notebook also falls back to the
 | `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display |
 | `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters |
 | `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets |
+| `sigflow.xarray`   | optional `xarray_aware` decorator: named-dimension adapters for numerical map functions |
 | `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks |
 | `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output) |
 | `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion |
@@ -423,6 +424,63 @@ g = (
 pickle by import path, so anything defined in a module works; `backend="thread"`
 works for lambdas and notebook-defined blocks, and pays off when the function
 releases the GIL (NumPy and SciPy do).
+
+### Labeled map functions with xarray
+
+Install `python -m pip install -e ".[xarray]"` to adapt ordinary numerical
+functions to `DataArray` inputs. Put `@xarray_aware` **under** `@block`:
+
+```python
+import numpy as np
+from sigflow import Sig, block, xarray_aware
+
+
+@block
+@xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
+def remove_dc(x: Sig[float], gain: float = 1.0) -> Sig[float]:
+    return gain * (x - np.mean(x, axis=-1, keepdims=True))
+
+
+@block
+@xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])
+def rms(x: Sig[float]) -> Sig[float]:
+    return np.sqrt(np.mean(x**2, axis=-1))
+
+
+graph = remove_dc(gain=2) >> rms
+# frames = graph(data_array, check="all", on_error="raise")
+```
+
+The first `len(input_core_dims)` positional parameters are array inputs;
+remaining parameters are configuration. When any input is a DataArray, the
+decorator uses `xarray.apply_ufunc`: core dimensions move to trailing axes
+inside the function, while all other dimensions broadcast. A `(time, channel)`
+input therefore reaches `remove_dc` as `(channel, time)`. The labeled output is
+restored to its original dimension order, and `rms` removes only `time`, leaving
+one result per channel. Coordinates, name and attributes are retained where
+applicable; use `keep_attrs=False` when input attributes no longer describe the
+result.
+
+`Sig` contracts describe the **whole payload**, not just the core dimensions.
+Use `Sig[float]` for arbitrary batch rank, or declare a full positional shape
+when it is known. `Sig[float, N]` still means a one-dimensional payload.
+
+Multiple inputs align with `join="exact"` by default; different coordinate
+labels raise rather than silently trimming or filling samples. Other joins must
+be requested explicitly. Declare one output dimension list per result for
+tuple-valued functions. Set `vectorize=True` for an eager NumPy function that
+accepts only one core slice at a time; batched functions are generally faster.
+
+Calls with ordinary arrays go directly to the function with its original
+signature and axis conventions, without importing xarray. The adapter performs
+no NumPy conversion or device transfer: CuPy-backed inputs require a compatible
+numerical function, and `vectorize=True` is NumPy-only. Dask data is rejected by
+default; `dask="allowed"` delegates to a function that supports lazy arrays.
+Datasets, stream/generator functions, resized core dimensions and new output
+dimensions such as FFT frequency axes need separate adapters. See
+`examples/23_xarray_blocks.py` for a runnable example.
+The full guide is `docs/guide/xarray.md` (**Guide → xarray adapters** in the
+documentation site), including configuration, tuple outputs and troubleshooting.
 
 ### CPU / CUDA transfers
 

@@ -38,6 +38,11 @@ eigh = block(
 anything = lift(some_function)  # Any -> Any, checked at run time
 ```
 
+For labeled DataArray inputs, put `@xarray_aware` under `@block` to adapt named
+dimensions while keeping the function body numerical. The [xarray adapters
+guide](../guide/xarray.md) covers same-size operations, reductions, alignment,
+GPU-backed arrays and the relationship between named dimensions and `Sig` shapes.
+
 ## Options worth knowing
 
 `on_error="propagate" | "raise" | "drop"`, `keep_samples=`, `refine=lambda n, **_:

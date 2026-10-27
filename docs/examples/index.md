@@ -25,3 +25,5 @@ Every script under `examples/` runs on its own (`python examples/NN_name.py`). T
 | [19_graph_report](19_graph_report.md) | Documenting a graph for a colleague: `g.report()` |
 | [20_builder_time_replay](20_builder_time_replay.md) | 0.2 features together: units, slicing, the time axis, an explicit Graph, replay, checkpoints |
 | [21_routing_and_rates](21_routing_and_rates.md) | Keyed routing with `switch()` and stream-rate contracts with `ratio=` |
+| [22_cpu_gpu](22_cpu_gpu.md) | CPU generation and preprocessing -> GPU spectrum -> CPU peak detection |
+| [23_xarray_blocks](23_xarray_blocks.md) | Ordinary numerical functions adapted to named xarray dimensions |
