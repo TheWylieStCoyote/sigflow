@@ -18,6 +18,8 @@ checkpoint lists them under ``skipped``.
 from __future__ import annotations
 
 import json
+import sys
+import warnings
 import pickle
 import time
 from dataclasses import dataclass, field
@@ -66,6 +68,50 @@ def _jsonable(v: Any) -> Any:
     return repr(v)
 
 
+def _is_arraylike(x: Any) -> bool:
+    return hasattr(x, "shape") and hasattr(x, "dtype")
+
+
+def _is_dataarray(x: Any) -> bool:
+    xr = sys.modules.get("xarray")
+    return xr is not None and isinstance(x, xr.DataArray)
+
+
+def _host(x: Any) -> np.ndarray:
+    """A NumPy copy of any array-like, fetching device (CuPy) arrays to the host."""
+    try:
+        return np.asarray(x)
+    except (TypeError, ValueError):
+        if hasattr(x, "get"):  # CuPy
+            return np.asarray(x.get())
+        raise
+
+
+def _load_dataarray(z: Any, labels: dict[str, Any]) -> Any:
+    """Rebuild a DataArray from a saved record; without xarray the bare array is returned."""
+    data = z["data"]
+    try:
+        import xarray as xr
+    except ImportError:
+        warnings.warn(
+            "frame was saved with xarray labels; xarray is not installed, returning the "
+            "bare array",
+            stacklevel=3,
+        )
+        return data
+    coords = {
+        k: (c["dims"], z[f"coord__{k}"], c["attrs"])
+        for k, c in labels["coords"].items()
+    }
+    return xr.DataArray(
+        data,
+        dims=labels["dims"],
+        coords=coords,
+        attrs=labels["attrs"],
+        name=labels["name"],
+    )
+
+
 def prov_to_dict(p: Provenance) -> dict:
     """The lineage DAG as ``{"root": id, "nodes": [{id, op, params, seq, parents}]}``."""
     nodes = []
@@ -112,19 +158,37 @@ def save_frame(f: Frame, path: str) -> str:
     """``.npz`` with the data, sample annotations and a JSON record of everything else."""
     arrays: dict[str, Any] = {}
     data = f.data
+    labels: dict[str, Any] | None = None
     if isinstance(data, tuple):
         for i, x in enumerate(data):
-            arrays[f"data_{i}"] = np.asarray(x)
+            arrays[f"data_{i}"] = _host(x)
         kind = "tuple"
-    elif isinstance(data, (np.ndarray, int, float, complex, np.generic)):
-        arrays["data"] = np.asarray(data)
+    elif _is_dataarray(data):
+        # the payload as an array plus a record of dims, coords, attrs and name
+        arrays["data"] = _host(data.data)
+        labels = {
+            "dims": list(data.dims),
+            "name": data.name,
+            "attrs": _jsonable(dict(data.attrs)),
+            "coords": {},
+        }
+        for k, c in data.coords.items():
+            arrays[f"coord__{k}"] = _host(c.data)
+            labels["coords"][k] = {
+                "dims": list(c.dims),
+                "attrs": _jsonable(dict(c.attrs)),
+            }
+        kind = "xarray"
+    elif isinstance(data, (int, float, complex, np.generic)) or _is_arraylike(data):
+        arrays["data"] = _host(data)
         kind = "array"
     else:
         kind = "object"
     for k, v in f.samples.items():
-        arrays[f"sample__{k}"] = np.asarray(v)
+        arrays[f"sample__{k}"] = _host(v)
     record = {
         "kind": kind,
+        "labels": labels,
         "meta": _jsonable(dict(f.meta)),
         "stream": _jsonable(dict(f.stream)),
         "issues": [
@@ -151,6 +215,8 @@ def load_frame(path: str) -> Frame:
         data = z["data"]
         if data.ndim == 0:
             data = data.item()
+    elif record["kind"] == "xarray":
+        data = _load_dataarray(z, record["labels"])
     else:
         data = record["object"]
     samples = {k[len("sample__") :]: z[k] for k in z.files if k.startswith("sample__")}

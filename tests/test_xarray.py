@@ -1,14 +1,31 @@
-"""Labeled adapters: dimension mapping, configuration, alignment and graph use."""
+"""Labelled payloads: DataArrays flow through blocks according to their contracts."""
 
 from __future__ import annotations
 
 import inspect
 import sys
+from typing import Iterator, Literal
 
 import numpy as np
 import pytest
 
-from sigflow import Frame, Sig, block, from_iterable, run, xarray_aware
+import sigflow.xarray as sx
+from sigflow import (
+    Frame,
+    Framed,
+    Sig,
+    Stream,
+    block,
+    default_labels,
+    dsp,
+    from_iterable,
+    linalg,
+    run,
+)
+from sigflow.dims import M, N, T
+
+CHANNEL = Literal["channel"]
+TIME = Literal["time"]
 
 
 @pytest.fixture
@@ -16,16 +33,24 @@ def xr():
     return pytest.importorskip("xarray")
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-def center(x: Sig[float], gain: float = 1.0) -> Sig[float]:
-    """Remove each channel's DC component along the last axis."""
+@pytest.fixture
+def default_off():
+    previous = default_labels(False)
+    yield
+    default_labels(previous)
+
+
+@block(labels=True)
+def center(
+    x: Sig[float, tuple[CHANNEL, TIME]], gain: float = 1.0
+) -> Sig[float, tuple[CHANNEL, TIME]]:
+    """Remove each channel's DC component; time is the trailing axis by contract."""
+    assert x.shape[-1] == 8  # the body sees (channel, time), whatever the layout
     return (x - np.mean(x, axis=-1, keepdims=True)) * gain
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])
-def rms(x: Sig[float]) -> Sig[float]:
+@block(labels=True)
+def rms(x: Sig[float, tuple[CHANNEL, TIME]]) -> Sig[float, tuple[CHANNEL]]:
     return np.sqrt(np.mean(x**2, axis=-1))
 
 
@@ -39,175 +64,181 @@ def signal(xr):
     )
 
 
-def test_numpy_calls_without_xarray(monkeypatch):
+def test_numpy_calls_take_the_fast_path(monkeypatch):
     monkeypatch.setitem(sys.modules, "xarray", None)
-    x = np.arange(8.0)
-    np.testing.assert_array_equal(center(x, gain=2), (x - x.mean()) * 2)
+    x = np.zeros((3, 8))
+    x[:, 0] = 1
+    np.testing.assert_array_equal(center(x, gain=2), (x - x.mean(axis=-1)[:, None]) * 2)
     assert list(inspect.signature(center.fn).parameters) == ["x", "gain"]
-    assert center.name == "center" and "Remove" in center.__doc__
+    assert center.name == "center" and "DC" in center.__doc__
     assert [spec.name for spec in center.inputs] == ["x"]
-    assert list(center.config) == ["gain"]
+    assert list(center.config) == ["gain"] and center.labels is True
 
 
 @pytest.mark.parametrize("transposed", [False, True])
-def test_named_axis_and_original_dimension_order(xr, transposed):
+def test_named_contract_matches_any_layout(xr, transposed):
     x = signal(xr)
     if transposed:
         x = x.transpose("channel", "time")
     expected = (x - x.mean("time")) * 2
     expected.attrs = dict(x.attrs)
-    xr.testing.assert_identical(center(x=x, gain=2), expected)
-    assert center(x).dims == x.dims
+    out = center(x=x, gain=2)
+    xr.testing.assert_identical(out, expected)
+    assert out.dims == x.dims  # the caller's layout is restored
+    assert out.name == "voltage" and out.attrs == {"units": "V"}
 
 
-def test_reduction_and_graph_annotations(xr):
+def test_reduction_keeps_surviving_coordinates(xr):
     x = signal(xr)
-    expected = np.sqrt(((x - x.mean("time")) ** 2).mean("time"))
-    expected.attrs = dict(x.attrs)
-    graph = center >> rms
-    # Direct graph input is one DataArray, not a sequence of time samples.
-    out = graph(x, check="all", on_error="raise")
-    assert len(out) == 1
-    xr.testing.assert_identical(out[0].data, expected)
+    out = rms(x)
+    assert out.dims == ("channel",) and list(out.channel.values) == ["a", "b", "c"]
+    np.testing.assert_allclose(out.values, np.sqrt((x**2).mean("time")).values)
+
+
+def test_positional_contract_binds_letters_to_labels(xr):
+    @block(labels=True)
+    def scale(x: Sig[T, tuple[M, N]], gain: float = 2.0) -> Sig[T, tuple[M, N]]:
+        return x * gain
+
+    @block(labels=True)
+    def rowsum(x: Sig[T, tuple[M, N]]) -> Sig[T, tuple[M]]:
+        return x.sum(axis=1)
+
+    @block(labels=True)
+    def spectrum(x: Sig[float, tuple[M, N]]) -> Sig[complex, tuple[M, Literal[5]]]:
+        return np.fft.rfft(x, axis=1)
+
+    x = signal(xr)
+    xr.testing.assert_identical(scale(x), (x * 2).assign_attrs(x.attrs))
+    out = rowsum(x)  # M was "time": the name and its coordinate come back
+    assert out.dims == ("time",) and out.time.equals(x.time)
+    out = spectrum(x)  # a fixed size that no input dimension carried
+    assert out.dims == ("time", "dim_1") and list(out.coords) == ["time"]
+    assert run(from_iterable([x]) >> linalg.transpose(), check="all")[0].data.shape == (
+        3,
+        8,
+    )
+
+
+def test_graph_runs_check_by_name_and_keep_frame_fields(xr):
+    x = signal(xr)
+    graph = center(gain=2) >> rms
+    out = graph([x, x.transpose("channel", "time")], check="all", on_error="raise")
+    assert [f.data.dims for f in out] == [("channel",), ("channel",)]
     f = Frame(x, meta={"seq": 4}, stream={"rate": 1000}).with_issue("calibration")
     out = run(from_iterable([f]) >> graph, check="all", on_error="raise")[0]
     assert out.meta == f.meta and out.stream == f.stream and out.issues == f.issues
     assert "center" in out.prov and "rms" in out.prov
 
 
-def test_configuration_binding_positional_only_and_keyword_only(xr):
-    @xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-    def weighted(x, /, weights, *, gain=1):
-        return x * weights * gain
-
-    x = signal(xr)
-    weights = np.arange(8.0)
-    expected = x * xr.DataArray(weights, dims="time") * 3
-    expected.name = x.name
-    expected.attrs = dict(x.attrs)
-    xr.testing.assert_identical(weighted(x, weights, gain=3), expected)
-
-
-def test_exact_alignment_and_multi_input_block(xr):
-    @block
-    @xarray_aware(input_core_dims=[["time"], ["time"]], output_core_dims=[["time"]])
-    def add(x: Sig[float], y: Sig[float], gain: float = 1) -> Sig[float]:
-        return x + y * gain
-
-    x = signal(xr)
-    out = run(
-        from_iterable([(x, x)], type=add.in_type) >> add(gain=2),
-        check="all", on_error="raise",
-    )
-    expected = x * 3
-    expected.attrs = dict(x.attrs)
-    xr.testing.assert_identical(out[0].data, expected)
-    shifted = x.assign_coords(time=x.time + 1)
-    with pytest.raises(ValueError, match="align|exact"):
-        add(x, shifted)
-
-
-def test_broadcasting_and_explicit_alignment(xr):
-    @xarray_aware(input_core_dims=[[], []], output_core_dims=[[]], join="inner")
-    def add(x, y):
+def test_mixed_labelled_and_plain_inputs_follow_the_contract(xr):
+    @block(labels=True)
+    def add(
+        x: Sig[float, tuple[CHANNEL, TIME]], y: Sig[float, tuple[CHANNEL, TIME]]
+    ) -> Sig[float, tuple[CHANNEL, TIME]]:
         return x + y
 
-    x = xr.DataArray([1.0, 2.0, 3.0], dims="time", coords={"time": [0, 1, 2]})
-    y = xr.DataArray([4.0, 5.0, 6.0], dims="time", coords={"time": [1, 2, 3]})
-    xr.testing.assert_identical(add(x, y), x + y)
-    z = xr.DataArray([10.0, 20.0], dims="channel", coords={"channel": ["a", "b"]})
-    xr.testing.assert_identical(add(x, z), x + z)
-
-
-def test_vectorized_one_dimensional_function(xr):
-    @xarray_aware(
-        input_core_dims=[["time"]], output_core_dims=[["time"]], vectorize=True
-    )
-    def smooth(x):
-        assert x.ndim == 1
-        return np.convolve(x, np.ones(3) / 3, mode="same")
-
     x = signal(xr)
-    expected = x.copy(data=np.apply_along_axis(smooth, 0, x.data))
-    xr.testing.assert_identical(smooth(x), expected)
+    plain = np.arange(24.0).reshape(3, 8)  # (channel, time), as the contract says
+    out = run(
+        from_iterable([(x, plain)], type=add.in_type) >> add,
+        check="all",
+        on_error="raise",
+    )[0].data
+    assert out.dims == ("time", "channel")
+    np.testing.assert_array_equal(out.values, x.values + plain.T)
 
 
-def test_multiple_outputs_and_attribute_policy(xr):
-    @block
-    @xarray_aware(
-        input_core_dims=[["time"]], output_core_dims=[[], []], keep_attrs=False
-    )
-    def stats(x: Sig[float]) -> tuple[Sig[float], Sig[float]]:
-        return np.mean(x, axis=-1), np.max(x, axis=-1)
+def test_tuple_outputs_and_shapeless_contracts(xr):
+    @block(labels=True)
+    def stats(
+        x: Sig[float, tuple[M, N]],
+    ) -> tuple[Sig[float, tuple[M]], Sig[float, tuple[M]]]:
+        return x.mean(axis=1), x.max(axis=1)
+
+    @block(labels=True)
+    def negate(x: Sig[float]) -> Sig[float]:
+        return -x
+
+    @block(labels=True)
+    def flatten(x: Sig[float]) -> Sig[float]:
+        return x.reshape(-1)
 
     x = signal(xr)
     mean, peak = stats(x)
-    expected_mean, expected_peak = x.mean("time"), x.max("time")
-    expected_mean.attrs, expected_peak.attrs = {}, {}
-    xr.testing.assert_identical(mean, expected_mean)
-    xr.testing.assert_identical(peak, expected_peak)
+    assert mean.dims == peak.dims == ("time",)
     frame = run(from_iterable([x]) >> stats, check="all", on_error="raise")[0]
-    xr.testing.assert_identical(frame.data[0], expected_mean)
-    xr.testing.assert_identical(frame.data[1], expected_peak)
+    xr.testing.assert_identical(frame.data[0], mean)
+    assert negate(x).dims == x.dims  # same rank: the input's dimensions
+    assert isinstance(flatten(x), np.ndarray)  # rank changed, nothing to go on
 
 
-def test_missing_or_resized_dimensions_and_unsupported_payloads(xr):
+def test_stream_blocks_and_framed_inputs(xr):
+    @block(labels=True)
+    def pairs(
+        xs: Stream[Sig[float, tuple[M, N]]],
+    ) -> Iterator[Sig[float, tuple[Literal[2], M, N]]]:
+        buf = []
+        for item in xs:
+            assert isinstance(item, np.ndarray)
+            buf.append(item)
+            if len(buf) == 2:
+                yield np.stack(buf)
+                buf = []
+
+    @block(labels=True)
+    def pick(f: Framed[Sig[float]]) -> Sig[float]:
+        return f.data.sel(channel="a").values  # a framed body sees the labels
+
     x = signal(xr)
-    with pytest.raises(ValueError, match="time|tuple.index"):
-        center(x.rename(time="sample"))
-    with pytest.raises(TypeError, match="DataArray"):
-        center(x.to_dataset())
-    with pytest.raises(TypeError, match="DataArray"):
-        center(x.variable)
-
-    @xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-    def shorten(x):
-        return x[..., :-1]
-
-    with pytest.raises(ValueError, match="size|dimension"):
-        shorten(x)
+    out = run(from_iterable([x, x * 2, x * 3]) >> pairs, check="all", on_error="raise")
+    assert len(out) == 1 and out[0].data.dims == ("dim_0", "time", "channel")
+    assert list(out[0].data.coords) == ["time", "channel"]
+    assert isinstance(pick.apply([x])[0].data, np.ndarray)
 
 
-def test_invalid_decorator_usage():
-    with pytest.raises(ValueError, match="new output dimensions"):
-        xarray_aware(input_core_dims=[["time"]], output_core_dims=[["frequency"]])
-    with pytest.raises(ValueError, match="duplicate"):
-        xarray_aware(input_core_dims=[["time", "time"]], output_core_dims=[[]])
-    with pytest.raises(ValueError, match="lists"):
-        xarray_aware(input_core_dims=["time"], output_core_dims=[[]])
-    with pytest.raises(ValueError, match="eager NumPy"):
-        xarray_aware(
-            input_core_dims=[["time"]], output_core_dims=[[]],
-            vectorize=True, dask="allowed",
-        )
-    with pytest.raises(TypeError, match="@block above"):
-        xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])(center)
-    with pytest.raises(TypeError, match="positional"):
-        xarray_aware(input_core_dims=[["time"], ["time"]], output_core_dims=[[]])(lambda x: x)
+def test_default_switch_covers_library_blocks(xr, default_off):
+    x = signal(xr).isel(channel=0)
+    assert isinstance(
+        run(from_iterable([x]) >> dsp.scale(gain=3))[0].data, xr.DataArray
+    )
+    previous = default_labels(True)
+    assert previous is False
+    out = run(from_iterable([x]) >> dsp.scale(gain=3) >> dsp.rms, check="all")
+    assert isinstance(out[0].data, float)  # scalars stay scalars
+    out = run(from_iterable([x]) >> dsp.scale(gain=3), check="all")[0].data
+    assert out.dims == ("time",) and out.time.equals(x.time)
 
-    def generator(x):
-        yield x
+    @block(labels=False)
+    def raw(x: Sig[float, tuple[N]]) -> Sig[float, tuple[N]]:
+        assert isinstance(x, xr.DataArray)  # opted out: the body sees the DataArray
+        return x
 
-    with pytest.raises(TypeError, match="synchronous"):
-        xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])(generator)
+    assert isinstance(raw(x), xr.DataArray)
 
 
-def test_lazy_arrays_when_available(xr):
-    da = pytest.importorskip("dask.array")
-    x = xr.DataArray(da.arange(8, chunks=4).astype(float), dims="time")
-    with pytest.raises(ValueError, match="dask|chunked"):
-        center(x)
-
-    @xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]], dask="allowed")
-    def lazy_mean(x):
-        return x.mean(axis=-1)
-
-    result = lazy_mean(x)
-    assert isinstance(result.data, da.Array)
-    assert result.compute().item() == 3.5
+def test_bound_configuration_and_direct_calls(xr):
+    x = signal(xr)
+    assert center.bind(gain=3)(x).dims == x.dims
+    assert center.call is not center.fn and center.fn.__name__ == "center"
+    assert isinstance(center.fn(np.zeros((3, 8))), np.ndarray)  # raw body, no wrapper
+    assert callable(sx.adapt(center))
 
 
-def test_gpu_array_stays_on_device(xr):
+def test_frame_slicing_and_persistence_keep_labels(xr, tmp_path):
+    x = signal(xr)
+    f = Frame(x, meta={"t0": 0.0}, stream={"rate": 1000})
+    part = f[2:4]
+    assert isinstance(part.data, xr.DataArray) and part.data.dims == x.dims
+    assert part.data.time.values[0] == pytest.approx(0.002) and part["t0"] == 0.002
+    assert isinstance(f.at(0.003), xr.DataArray)
+    f.save(str(tmp_path / "labelled.npz"))
+    back = Frame.load(str(tmp_path / "labelled.npz"))
+    xr.testing.assert_identical(back.data, x)
+    assert back["rate"] == 1000
+
+
+def test_gpu_payload_stays_on_device(xr):
     cp = pytest.importorskip("cupy")
     try:
         if cp.cuda.runtime.getDeviceCount() == 0:
@@ -215,8 +246,10 @@ def test_gpu_array_stays_on_device(xr):
     except cp.cuda.runtime.CUDARuntimeError as exc:
         pytest.skip(str(exc))
 
-    @xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-    def gpu_center(x):
+    @block(labels=True)
+    def gpu_center(
+        x: Sig[float, tuple[CHANNEL, TIME]],
+    ) -> Sig[float, tuple[CHANNEL, TIME]]:
         assert isinstance(x, cp.ndarray)
         return x - cp.mean(x, axis=-1, keepdims=True)
 
@@ -224,9 +257,5 @@ def test_gpu_array_stays_on_device(xr):
     result = gpu_center(x.copy(data=cp.asarray(x.data)))
     assert isinstance(result.data, cp.ndarray) and result.dims == x.dims
     np.testing.assert_allclose(cp.asnumpy(result.data), (x - x.mean("time")).data)
-
-    vectorized = xarray_aware(
-        input_core_dims=[["time"]], output_core_dims=[["time"]], vectorize=True
-    )(lambda x: x)
-    with pytest.raises(TypeError, match="NumPy-only"):
-        vectorized(result)
+    f = Frame(cp.arange(8.0))
+    assert isinstance(f[1:3].data, cp.ndarray)

@@ -16,6 +16,25 @@ New
   (`refine=`) as a call, `SignalType(float, (n,), rate)`.
 - `NO_PROV`: every frame carries a `Provenance`; the empty one is falsy and
   renders as `(no provenance)`.
+- Labelled arrays (`sigflow[xarray]`): an `xarray.DataArray` can be a frame's
+  payload. `@block(labels=True)` lines the array up with the input contract
+  (by dimension *name* when the contract names every dimension, e.g.
+  `Sig[float, tuple[Literal["channel"], Literal["time"]]]`; by position
+  otherwise), hands the body the bare array (`da.data`, so CuPy stays CuPy)
+  and rebuilds a labelled array around each output from the output contract:
+  a dimension variable seen on an input keeps its name and coordinate, new
+  ones get their own name, fixed sizes become `dim_<axis>`. Runtime checks
+  read a labelled array's sizes by name. `sigflow.default_labels(True)`
+  switches every block with an unset `labels` option on, including the
+  built-in `dsp` / `linalg` blocks; `labels=False` opts out. `Framed` inputs
+  and `DataArray` results pass through untouched.
+- CPU / CUDA transfers (`sigflow.to_device`, `sigflow.to_host`; CuPy is
+  optional): explicit, synchronous moves of a frame's payload that keep dtype,
+  shape, annotations and, for a `DataArray`, its labels.
+- `Frame.slice` / `frame[a:b]` / `at` / `between` index array-like payloads
+  directly, so labelled and device arrays keep their labels and placement;
+  `Frame.save` / `Frame.load` round-trip a `DataArray` (values, dims, coords,
+  attrs, name) and fetch device arrays to the host.
 
 Changed
 

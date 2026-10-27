@@ -348,7 +348,7 @@ class Runner:
                         )  # materialize what a framed block sees
                     arg = frame if d.framed else value
                     cfg = live(node.given) if node.live else node.given
-                    result = d.fn(arg, **cfg)
+                    result = d.call(arg, **cfg)
                 except Exception as e:
                     st.errors += 1
                     st.time += time.perf_counter() - t0
@@ -874,7 +874,7 @@ class Runner:
         stats = self.mon.stats(node.name, node)
         d = node.defn
         try:
-            produced = d.fn(
+            produced = d.call(
                 **node.given
             )  # sources get Knob objects and read .value per frame
         except Exception as e:
@@ -964,7 +964,7 @@ class Runner:
                 cfg = (
                     live(node.given) if node.live else node.given
                 )  # knobs resolved per call
-                result = d.fn(*args, **cfg)
+                result = d.call(*args, **cfg)
                 if inspect.isawaitable(result):
                     result = await result
             except Exception as e:
@@ -1058,7 +1058,7 @@ class Runner:
         seq = 0
         try:
             if inspect.isasyncgenfunction(d.fn):
-                agen = d.fn(items(), **node.given)
+                agen = d.call(items(), **node.given)
                 last: tuple[Frame, ...] = ()
                 async for out in agen:
                     parents, consumed[:] = tuple(consumed) or last, []
@@ -1085,7 +1085,7 @@ class Runner:
                     else _run_sync_stream
                 )
                 async for out, parents in driver(
-                    d.fn,
+                    d.call,
                     node.given,
                     frames(),
                     consumed,
@@ -1298,7 +1298,7 @@ class Runner:
                     fut = loop.run_in_executor(
                         pool,
                         _call_block,
-                        d if node.backend == "process" else d.fn,
+                        d if node.backend == "process" else d.call,
                         f.data,
                         cfg,
                     )
@@ -1530,7 +1530,7 @@ class _SubPipe:
 
 def _call_block(target: Any, data: Any, cfg: dict) -> Any:
     """Worker-side call (module-level so it pickles for process pools)."""
-    fn = target.fn if isinstance(target, BlockDef) else target
+    fn = target.call if isinstance(target, BlockDef) else target
     return fn(data, **cfg)
 
 

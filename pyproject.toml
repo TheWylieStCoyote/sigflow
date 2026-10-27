@@ -16,7 +16,7 @@ test = ["pytest"]
 perf = ["greenlet"] # sync generator stream blocks run inline on the event loop
 zmq = ["pyzmq"] # io.zmq / io.zmq_sink
 cupy = ["cupy"] # optional CUDA transfers; CUDA-specific wheels may be installed separately
-xarray = ["xarray"] # labeled map functions via xarray_aware
+xarray = ["xarray"] # labelled DataArray payloads: @block(labels=True), default_labels()
 docs = ["mkdocs-material", "pytest"] # python docs/build_docs.py && mkdocs build
 dev = [
   "pytest",

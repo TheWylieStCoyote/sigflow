@@ -175,8 +175,10 @@ class BlockDef:
         total: Callable[..., int] | None = None,
         threaded: bool = False,
         ratio: Any = None,
+        labels: bool | None = None,
     ) -> None:
         self.fn = fn
+        self.labels = labels  # None: follow sigflow.xarray.default_labels()
         self.refine = refine
         self.total = total
         self.ratio_spec = ratio  # see sigflow.ratio: "1:1", "N:1", (4, 1), callable
@@ -240,6 +242,13 @@ class BlockDef:
         if keep_samples is None:
             keep_samples = _same_leading(self.in_type, self.out_type)
         self.keep_samples = keep_samples
+
+        # ``call`` is what the runtime invokes: ``fn`` behind a thin wrapper that
+        # unwraps labelled (xarray) payloads for the body and rewraps outputs from
+        # the contract; plain arrays take its fast path. ``fn`` stays the raw body.
+        from .xarray import adapt
+
+        self.call = adapt(self)
 
     # -- stream-rate contract --------------------------------------------- #
     def ratio_for(self, in_type: Any = None) -> Any:
@@ -360,7 +369,8 @@ class BlockDef:
         Positional arguments are *data* when the first one is an array, Frame, list,
         tuple or dict (``scale(np.ones(4), gain=2)`` runs the function); otherwise they
         are configuration in signature order (``to_units("V")``, ``io.wav("x.wav", n=512)``
-        make nodes). ``blockdef.fn(...)`` always calls the function directly."""
+        make nodes). ``blockdef.fn(...)`` always calls the function directly
+        (bypassing the labelled-payload wrapper, ``blockdef.call``)."""
         if args and not _looks_like_data(args[0]):
             names = [k for k in self.config][: len(args)]
             if len(names) < len(args):
@@ -369,11 +379,11 @@ class BlockDef:
                 )
             return self.node(**{**dict(zip(names, args)), **kwargs})
         if args:
-            return self.fn(*args, **kwargs)
+            return self.call(*args, **kwargs)
         # keyword-only call: are any of the keywords inputs?  Then run directly.
         in_names = {i.name for i in self.inputs}
         if in_names and in_names <= set(kwargs):
-            return self.fn(**kwargs)
+            return self.call(**kwargs)
         return self.node(**kwargs)
 
     def apply(self, items: Any, **config: Any) -> list:
@@ -398,6 +408,7 @@ class BlockDef:
             on_error=self.on_error,
             keep_samples=self.keep_samples,
             tap=self.tap,
+            labels=self.labels,
             doc=self.__doc__,
             refine=self.refine,
             total=self.total,
@@ -553,6 +564,12 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       generator stream blocks: force the worker-thread driver
                       (the default runs them inline on the loop via greenlet when
                       it is installed, which is much faster but must not block)
+        labels:       ``True``: an ``xarray.DataArray`` input is lined up with the
+                      input contract, the body gets the bare array, and outputs
+                      are rebuilt as labelled arrays from the output contract
+                      (see :mod:`sigflow.xarray`). ``False``: payloads pass
+                      through untouched. Unset: follow
+                      ``sigflow.xarray.default_labels()``
     """
     if fn is None:
         return lambda f: BlockDef(f, **options)

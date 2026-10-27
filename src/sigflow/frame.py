@@ -291,6 +291,18 @@ class Issue:
 # --------------------------------------------------------------------------- #
 
 
+def _index(data: Any, key: Any) -> Any:
+    """``data[key]`` for anything array-like (ndarray, DataArray, CuPy, ...), so labels
+    and device placement survive; other payloads (lists) go through ``np.asarray``."""
+    if (
+        hasattr(data, "shape")
+        and hasattr(data, "dtype")
+        and hasattr(data, "__getitem__")
+    ):
+        return data[key]
+    return np.asarray(data)[key]
+
+
 @dataclass(frozen=True)
 class Frame:
     data: Any = MISSING
@@ -407,7 +419,7 @@ class Frame:
         span = self.time
         if span is None:
             raise KeyError("frame has no time axis (no 't0' annotation)")
-        return np.asarray(self.data)[span.index(t)]
+        return _index(self.data, span.index(t))
 
     def between(self, t_start: float, t_end: float) -> "Frame":
         """The part of the frame within [t_start, t_end) as a new frame (time kept)."""
@@ -442,7 +454,7 @@ class Frame:
     def slice(self, key: Any) -> "Frame":
         """Slice the data; sample-level annotations are sliced along the leading axis in
         step (``frame[10:20]`` keeps ``samples`` aligned), and time (``t0``) is advanced."""
-        data = np.asarray(self.data)[key]
+        data = _index(self.data, key)
         lead = key[0] if isinstance(key, tuple) else key
         samples = {}
         meta: dict[str, Any] = {}

@@ -1,49 +1,66 @@
-"""Ordinary numerical functions adapted to named xarray dimensions.
+"""Labelled arrays: ``xarray.DataArray`` frames flow through ordinary blocks.
 
 Run ``python examples/23_xarray_blocks.py`` after installing ``sigflow[xarray]``.
-Without xarray the script skips the labeled example. The function bodies use
-NumPy-style trailing-axis operations; the decorator maps a named ``time`` axis,
-preserves coordinates, and restores the original dimension order. A reduction
-then produces one RMS value per labeled channel. Both functions remain directly
-callable with ordinary NumPy arrays.
+Without xarray the script skips the labelled part. A block body is a NumPy
+function written against its contract; when the input is a DataArray the block
+lines it up with the contract (by dimension *name* when the contract names
+dimensions, by position otherwise), hands the body the bare array and rebuilds a
+labelled array around the result. Coordinates, attributes and the array name
+survive, reductions keep the coordinates that still apply, and the caller's
+dimension order is restored. Both functions remain directly callable with
+ordinary NumPy arrays.
 """
 
 from importlib import import_module
+from typing import Literal
 
 import numpy as np
 
-from sigflow import Sig, block, xarray_aware
+from sigflow import Sig, block, default_labels, dsp, from_iterable, run
+from sigflow.dims import M, N
+
+CHANNEL = Literal["channel"]
+TIME = Literal["time"]
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-def remove_dc(x: Sig[float], gain: float = 1.0) -> Sig[float]:
-    """Last axis is time inside the function, regardless of the labeled layout."""
+@block(labels=True)
+def remove_dc(
+    x: Sig[float, tuple[CHANNEL, TIME]], gain: float = 1.0
+) -> Sig[float, tuple[CHANNEL, TIME]]:
+    """Time is the trailing axis inside the body, whatever the labelled layout."""
     return gain * (x - np.mean(x, axis=-1, keepdims=True))
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])
-def rms(x: Sig[float]) -> Sig[float]:
-    """Reduce time; all broadcast dimensions and their labels survive."""
+@block(labels=True)
+def rms(x: Sig[float, tuple[CHANNEL, TIME]]) -> Sig[float, tuple[CHANNEL]]:
+    """Reduce over time; the channel coordinate survives."""
     return np.sqrt(np.mean(x**2, axis=-1))
 
 
+@block(labels=True)
+def spectrum(x: Sig[float, tuple[M, N]]) -> Sig[complex, tuple[M, Literal[513]]]:
+    """A positional contract: M keeps the name it had on the way in."""
+    return np.fft.rfft(x, axis=1)
+
+
 def main() -> None:
-    # NumPy calls are unchanged: there is no dimension information, so the
-    # caller arranges time on the trailing axis as the function expects.
-    np.testing.assert_allclose(remove_dc(np.arange(4.0)), [-1.5, -0.5, 0.5, 1.5])
+    # NumPy calls are unchanged: the caller arranges (channel, time) as the
+    # contract says, and gets a plain array back.
+    plain = np.arange(8.0)[None, :]
+    np.testing.assert_allclose(remove_dc(plain), plain - 3.5)
     try:
         xr = import_module("xarray")
     except ImportError:
-        print('Labeled example skipped: install with pip install -e ".[xarray]".')
+        print('Labelled example skipped: install with pip install -e ".[xarray]".')
         return
 
-    time = np.arange(1000) / 1000
-    samples = np.column_stack([
-        3 + np.sin(2 * np.pi * 25 * time),
-        -2 + 2 * np.sin(2 * np.pi * 50 * time),
-    ])
+    time = np.arange(1024) / 1000
+    samples = np.column_stack(
+        [
+            3 + np.sin(2 * np.pi * 25 * time),
+            -2 + 2 * np.sin(2 * np.pi * 50 * time),
+        ]
+    )
     signal = xr.DataArray(
         samples,
         dims=("time", "channel"),
@@ -51,6 +68,8 @@ def main() -> None:
         name="voltage",
         attrs={"units": "V"},
     )
+
+    # --- direct calls: any layout in, the same layout out -------------------
     centered = remove_dc(signal)
     assert centered.dims == signal.dims
     xr.testing.assert_equal(centered.time, signal.time)
@@ -59,8 +78,7 @@ def main() -> None:
         centered.transpose("channel", "time"),
     )
 
-    # Sig[float] checks dtype but leaves rank gradual: the labeled payload here
-    # is 2-D even though the operation has only one core dimension (time).
+    # --- in a graph, with runtime checks by dimension name ------------------
     graph = remove_dc(gain=2) >> rms
     output = graph(signal, check="all", on_error="raise")[0]
     expected = 2 * np.sqrt(np.mean((samples - samples.mean(axis=0)) ** 2, axis=0))
@@ -71,6 +89,22 @@ def main() -> None:
     print("Output dimensions:", output.data.dims)
     for label, value in zip(output.data.channel.data, output.data.data):
         print(f"{label}: RMS = {value:.6f} V")
+
+    # --- a positional contract keeps the labels it was given ----------------
+    spec = spectrum(signal.transpose("channel", "time"))
+    print("Spectrum dimensions:", spec.dims, "| coordinates:", list(spec.coords))
+
+    # --- the default switch covers the built-in library blocks --------------
+    previous = default_labels(True)
+    try:
+        frame = run(
+            from_iterable([signal.isel(channel=0)]) >> dsp.scale(gain=0.5),
+            check="all",
+        )[0]
+    finally:
+        default_labels(previous)
+    print("dsp.scale on a DataArray:", frame.data.dims, frame.data.attrs)
+
     print("\nProvenance:")
     print(output.trace())
 

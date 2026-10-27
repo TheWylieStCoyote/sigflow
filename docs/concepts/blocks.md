@@ -38,10 +38,12 @@ eigh = block(
 anything = lift(some_function)  # Any -> Any, checked at run time
 ```
 
-For labeled DataArray inputs, put `@xarray_aware` under `@block` to adapt named
-dimensions while keeping the function body numerical. The [xarray adapters
-guide](../guide/xarray.md) covers same-size operations, reductions, alignment,
-GPU-backed arrays and the relationship between named dimensions and `Sig` shapes.
+For `xarray.DataArray` inputs, `@block(labels=True)` lines the array up with the
+contract, gives the body the bare array and rebuilds a labelled array around the
+result; name the dimensions in the contract (`Sig[float, tuple[Literal["channel"],
+Literal["time"]]]`) to match them by name. The [labelled arrays
+guide](../guide/xarray.md) covers reductions, several inputs, stream blocks,
+GPU-backed arrays and the `default_labels()` switch.
 
 ## Options worth knowing
 

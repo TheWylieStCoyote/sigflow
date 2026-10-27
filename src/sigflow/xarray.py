@@ -1,147 +1,328 @@
-"""Adapt synchronous array functions to labeled DataArrays without coercing data."""
+"""Labelled payloads: ``xarray.DataArray`` frames flow through blocks by contract.
+
+A block body is an ordinary array function. When a block is *label-aware*
+(``@block(labels=True)``, or :func:`default_labels` switched on for every block)
+and an input arrives as a ``DataArray``, the wrapper installed by
+:class:`~sigflow.block.BlockDef`:
+
+1. lines the array up with the input contract: when every dimension of
+   ``Sig[float, tuple[CHANNEL, TIME]]`` names a dimension of the array, it is
+   transposed into that order; otherwise axes match by position, as they do for
+   a plain array;
+2. hands the body the bare payload (``da.data``, so CuPy or dask arrays stay
+   what they are) and remembers which *dimension variable* carried which
+   label (``N`` was ``"time"``, with its coordinate);
+3. rebuilds a ``DataArray`` around each output from the output contract: a
+   variable seen on the way in keeps its name and coordinate, a new variable
+   contributes its own name, fixed sizes become ``dim_<i>``; attributes and the
+   array name come from the first labelled input. When the output contract
+   names every dimension, the result is transposed back to the caller's
+   layout; a positional contract keeps the contract's axis order, which is
+   what its runtime checks expect.
+
+Reductions (``tuple[M, N] -> tuple[M]``), broadcasts, several outputs and
+tuple frames follow from the contract. A contract without a shape
+(``Sig[float]``) keeps the input's dimensions when the rank is unchanged and
+otherwise returns a plain array. Scalars (rank 0) are returned as they are.
+Inputs that take the frame (``Framed[...]``) are passed untouched, so a body
+that wants the labels reads them from ``frame.data``.
+
+Calls without any ``DataArray`` take a fast path straight to the body, and
+nothing here imports xarray: a ``DataArray`` can only exist once xarray has
+been imported by the caller.
+"""
 
 from __future__ import annotations
 
+import functools
 import inspect
 import sys
-from collections.abc import Callable, Sequence
-from functools import wraps
-from typing import Any, Literal, ParamSpec, TypeVar, cast
+from typing import Any, Callable, Iterable
 
-from .block import BlockDef
+from .types import SignalType, TupleType
 
-__all__ = ["xarray_aware"]
+__all__ = ["default_labels", "adapt"]
 
-P = ParamSpec("P")
-R = TypeVar("R")
+_DEFAULT = False
 
 
-def _dimensions(groups: Sequence[Sequence[str]], name: str) -> tuple[tuple[str, ...], ...]:
-    if not groups or isinstance(groups, str):
-        raise ValueError(f"{name} must contain at least one dimension list")
-    result = []
-    for group in groups:
-        if isinstance(group, str) or any(not isinstance(d, str) or not d for d in group):
-            raise ValueError(f"{name} must contain lists of nonempty dimension names")
-        if len(set(group)) != len(group):
-            raise ValueError(f"{name} contains duplicate dimensions")
-        result.append(tuple(group))
-    return tuple(result)
+def default_labels(enabled: bool = True) -> bool:
+    """Make every block whose ``labels`` option is unset label-aware (or not).
 
-
-def xarray_aware(
-    *,
-    input_core_dims: Sequence[Sequence[str]],
-    output_core_dims: Sequence[Sequence[str]],
-    vectorize: bool = False,
-    keep_attrs: bool = True,
-    join: Literal["exact", "inner", "outer", "left", "right"] = "exact",
-    dask: Literal["forbidden", "allowed"] = "forbidden",
-) -> Callable[[Callable[P, R]], Callable[P, R]]:
-    """Let an array function accept xarray DataArrays via ``xr.apply_ufunc``.
-
-    Apply *under* ``@block``. The first ``len(input_core_dims)`` positional
-    parameters are array inputs; remaining parameters are configuration and are
-    forwarded unchanged, including keyword-only and array-valued configuration.
-    Calls without DataArrays go straight to the original function and need no
-    xarray installation.
-
-    Named core dimensions are moved to trailing axes inside the numerical
-    function. Support leading batch axes, or use ``vectorize=True`` to call a
-    NumPy-only function one core slice at a time. Outputs are transposed back to
-    surviving input dimension order (first input first, then additional inputs).
-    Coordinates are retained by xarray and attributes are kept by default.
-
-    Same-size core outputs, reductions (``[]``), broadcasting and multiple
-    outputs are supported. New output dimensions and resizing existing dimensions
-    are not supported. Coordinate alignment defaults to ``join="exact"``.
-    Dask arrays are rejected unless ``dask="allowed"`` explicitly delegates lazy
-    execution to a compatible function. No CPU/GPU transfer is performed.
+    Returns the previous setting. Blocks declared with ``labels=True`` or
+    ``labels=False`` are unaffected.
     """
-    inputs = _dimensions(input_core_dims, "input_core_dims")
-    outputs = _dimensions(output_core_dims, "output_core_dims")
-    input_dimensions = {d for group in inputs for d in group}
-    output_dimensions = {d for group in outputs for d in group}
-    if output_dimensions - input_dimensions:
-        raise ValueError("new output dimensions require a coordinate-aware wrapper")
-    if join not in ("exact", "inner", "outer", "left", "right"):
-        raise ValueError("unsupported coordinate join")
-    if dask not in ("forbidden", "allowed"):
-        raise ValueError("dask must be 'forbidden' or 'allowed'")
-    if vectorize and dask == "allowed":
-        raise ValueError("vectorize=True requires eager NumPy data, not dask='allowed'")
+    global _DEFAULT
+    previous, _DEFAULT = _DEFAULT, bool(enabled)
+    return previous
 
-    def decorate(fn: Callable[P, R]) -> Callable[P, R]:
-        if isinstance(fn, BlockDef):
-            raise TypeError("place @block above @xarray_aware")
+
+class _Labels:
+    """What a block's labelled inputs told us during one call."""
+
+    __slots__ = ("dims", "refs", "order")
+
+    def __init__(self) -> None:
+        self.dims: dict[str, str] = {}  # dimension variable -> dimension name
+        self.refs: list[Any] = []  # labelled inputs, in order of appearance
+        self.order: tuple[str, ...] = ()  # dimension order of the first input as given
+
+    @property
+    def active(self) -> bool:
+        return bool(self.refs)
+
+
+# --------------------------------------------------------------------------- #
+# unwrap: DataArray -> payload, recording labels
+# --------------------------------------------------------------------------- #
+
+
+def _unwrap(value: Any, t: Any, labels: _Labels, xr: Any) -> Any:
+    if isinstance(value, xr.DataArray):
+        return _unwrap_array(value, t, labels)
+    if (
+        isinstance(value, tuple)
+        and isinstance(t, TupleType)
+        and len(t.items) == len(value)
+    ):
+        return tuple(_unwrap(v, it, labels, xr) for v, it in zip(value, t.items))
+    return value
+
+
+def _unwrap_array(da: Any, t: Any, labels: _Labels) -> Any:
+    shape = t.shape if isinstance(t, SignalType) else None
+    if not labels.refs:
+        labels.order = tuple(da.dims)
+    if shape is not None and len(shape) == da.ndim:
         if (
-            inspect.isgeneratorfunction(fn)
-            or inspect.isasyncgenfunction(fn)
-            or inspect.iscoroutinefunction(fn)
+            all(isinstance(d, str) for d in shape)
+            and set(shape) <= set(da.dims)
+            and tuple(shape) != tuple(da.dims)
         ):
-            raise TypeError("xarray_aware supports synchronous array functions only")
-        signature = inspect.signature(fn)
-        positional = [
-            p.name
-            for p in signature.parameters.values()
-            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-        ]
-        if len(positional) < len(inputs):
-            raise TypeError("input_core_dims exceeds the number of positional parameters")
-        names = positional[: len(inputs)]
+            da = da.transpose(*shape)
+        for d, name in zip(shape, da.dims):
+            if isinstance(d, str):
+                labels.dims.setdefault(d, name)
+    labels.refs.append(da)
+    return da.data
 
-        @wraps(fn)
-        def adapted(*args: P.args, **kwargs: P.kwargs) -> R:
-            # A DataArray cannot exist without xarray already being imported. This
-            # also recognizes subclasses without importing xarray for NumPy calls.
-            xr: Any = sys.modules.get("xarray")
+
+# --------------------------------------------------------------------------- #
+# rewrap: payload -> DataArray, from the output contract
+# --------------------------------------------------------------------------- #
+
+
+def _rewrap(value: Any, t: Any, labels: _Labels, xr: Any) -> Any:
+    if value is None or isinstance(value, xr.DataArray):
+        return value
+    if isinstance(value, tuple):
+        items = (
+            t.items if isinstance(t, TupleType) and len(t.items) == len(value) else None
+        )
+        return tuple(
+            _rewrap(v, items[i] if items else None, labels, xr)
+            for i, v in enumerate(value)
+        )
+    if not (hasattr(value, "shape") and hasattr(value, "dtype")):
+        return value  # scalars, dicts, frames: not ours to label
+    ndim = len(value.shape)
+    if ndim == 0:
+        return value
+    dims = _output_dims(ndim, t, labels)
+    if dims is None:
+        return value
+    ref = labels.refs[0]
+    out = xr.DataArray(
+        value,
+        dims=dims,
+        coords=_coords(dims, tuple(value.shape), labels),
+        attrs=dict(ref.attrs),
+        name=ref.name,
+    )
+    if dims != tuple(t.shape or ()):
+        return out  # positional contract: keep the contract's axis order
+    # a fully named contract is checked by name in any layout, so go back to the
+    # caller's: dimensions the first input had keep their order, new ones follow
+    order = [d for d in labels.order if d in dims] + [
+        d for d in dims if d not in labels.order
+    ]
+    return out if tuple(order) == dims else out.transpose(*order)
+
+
+def _output_dims(ndim: int, t: Any, labels: _Labels) -> tuple[str, ...] | None:
+    shape = t.shape if isinstance(t, SignalType) else None
+    if shape is None:
+        ref = labels.refs[0]
+        return tuple(ref.dims) if ref.ndim == ndim else None
+    if len(shape) != ndim:
+        return None
+    dims: list[str] = []
+    for i, d in enumerate(shape):
+        if isinstance(d, str):
+            name = labels.dims.get(d, d)
+        else:
+            name = f"dim_{i}"
+        while name in dims:
+            name = f"{name}_{i}"
+        dims.append(name)
+    return tuple(dims)
+
+
+def _coords(dims: tuple[str, ...], shape: tuple[int, ...], labels: _Labels) -> dict:
+    size = dict(zip(dims, shape))
+    coords: dict[str, Any] = {}
+    for ref in labels.refs:
+        for key, coord in ref.coords.items():
+            if key in coords or not set(coord.dims) <= set(dims):
+                continue
+            if all(coord.sizes[d] == size[d] for d in coord.dims):
+                coords[key] = coord.variable
+    return coords
+
+
+# --------------------------------------------------------------------------- #
+# the wrapper installed on a block definition
+# --------------------------------------------------------------------------- #
+
+
+def _has_labelled(values: Iterable[Any], xr: Any) -> bool:
+    for v in values:
+        if isinstance(v, xr.DataArray):
+            return True
+        if isinstance(v, tuple) and any(isinstance(x, xr.DataArray) for x in v):
+            return True
+    return False
+
+
+def _stream(items: Any, t: Any, labels: _Labels, xr: Any) -> Any:
+    """Unwrap the items of a stream input lazily; the labels follow the latest item."""
+    if hasattr(items, "__aiter__"):
+
+        async def agen() -> Any:
+            async for item in items:
+                yield _unwrap(item, t, labels, xr)
+
+        return agen()
+
+    def gen() -> Any:
+        for item in items:
+            yield _unwrap(item, t, labels, xr)
+
+    return gen()
+
+
+def adapt(defn: Any) -> Callable[..., Any]:
+    """Return ``defn.fn`` wrapped so labelled inputs are unwrapped and outputs
+    rewrapped according to the block's contract (see the module docstring).
+    Installed as ``defn.call``; ``defn.fn`` stays the raw body."""
+    fn: Callable[..., Any] = defn.fn
+    inputs = list(defn.inputs)
+    if not inputs:
+        return fn
+    try:
+        signature: inspect.Signature | None = inspect.signature(fn)
+    except (TypeError, ValueError):
+        signature = None
+    by_name = {spec.name: spec for spec in inputs}
+    has_stream = any(spec.stream for spec in inputs)
+
+    def enabled() -> bool:
+        flag = defn.labels
+        return _DEFAULT if flag is None else bool(flag)
+
+    def prepare(
+        args: tuple, kwargs: dict, labels: _Labels, xr: Any
+    ) -> tuple[tuple, dict]:
+        if signature is not None:
+            try:
+                bound = signature.bind(*args, **kwargs)
+            except TypeError:
+                return args, kwargs  # let the body raise the real error
+            for name, spec in by_name.items():
+                if name in bound.arguments and not spec.framed:
+                    v = bound.arguments[name]
+                    bound.arguments[name] = (
+                        _stream(v, spec.type, labels, xr)
+                        if spec.stream
+                        else _unwrap(v, spec.type, labels, xr)
+                    )
+            return bound.args, bound.kwargs
+        new_args = list(args)
+        for i, spec in enumerate(inputs[: len(new_args)]):
+            if not spec.framed:
+                v = new_args[i]
+                new_args[i] = (
+                    _stream(v, spec.type, labels, xr)
+                    if spec.stream
+                    else _unwrap(v, spec.type, labels, xr)
+                )
+        return tuple(new_args), kwargs
+
+    def wanted(args: tuple, kwargs: dict) -> Any:
+        """The xarray module when this call should be adapted, else None."""
+        if not enabled():
+            return None
+        xr = sys.modules.get("xarray")
+        if xr is None:
+            return None
+        if has_stream or _has_labelled(args, xr) or _has_labelled(kwargs.values(), xr):
+            return xr
+        return None
+
+    def out(value: Any, labels: _Labels, xr: Any) -> Any:
+        return _rewrap(value, defn.out_type, labels, xr) if labels.active else value
+
+    if inspect.isasyncgenfunction(fn):
+
+        @functools.wraps(fn, updated=())
+        async def agen_adapted(*args: Any, **kwargs: Any) -> Any:
+            xr = wanted(args, kwargs)
             if xr is None:
-                return fn(*args, **kwargs)
-            bound = signature.bind(*args, **kwargs)
-            bound.apply_defaults()
-            values = [bound.arguments[name] for name in names]
-            if any(isinstance(v, (xr.Dataset, xr.Variable)) for v in values):
-                raise TypeError(
-                    "xarray_aware accepts DataArray inputs, not Dataset or Variable"
-                )
-            labeled = [v for v in values if isinstance(v, xr.DataArray)]
-            if not labeled:
-                return fn(*args, **kwargs)
-            if vectorize and any(
-                hasattr(
-                    v.data if isinstance(v, xr.DataArray) else v,
-                    "__cuda_array_interface__",
-                )
-                for v in values
-            ):
-                raise TypeError("vectorize=True is NumPy-only; use a batched GPU function")
+                async for item in fn(*args, **kwargs):
+                    yield item
+                return
+            labels = _Labels()
+            args, kwargs = prepare(args, kwargs, labels, xr)
+            async for item in fn(*args, **kwargs):
+                yield out(item, labels, xr)
 
-            def calculate(*arrays: Any) -> Any:
-                arguments = {**bound.arguments, **dict(zip(names, arrays))}
-                call = inspect.BoundArguments(signature, arguments)
-                return fn(*call.args, **call.kwargs)
+        return agen_adapted
 
-            result = xr.apply_ufunc(
-                calculate,
-                *values,
-                input_core_dims=inputs,
-                output_core_dims=outputs,
-                vectorize=vectorize,
-                keep_attrs=keep_attrs,
-                join=join,
-                dask=dask,
-            )
-            order = list(dict.fromkeys(d for value in labeled for d in value.dims))
+    if inspect.isgeneratorfunction(fn):
 
-            def restore(value: Any) -> Any:
-                dims = [d for d in order if d in value.dims]
-                dims += [d for d in value.dims if d not in dims]
-                return value.transpose(*dims)
+        @functools.wraps(fn, updated=())
+        def gen_adapted(*args: Any, **kwargs: Any) -> Any:
+            xr = wanted(args, kwargs)
+            if xr is None:
+                yield from fn(*args, **kwargs)
+                return
+            labels = _Labels()
+            args, kwargs = prepare(args, kwargs, labels, xr)
+            for item in fn(*args, **kwargs):
+                yield out(item, labels, xr)
 
-            if isinstance(result, tuple):
-                return cast(R, tuple(restore(value) for value in result))
-            return cast(R, restore(result))
+        return gen_adapted
 
-        return adapted
+    if inspect.iscoroutinefunction(fn):
 
-    return decorate
+        @functools.wraps(fn, updated=())
+        async def coro_adapted(*args: Any, **kwargs: Any) -> Any:
+            xr = wanted(args, kwargs)
+            if xr is None:
+                return await fn(*args, **kwargs)
+            labels = _Labels()
+            args, kwargs = prepare(args, kwargs, labels, xr)
+            return out(await fn(*args, **kwargs), labels, xr)
+
+        return coro_adapted
+
+    @functools.wraps(fn, updated=())
+    def adapted(*args: Any, **kwargs: Any) -> Any:
+        xr = wanted(args, kwargs)
+        if xr is None:
+            return fn(*args, **kwargs)
+        labels = _Labels()
+        args, kwargs = prepare(args, kwargs, labels, xr)
+        return out(fn(*args, **kwargs), labels, xr)
+
+    return adapted

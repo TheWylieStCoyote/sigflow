@@ -248,9 +248,28 @@ def _unlit(x: Any) -> Any:
 def _array_metadata(value: Any) -> tuple[np.dtype, tuple[int, ...]]:
     """Inspect arrays without materializing their data (including CUDA/lazy arrays)."""
     if hasattr(value, "dtype") and hasattr(value, "shape"):
-        return np.dtype(value.dtype), tuple(value.shape)
+        try:
+            return np.dtype(value.dtype), tuple(int(n) for n in value.shape)
+        except (TypeError, ValueError):
+            pass  # torch / pandas extension dtypes, unknown lazy sizes: materialise
     array = np.asarray(value)
     return array.dtype, array.shape
+
+
+def _labelled_shape(value: Any, want: Any, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """A labelled array (``xarray.DataArray``) is matched to a contract that names
+    all of its dimensions *by name*: ``Sig[float, tuple[CHANNEL, TIME]]`` accepts the
+    array in any layout, and the sizes are read per name. Otherwise, by position."""
+    sizes = getattr(value, "sizes", None)
+    if (
+        want is not None
+        and sizes is not None
+        and len(want) == len(shape)
+        and all(isinstance(d, str) for d in want)
+        and all(_plain(d) in sizes for d in want)
+    ):
+        return tuple(int(sizes[_plain(d)]) for d in want)
+    return shape
 
 
 @dataclass(frozen=True)
@@ -353,11 +372,10 @@ class SignalType:
             return env
         if self.is_array:
             dtype, shape = _array_metadata(value)
+            shape = _labelled_shape(value, self.shape, shape)
             target: Any = self.dtype
             if not np.can_cast(dtype, target, casting="same_kind"):
-                raise TypeMismatch(
-                    f"{where}: value dtype {dtype} is not {self.dtype}"
-                )
+                raise TypeMismatch(f"{where}: value dtype {dtype} is not {self.dtype}")
             if self.shape is not None:
                 if len(shape) != len(self.shape):
                     raise TypeMismatch(

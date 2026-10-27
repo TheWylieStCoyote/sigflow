@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from importlib import import_module
 from typing import Any, Callable
 
@@ -27,8 +28,8 @@ def _cupy() -> Any:
 def _payload(x: Any, convert: Callable[[Any], Any]) -> Any:
     # Import xarray only when processing one of its objects; CPU/GPU arrays do
     # not require it. Copy the wrapper so dimensions, coordinates and attrs survive.
-    if type(x).__module__.split(".")[0] == "xarray":
-        xr = import_module("xarray")
+    xr = sys.modules.get("xarray")
+    if xr is not None and isinstance(x, (xr.DataArray, xr.Dataset, xr.Variable)):
         if not isinstance(x, xr.DataArray):
             raise TypeError("device transfers accept xarray.DataArray, not Dataset")
         return x.copy(deep=False, data=convert(x.data))

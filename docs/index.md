@@ -72,7 +72,7 @@ and select it from the Kernel menu. The tour notebook also falls back to the
 | `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display |
 | `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters |
 | `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets |
-| `sigflow.xarray`   | optional `xarray_aware` decorator: named-dimension adapters for numerical map functions |
+| `sigflow.xarray`   | labelled payloads: `DataArray` inputs lined up with the block contract, outputs rebuilt from it (`@block(labels=True)`, `default_labels()`) |
 | `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks |
 | `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output) |
 | `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion |
@@ -425,25 +425,31 @@ pickle by import path, so anything defined in a module works; `backend="thread"`
 works for lambdas and notebook-defined blocks, and pays off when the function
 releases the GIL (NumPy and SciPy do).
 
-### Labeled map functions with xarray
+### Labelled arrays with xarray
 
-Install `python -m pip install -e ".[xarray]"` to adapt ordinary numerical
-functions to `DataArray` inputs. Put `@xarray_aware` **under** `@block`:
+Install `python -m pip install -e ".[xarray]"` and an `xarray.DataArray` can be
+the payload of a frame. A block declared with `labels=True` lines the array up
+with its input contract, hands the body the bare array, and rebuilds a labelled
+array around the result from its output contract:
 
 ```python
+from typing import Literal
 import numpy as np
-from sigflow import Sig, block, xarray_aware
+from sigflow import Sig, block
+
+CHANNEL = Literal["channel"]
+TIME = Literal["time"]
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[["time"]])
-def remove_dc(x: Sig[float], gain: float = 1.0) -> Sig[float]:
+@block(labels=True)
+def remove_dc(
+    x: Sig[float, tuple[CHANNEL, TIME]], gain: float = 1.0
+) -> Sig[float, tuple[CHANNEL, TIME]]:
     return gain * (x - np.mean(x, axis=-1, keepdims=True))
 
 
-@block
-@xarray_aware(input_core_dims=[["time"]], output_core_dims=[[]])
-def rms(x: Sig[float]) -> Sig[float]:
+@block(labels=True)
+def rms(x: Sig[float, tuple[CHANNEL, TIME]]) -> Sig[float, tuple[CHANNEL]]:
     return np.sqrt(np.mean(x**2, axis=-1))
 
 
@@ -451,36 +457,28 @@ graph = remove_dc(gain=2) >> rms
 # frames = graph(data_array, check="all", on_error="raise")
 ```
 
-The first `len(input_core_dims)` positional parameters are array inputs;
-remaining parameters are configuration. When any input is a DataArray, the
-decorator uses `xarray.apply_ufunc`: core dimensions move to trailing axes
-inside the function, while all other dimensions broadcast. A `(time, channel)`
-input therefore reaches `remove_dc` as `(channel, time)`. The labeled output is
-restored to its original dimension order, and `rms` removes only `time`, leaving
-one result per channel. Coordinates, name and attributes are retained where
-applicable; use `keep_attrs=False` when input attributes no longer describe the
-result.
+When every dimension of the contract names a dimension of the array, axes are
+matched **by name**: a `(time, channel)` or `(channel, time)` input reaches
+`remove_dc` as `(channel, time)`, and runtime checks read sizes by name too. A
+positional contract such as `Sig[T, tuple[M, N]]` takes the array as it is and
+binds `M` and `N` to the dimension names it finds, just as it binds them to
+lengths. Outputs are rebuilt from the output contract: a variable seen on an
+input keeps its name and coordinate, so `rms` leaves one value per channel with
+the `channel` coordinate; a new variable contributes its own name; fixed sizes
+become `dim_<axis>`. Attributes and the array name come from the first labelled
+input, and a fully named contract restores the caller's layout.
 
-`Sig` contracts describe the **whole payload**, not just the core dimensions.
-Use `Sig[float]` for arbitrary batch rank, or declare a full positional shape
-when it is known. `Sig[float, N]` still means a one-dimensional payload.
-
-Multiple inputs align with `join="exact"` by default; different coordinate
-labels raise rather than silently trimming or filling samples. Other joins must
-be requested explicitly. Declare one output dimension list per result for
-tuple-valued functions. Set `vectorize=True` for an eager NumPy function that
-accepts only one core slice at a time; batched functions are generally faster.
-
-Calls with ordinary arrays go directly to the function with its original
-signature and axis conventions, without importing xarray. The adapter performs
-no NumPy conversion or device transfer: CuPy-backed inputs require a compatible
-numerical function, and `vectorize=True` is NumPy-only. Dask data is rejected by
-default; `dask="allowed"` delegates to a function that supports lazy arrays.
-Datasets, stream/generator functions, resized core dimensions and new output
-dimensions such as FFT frequency axes need separate adapters. See
-`examples/23_xarray_blocks.py` for a runnable example.
-The full guide is `docs/guide/xarray.md` (**Guide → xarray adapters** in the
-documentation site), including configuration, tuple outputs and troubleshooting.
+`sigflow.default_labels(True)` makes every block whose `labels` option is unset
+label-aware, including the built-in `dsp` and `linalg` blocks; `labels=False`
+opts a block out, so its body receives the `DataArray` itself. A body that
+wants the labels takes the frame (`Framed[...]`) and reads `frame.data`.
+Scalars stay scalars, tuple outputs are handled element by element, and a
+CuPy-backed `DataArray` reaches the body as a CuPy array and comes back
+labelled and on the device. Calls with plain arrays go straight to the body
+and nothing in sigflow imports xarray. Labelled frames slice (`frame[10:20]`)
+and save/load with their labels. See `examples/23_xarray_blocks.py` and the
+guide `docs/guide/xarray.md` (**Guide → Labelled arrays** in the documentation
+site).
 
 ### CPU / CUDA transfers
 
