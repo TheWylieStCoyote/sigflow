@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .graph import Node, Select, TupleType, as_node, describe
+from .graph import Node, Select, TupleType, _ids, as_node, describe
 from .ratio import Ratio, RatioMismatch
 from .types import Env, SignalType, TypeMismatch, narrow, resolve, unify
 
@@ -74,12 +74,21 @@ class Join(Node):
     """A tuple join member: receives N inputs zipped in lock step and passes the tuple
     frame on. This is what a fan-out (`a | b`) or zip (`a & b`) lowers to."""
 
-    def __init__(self, out_type: Any, op: str = "zip", port_names: tuple = ()) -> None:
+    def __init__(
+        self,
+        out_type: Any,
+        op: str = "zip",
+        port_names: tuple = (),
+        origin: Any = None,
+    ) -> None:
         self.in_type = out_type
         self.out_type = out_type
         self.join_op = op
         self.name = op
         self.port_names = port_names
+        # the fan-out / zip this join stands for: the run's stats are keyed by this id,
+        # so a diagram of the operator tree finds them
+        self.id = origin.id if origin is not None else next(_ids)
 
     def ratio_for(self, in_type: Any) -> Ratio:
         return Ratio.ONE
@@ -540,9 +549,9 @@ def _lower_join(g: Graph, node: Node, src: Ref | None) -> tuple[list[Ref], Join]
     if isinstance(node, Fanout) or (isinstance(node, Zip) and node.in_type is not None):
         members = node.branches if isinstance(node, Fanout) else node.parts
         refs = [_lower_into(g, b, src) for b in members]
-        return refs, Join(node.out_type, "fanout", node.port_names)
+        return refs, Join(node.out_type, "fanout", node.port_names, origin=node)
     refs = [_lower_into(g, p, None) for p in node.parts]  # type: ignore[attr-defined]
-    return refs, Join(node.out_type, "zip", node.port_names)
+    return refs, Join(node.out_type, "zip", node.port_names, origin=node)
 
 
 def _member_name(node: Node) -> str:

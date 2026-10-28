@@ -82,6 +82,11 @@ run2.set_rate(20)                                   # start throttled; the slide
 run2.controls(plots=[spec, fall], refresh=0.3)""")
 code("""time.sleep(2); run2.pause()
 print(run2.status(), "| last tone at %.0f Hz" % run2.latest["freq_hz"])""")
+md("""The graph itself can be watched: `run.diagram()` shows the diagram with frames in and out on
+every block, errors in red and the state as the border colour, refreshed while the run goes.
+`run.controls(diagram=True)` puts the same picture inside the panel.""")
+code("""run2.resume()
+run2.diagram()""")
 
 md("""## 3. Knobs: sliders, dropdowns, toggles — and plot options — on a running graph
 

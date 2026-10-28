@@ -54,6 +54,17 @@ class Monitor:
     def blocks(self) -> list[Stats]:
         return list(self._stats.values())
 
+    def lookup(self, node: Any) -> Stats | None:
+        """The stats of a node the run has registered, or None. By identity first;
+        else by name when exactly one row carries it (a graph the runtime lowered
+        runs copies of the operator tree's nodes, which keep their names)."""
+        ident = getattr(node, "id", id(node))
+        for (_, key), st in self._by_key.items():  # identity: whatever name it got
+            if key == ident:
+                return st
+        rows = [s for (name, _), s in self._by_key.items() if name == node.name]
+        return rows[0] if len(rows) == 1 else None
+
     def start(self) -> None:
         self.started = time.perf_counter()
         self.finished = None

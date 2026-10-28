@@ -357,6 +357,20 @@ class Run:
         return f"<Run {self.graph.name!r} {self.state}: {len(self.frames)} frames>"
 
     # -- notebook UI ------------------------------------------------------- #
+    def diagram(self, refresh: float = 0.5, types: bool = True) -> Any:
+        """The graph's diagram, live: frame counts, errors and a state colour on every
+        block, refreshed while the run goes (kept as ``run.live_diagram``). In a
+        notebook it is displayed and None is returned; elsewhere the
+        :class:`~sigflow.draw.LiveDiagram` is returned, its ``svg`` always current."""
+        from .draw import LiveDiagram
+        from .progress import _in_notebook
+
+        self.live_diagram = LiveDiagram(self, refresh=refresh, types=types)
+        if not _in_notebook():
+            return self.live_diagram
+        self.live_diagram.show()
+        return None
+
     def controls(
         self,
         plots: Any = (),
@@ -365,13 +379,15 @@ class Run:
         table: bool = True,
         width: int = 520,
         title: str | None = None,
+        diagram: bool = False,
     ) -> Any:
         """Display an interactive panel for this run (kept as ``run.panel``):
 
         Pause / Resume / Step (with a frame count) / Stop, Snapshot and Record buttons,
         a throttle slider (max source frames per second), a progress bar, one control per
         Knob in ``knobs`` (slider, toggle, dropdown or text), the figures of the plot blocks
-        in ``plots`` refreshed live, and the per-block status table.
+        in ``plots`` refreshed live, with ``diagram=True`` the live diagram of the graph,
+        and the per-block status table.
 
         Needs ``ipywidgets`` in the kernel; otherwise a status line and instructions appear."""
         from .ui import ControlPanel, have_widgets
@@ -388,6 +404,7 @@ class Run:
             table=table,
             width=width,
             title=title,
+            diagram=diagram,
         )
         self.widget = self.panel.widget
         display(self.widget)

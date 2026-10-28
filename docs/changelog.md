@@ -66,6 +66,12 @@ New
   the members as parts, annotations and tags merged as at a join, a warning
   on a group released before it was complete. The mirror of a detector plus
   `per_key`; the example gathers every track's result per spectrum frame.
+- Live diagram: `run.diagram()` displays the graph's diagram refreshed while a
+  background run goes, with frames in and out on every block, errors in red, a
+  state colour on the border and frame counts on the edges;
+  `run.controls(diagram=True)` adds it to the control panel and
+  `g.draw(stats=run.monitor)` renders the same still after any run
+  (`Monitor.lookup(node)` finds a node's stats).
 - Tags, a fourth annotation level: `frame.tag("speech", segment=3)`,
   `frame.tag("burst", span=(1.2, 1.5))`, `frame.untag(...)`, `frame.mask(name)`,
   `frame.tags.at(t)`; `"speech" in frame` and `frame["segment"]` look tags up

@@ -143,10 +143,17 @@ class ControlPanel:
         table: bool = True,
         width: int = 520,
         title: str | None = None,
+        diagram: bool = False,
     ) -> None:
         import ipywidgets as w
 
         self.run = run
+        self.live: Any = None
+        if diagram:
+            from .draw import LiveDiagram
+
+            self.live = LiveDiagram(run)
+            self.diagram_html = w.HTML(self.live.html())
         self.plots = [plots] if hasattr(plots, "draw_fn") else list(plots)
         self.knobs = [knobs] if hasattr(knobs, "_set_from_widget") else list(knobs)
         self.refresh = refresh
@@ -241,6 +248,8 @@ class ControlPanel:
                     layout=w.Layout(flex_flow="row wrap"),
                 )
             )
+        if self.live is not None:
+            rows.append(self.diagram_html)
         self.images = [w.Image(format="png", width=width) for _ in self.plots]
         if self.images:
             rows.append(w.HBox(self.images, layout=w.Layout(flex_flow="row wrap")))
@@ -248,9 +257,7 @@ class ControlPanel:
         rows.append(self.status)
         self.widget = w.VBox(
             rows,
-            layout=w.Layout(
-                border="1px solid #8884", padding="6px", border_radius="6px"
-            ),
+            layout=w.Layout(border="1px solid #8884", padding="6px"),
         )
 
         run._ui = self.render
@@ -293,6 +300,8 @@ class ControlPanel:
             )  # activity sweep
             self.progress.bar_style = "" if not run.finished else "success"
             self.progress_label.value = f"{mon.produced} frames"
+        if self.live is not None:
+            self.diagram_html.value = self.live.html()
         for img, p in zip(self.images, self.plots):
             if p.frames:
                 try:

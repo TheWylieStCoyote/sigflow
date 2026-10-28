@@ -231,11 +231,13 @@ class Node:
 
         return graph_html(self)
 
-    def draw(self, types: bool = True) -> Any:
-        """SVG diagram of the graph (displays inline in Jupyter; ``.save(path)`` to write it)."""
+    def draw(self, types: bool = True, stats: Any = None) -> Any:
+        """SVG diagram of the graph (displays inline in Jupyter; ``.save(path)`` to write
+        it). With ``stats=run.monitor`` every block carries the frames it took in and put
+        out, its errors and a state colour: a still of what ``run.diagram()`` shows live."""
         from .draw import Diagram
 
-        return Diagram(self, types=types)
+        return Diagram(self, types=types, stats=stats)
 
     def report(self, title: str | None = None, fmt: str = "html") -> str:
         """Documentation of this graph (diagram + typed table + block docstrings); see
@@ -512,6 +514,7 @@ class Fanout(Node):
         for b in branches:
             flat.extend(b.branches if isinstance(b, Fanout) else [b])
         self.branches = flat
+        self.id = next(_ids)  # the join it lowers to keeps this id, so stats map back
         self.name = "(" + " | ".join(b.name for b in flat) + ")"
         ins = [b.in_type for b in flat]
         if any(i is None for i in ins):
@@ -563,6 +566,7 @@ class Zip(Node):
         for p in parts:
             flat.extend(p.parts if isinstance(p, Zip) else [p])
         self.parts = flat
+        self.id = next(_ids)  # the join it lowers to keeps this id, so stats map back
         self.name = "(" + " & ".join(p.name for p in flat) + ")"
         ins = [p.in_type for p in flat]
         if all(i is None for i in ins):

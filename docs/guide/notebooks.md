@@ -7,6 +7,13 @@ Snapshot and Record, a throttle slider, a progress bar, one widget per `Knob`
 (slider, toggle, dropdown or text), the plot blocks' figures refreshed live,
 and the status table. `dashboard({...})` stacks panels for several runs.
 
+`run.diagram()` shows the graph's diagram live: frames in and out on every
+block, errors in red, the state as the border colour (grey idle, blue active,
+amber paused, red errors, green finished), frame counts on the edges and a
+status line. It needs no ipywidgets. `run.controls(diagram=True)` adds the same
+picture to the panel, and `g.draw(stats=run.monitor)` is a still of it after a
+run.
+
 The panel needs **ipywidgets in the kernel** (`python -m pip install
 ipywidgets`, then restart the kernel); `require_widgets()` tells you whether it
 will work. Live figures inside the panel are refreshed images; with the

@@ -5,6 +5,9 @@
     g.draw(types=False)      # hide edge type labels
     print(g.to_dot())        # for `dot -Tpng` or the graphviz Python package
 
+    g.draw(stats=run.monitor)   # a still with each block's frame counts and errors
+    run.diagram()               # the live picture of a running graph (see LiveDiagram)
+
 Layout is structural: pipelines flow left to right, fan-out / zip / merge
 stack their members vertically and converge on a small join node.  Boxes are
 coloured by kind (source, map, stream, tap/plot), and edges are labelled with
@@ -14,12 +17,13 @@ the type that flows along them.
 from __future__ import annotations
 
 import html
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from .types import describe
 
-__all__ = ["Diagram", "draw", "to_dot"]
+__all__ = ["Diagram", "LiveDiagram", "draw", "to_dot"]
 
 # geometry (px)
 _PAD_X, _PAD_Y = 28, 18  # gap between columns / rows
@@ -43,6 +47,15 @@ _STROKE = {
     "plot": "#7c3aed",
     "join": "#6b7280",
 }
+# live overlay: the state of a block during a run, as its border colour
+_STATE = {
+    "idle": "#9ca3af",  # no frame yet
+    "active": "#2563eb",  # produced since the last refresh
+    "paused": "#d97706",
+    "error": "#dc2626",
+    "done": "#16a34a",
+}
+_CAPTION_H = 18  # space under a live diagram for its status line
 
 
 @dataclass
@@ -57,6 +70,19 @@ class _Box:
     y: float = 0
     w: float = 0
     h: float = _H
+    node: Any = None  # the graph node drawn, so a run's stats can be laid over it
+
+
+@dataclass
+class Badge:
+    """What a live diagram shows on one box: frames in and out, errors, and a state
+    (``idle``, ``active``, ``paused``, ``error``, ``done`` or ``None`` for settled)."""
+
+    inp: int = 0
+    out: int = 0
+    errors: int = 0
+    time: float = 0.0
+    state: str | None = None
 
 
 @dataclass
@@ -129,7 +155,9 @@ class _Layout:
         )
         w = max(len(node.name) * 1.15, len(sub), len(typ) * 0.9) * _CHAR + 24
         h = _H + (12 if sub else 0) + (12 if typ else 0)
-        b = _Box(self._id(), node.name, sub, kind, typ, tip, w=max(w, 70), h=h)
+        b = _Box(
+            self._id(), node.name, sub, kind, typ, tip, w=max(w, 70), h=h, node=node
+        )
         return _Cell(
             b.w, b.h, [b], [], [b.id] if node.in_type is not None else [], [b.id]
         )
@@ -166,6 +194,7 @@ class _Layout:
         if isinstance(node, Feedback):
             inner = self.layout(node.body)
             j = self.join("↻")
+            j.node = node
             j.x, j.y = inner.w + _PAD_X, (inner.h - j.h) / 2
             inner.boxes.append(j)
             for e in inner.exits:
@@ -201,6 +230,7 @@ class _Layout:
             "StreamSlice",
         ):
             b = self.join(node.name)
+            b.node = node
             b.w = max(_JOIN_W, len(node.name) * _CHAR + 14)
             return _Cell(b.w, b.h, [b], [], [b.id], [b.id])
         return self.leaf(node)
@@ -293,6 +323,7 @@ class _Layout:
             y += c.h + _PAD_Y
         h = y - _PAD_Y
         j = self.join(label)
+        j.node = node
         j.x, j.y = w + _PAD_X, (h - j.h) / 2
         out.boxes.append(j)
         for c, part in zip(cells, _members(node)):
@@ -320,28 +351,84 @@ def _short(v: Any) -> str:
 
 
 class Diagram:
-    """An SVG picture of a graph. Displays inline in Jupyter; ``.save(path)`` writes the file."""
+    """An SVG picture of a graph. Displays inline in Jupyter; ``.save(path)`` writes the
+    file. With ``stats=`` (a :class:`~sigflow.progress.Monitor`) every box carries the
+    frames it took in and put out, its errors, and a border colour for its state; the
+    live picture of a run (:class:`LiveDiagram`) is this, refreshed."""
 
-    def __init__(self, node: Any, types: bool = True) -> None:
+    def __init__(
+        self, node: Any, types: bool = True, stats: Any = None, live: bool = False
+    ) -> None:
         self.node = node
         self.types = types
+        self.monitor = stats
+        self.live = live or stats is not None
         env = None
         try:
             env = node.validate()
         except Exception:  # pragma: no cover - drawing must never fail on a bad graph
             pass
         self.cell = _Layout(env, types).layout(node)
-        self.svg = self._render()
-
-    def _render(self) -> str:
         c = self.cell
-        m = 16
-        arcs = type(self.node).__name__ == "Graph"
-        if arcs:
+        if type(self.node).__name__ == "Graph":  # room for the arcs of long edges
             for b in c.boxes:
                 b.y += 40
             c.h += 40
-        W, H = c.w + 2 * m, c.h + 2 * m
+
+    @property
+    def svg(self) -> str:
+        if self.monitor is None:
+            return self.render(None)
+        counts = self.counts(self.monitor)
+        return self.render(self.badges(counts, None, "done"), caption=self.caption())
+
+    # -- live overlay ------------------------------------------------------ #
+    def counts(self, monitor: Any) -> dict[int, Badge]:
+        """Each drawn box's stats from ``monitor``, by box id (boxes without stats, such
+        as blocks the run has not reached, are left out)."""
+        out: dict[int, Badge] = {}
+        for b in self.cell.boxes:
+            st = monitor.lookup(b.node) if b.node is not None else None
+            if st is not None:
+                out[b.id] = Badge(st.inp, st.out, st.errors, st.time)
+        return out
+
+    @staticmethod
+    def badges(
+        counts: dict[int, Badge],
+        previous: dict[int, tuple[int, int]] | None,
+        run_state: str | None,
+    ) -> dict[int, Badge]:
+        """Give each badge its state: errors win; a box whose counts moved since
+        ``previous`` is active; otherwise the run's state (paused / finished) or idle
+        when nothing has flowed yet; a settled box keeps its ordinary border."""
+        for bid, badge in counts.items():
+            if badge.errors:
+                badge.state = "error"
+            elif run_state in ("done", "stopped", "failed"):
+                badge.state = "done"
+            elif previous is not None and previous.get(bid) != (badge.inp, badge.out):
+                badge.state = "active"
+            elif run_state == "paused":
+                badge.state = "paused"
+            elif badge.inp == 0 and badge.out == 0:
+                badge.state = "idle"
+        return counts
+
+    def caption(self, run_state: str | None = None) -> str:
+        mon = self.monitor
+        if mon is None:
+            return ""
+        state = run_state or ("running" if mon.running else "done")
+        line = f"{state} · {mon.produced} produced · {mon.elapsed:.1f}s"
+        if mon.errors:
+            line += f" · {mon.errors} error{'s' if mon.errors != 1 else ''}"
+        return line
+
+    def render(self, badges: dict[int, Badge] | None, caption: str = "") -> str:
+        c = self.cell
+        m = 16
+        W, H = c.w + 2 * m, c.h + 2 * m + (_CAPTION_H if self.live else 0)
         boxes = {bx.id: bx for bx in c.boxes}
         parts = [
             (
@@ -393,21 +480,56 @@ class Diagram:
                     f"<text x='{cx:.1f}' y='{ly:.1f}' text-anchor='middle' font-size='9' "
                     f"fill='#6b7280'>{html.escape(label)}</text>"
                 )
+            if badges is not None and a in badges and badges[a].out:
+                # frames that travelled this edge: what its producer put out
+                parts.append(
+                    f"<text x='{cx:.1f}' y='{ly + 11:.1f}' text-anchor='middle' font-size='9' "
+                    f"fill='#2563eb'>{badges[a].out}</text>"
+                )
         for b in c.boxes:
             x, y = b.x + m, b.y + m
+            badge = badges.get(b.id) if badges is not None else None
+            stroke = _STROKE[b.kind]
+            width = 1.2 if b.kind == "join" else 1.4
+            if badge is not None and badge.state is not None:
+                stroke, width = _STATE[badge.state], 2.2
             if b.kind == "join":
                 parts.append(
                     f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w}' height='{b.h}' rx='13' "
-                    f"fill='{_FILL['join']}' stroke='{_STROKE['join']}' stroke-width='1.2'/>"
+                    f"fill='{_FILL['join']}' stroke='{stroke}' stroke-width='{width}'/>"
                     f"<text x='{x + b.w / 2:.1f}' y='{y + b.h / 2 + 4:.1f}' text-anchor='middle' "
                     f"font-size='9' fill='#111827'>{html.escape(b.label)}</text>"
                 )
+                if badge is not None:
+                    parts.append(_pill(x + b.w, y, f"{badge.inp}→{badge.out}", stroke))
                 continue
-            parts.append(
-                f"<g><title>{html.escape(b.tip)}</title>"
-                f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
-                f"fill='{_FILL[b.kind]}' stroke='{_STROKE[b.kind]}' stroke-width='1.4'/>"
+            flow = (
+                f"{badge.out}"
+                if badge is not None and b.kind == "source"
+                else (f"{badge.inp}→{badge.out}" if badge is not None else "")
             )
+            tip = b.tip
+            if badge is not None:
+                tip += f"\nin {badge.inp}, out {badge.out}, errors {badge.errors}"
+                if badge.out:
+                    tip += f", {badge.time / badge.out * 1000:.2f} ms per frame"
+            parts.append(
+                f"<g><title>{html.escape(tip)}</title>"
+                f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
+                f"fill='{_FILL[b.kind]}' stroke='{stroke}' stroke-width='{width}'/>"
+            )
+            if badge is not None:
+                parts.append(_pill(x + b.w, y, flow, stroke))
+                if badge.errors:
+                    parts.append(
+                        _pill(
+                            x + b.w,
+                            y + b.h,
+                            f"✕ {badge.errors}",
+                            _STATE["error"],
+                            fill=True,
+                        )
+                    )
             lines: list[tuple[str, float, str, str]] = [(b.label, 12, "#111827", "600")]
             if b.sub:
                 lines.append((b.sub, 10, "#374151", "400"))
@@ -420,6 +542,11 @@ class Diagram:
                     f"font-size='{size}' fill='{color}' font-weight='{weight}'>{html.escape(text)}</text>"
                 )
             parts.append("</g>")
+        if caption:
+            parts.append(
+                f"<text x='{m}' y='{H - 6:.1f}' font-size='10' fill='#374151'>"
+                f"{html.escape(caption)}</text>"
+            )
         parts.append("</svg>")
         return "".join(parts)
 
@@ -438,8 +565,96 @@ class Diagram:
         return f"<Diagram of {self.node.name!r}: {len(self.cell.boxes)} nodes>"
 
 
-def draw(node: Any, types: bool = True) -> Diagram:
-    return Diagram(node, types=types)
+def _pill(right: float, cy: float, text: str, colour: str, fill: bool = False) -> str:
+    """A small rounded label whose right edge sits at ``right``, centred on ``cy``."""
+    w = len(text) * 5.6 + 10
+    x = right - w + 6
+    bg, fg = (colour, "white") if fill else ("white", colour)
+    return (
+        f"<rect x='{x:.1f}' y='{cy - 7:.1f}' width='{w:.1f}' height='14' rx='7' "
+        f"fill='{bg}' stroke='{colour}' stroke-width='1'/>"
+        f"<text x='{x + w / 2:.1f}' y='{cy + 3.5:.1f}' text-anchor='middle' font-size='9' "
+        f"fill='{fg}'>{html.escape(text)}</text>"
+    )
+
+
+class LiveDiagram:
+    """The diagram of a running graph, refreshed while it runs (``run.diagram()``).
+
+    Each box shows the frames it took in and put out, errors in red, and a border
+    for its state: grey before its first frame, blue when it produced since the
+    last refresh, amber while paused, red with errors, green once the run is over.
+    Edges carry the count of frames that travelled them; a status line sits below.
+    Every refresh re-renders the whole SVG from the layout computed once, so the
+    picture never moves. ``svg`` is the current picture; ``show()`` displays it in
+    a notebook and keeps it fresh until the run finishes or ``close()``."""
+
+    def __init__(self, run: Any, refresh: float = 0.5, types: bool = True) -> None:
+        self.run = run
+        self.refresh = refresh
+        self.diagram = Diagram(run.graph, types=types, live=True)
+        self._previous: dict[int, tuple[int, int]] | None = None
+        self._handle: Any = None
+        self._closed = False
+
+    @property
+    def svg(self) -> str:
+        """The picture now; boxes that moved since the previous call are active."""
+        counts = self.diagram.counts(self.run.monitor)
+        badges = self.diagram.badges(counts, self._previous, self.run.state)
+        self._previous = {k: (b.inp, b.out) for k, b in counts.items()}
+        self.diagram.monitor = self.run.monitor
+        return self.diagram.render(badges, caption=self.diagram.caption(self.run.state))
+
+    def html(self) -> str:
+        return f"<div style='overflow:auto;background:white;padding:4px;border-radius:6px'>{self.svg}</div>"
+
+    def _repr_html_(self) -> str:
+        return self.html()
+
+    def save(self, path: str) -> str:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(self.svg)
+        return path
+
+    def show(self) -> None:
+        """Display in the notebook and refresh until the run finishes."""
+        import threading
+
+        from IPython.display import HTML, display
+
+        self._handle = display(HTML(self.html()), display_id=True)
+
+        def ticker() -> None:
+            while not self.run.finished and not self._closed:
+                self._update()
+                time.sleep(self.refresh)
+            self._update()
+
+        threading.Thread(target=ticker, name="sigflow-diagram", daemon=True).start()
+
+    def _update(self) -> None:
+        if self._handle is None:
+            return
+        from IPython.display import HTML
+
+        try:
+            self._handle.update(HTML(self.html()))
+        except (
+            Exception
+        ):  # pragma: no cover - a vanished front end must not kill the run
+            pass
+
+    def close(self) -> None:
+        """Stop refreshing (the last picture stays)."""
+        self._closed = True
+
+    def __repr__(self) -> str:
+        return f"<LiveDiagram of {self.run.graph.name!r}: {self.run.state}>"
+
+
+def draw(node: Any, types: bool = True, stats: Any = None) -> Diagram:
+    return Diagram(node, types=types, stats=stats)
 
 
 def to_dot(node: Any, types: bool = True) -> str:

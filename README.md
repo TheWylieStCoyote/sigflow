@@ -571,6 +571,15 @@ output type with dimensions resolved, and carry the full signature as a hover
 tooltip. `g.to_dot()` gives Graphviz source for `dot` or the `graphviz`
 package. `g` on its own still renders the typed node table.
 
+The same picture can show a run. `run.diagram()` on a background run
+(`g.start()`) displays it live: every block carries the frames it took in and
+put out, errors in red, and a border colour for its state (grey before its
+first frame, blue when it produced since the last refresh, amber while paused,
+red with errors, green once the run is over); edges carry the count of frames
+that travelled them and a status line sits below. `run.controls(diagram=True)`
+puts it in the control panel, and `g.draw(stats=run.monitor)` is a still of the
+same thing after any run, for a report.
+
 ### Progress and status
 
 `run(g, progress=True)` shows a live bar in the terminal or an updating HTML
