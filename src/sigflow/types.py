@@ -37,6 +37,7 @@ __all__ = [
     "TypeMismatch",
     "unify",
     "narrow",
+    "resolve",
     "Env",
     "Dim",
     "scoped",
@@ -654,6 +655,31 @@ def narrow(produced: Any, required: Any, where: str = "") -> Any:
         produced.units if produced.units is not None else required.units,
         produced.meta,
     )
+
+
+def resolve(t: Any, env: Env) -> Any:
+    """``t`` with the symbols ``env`` has bound replaced by their values: a dtype
+    variable by its dtype, a symbolic dimension by its size. Unbound symbols stay."""
+    if isinstance(t, TupleType):
+        return TupleType(tuple(resolve(i, env) for i in t.items))
+    if isinstance(t, StreamType):
+        return StreamType(resolve(t.item, env))
+    if not isinstance(t, SignalType):
+        return t
+    dtype = t.dtype
+    if isinstance(dtype, DVar):
+        bound = env.value(dtype.name)
+        if bound is not None:
+            dtype = bound
+    shape = t.shape
+    if shape is not None:
+        shape = tuple(
+            env.value(d) if isinstance(d, str) and env.value(d) is not None else d
+            for d in shape
+        )
+    if dtype is t.dtype and shape == t.shape:
+        return t
+    return t.with_(dtype=dtype, shape=shape)
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:

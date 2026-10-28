@@ -236,6 +236,28 @@ def test_transfer_rejects_bad_shapes_and_preserves_ratios(transfer):
         _ = dsp.sine(n=1024) >> transfer() >> (dsp.chunk(256) | dsp.rms)
 
 
+@pytest.mark.parametrize("transfer", [to_device, to_host])
+def test_transfer_carries_what_the_graph_has_pinned_down(transfer):
+    # a generic block in between declares only symbols; the size and dtype the
+    # source fixed reach the transfer through the pipeline's bindings
+    pipeline = dsp.sine(n=1024) >> dsp.scale(gain=1.0) >> transfer() >> dsp.chunk(256)
+    assert str(pipeline.ratio) == "1:4"
+    assert pipeline.stages[2].out_type == SignalType(np.float64, (1024,))
+    needs_four = block(
+        lambda x: x, inputs=SignalType(float, (4,)), outputs=SignalType(float, (4,))
+    )
+    with pytest.raises(TypeMismatch):
+        _ = dsp.sine(n=8) >> dsp.scale(gain=1.0) >> transfer() >> needs_four
+    graph = Graph()
+    src = graph.add(dsp.sine(n=1024, frames=1))
+    scale = graph.add(dsp.scale(gain=1.0))
+    moved = graph.add(transfer())
+    chunk = graph.add(dsp.chunk(256))
+    graph.connect(moved, chunk).connect(scale, moved).connect(src, scale).output(chunk)
+    assert moved.out_type == SignalType(np.float64, (1024,))
+    assert str(graph.ratio) == "1:4"
+
+
 def test_transfer_contracts_in_reused_subgraphs():
     reusable = to_host() >> to_host.bind(copy=True)
     small = dsp.sine(n=8, frames=1) >> reusable

@@ -53,11 +53,12 @@ attributes stay. Coordinates and frame sample annotations keep their existing
 placement. `Dataset` and `Variable` payloads are rejected.
 
 Both blocks are `preserve_type` blocks (see [Blocks](../concepts/blocks.md)):
-placed after a producer they carry its complete contract, so a 1024-sample
-source followed by `to_host()` and `dsp.chunk(256)` still has ratio `1:4`, and a
-consumer with the wrong shape is rejected when the graph is built. This holds
-in operator pipelines, reused subgraphs and explicit `Graph` wiring in any
-order.
+placed after a producer they carry its complete contract as the graph has
+pinned it down, so a 1024-sample source followed by `to_host()` and
+`dsp.chunk(256)` still has ratio `1:4`, also with generic blocks such as
+`dsp.scale` between the source and the transfer, and a consumer with the wrong
+shape is rejected when the graph is built. This holds in operator pipelines,
+reused subgraphs and explicit `Graph` wiring in any order.
 
 ## Synchronisation
 

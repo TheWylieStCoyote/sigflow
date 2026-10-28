@@ -110,6 +110,11 @@ class RunOptions:
         self.labels = bool(labels)
 
 
+# every keyword ``RunOptions`` takes, so entry points that filter their options
+# (``iterate``) cannot drift from its signature
+_RUN_OPTIONS = tuple(inspect.signature(RunOptions.__init__).parameters)[1:]
+
+
 # --------------------------------------------------------------------------- #
 # Adapters
 # --------------------------------------------------------------------------- #
@@ -1751,23 +1756,7 @@ def _length_of(obj: Any) -> int | None:
 def iterate(graph: Node, **options: Any) -> AsyncIterator[Frame]:
     """Async iterator over the output frames of a graph."""
     graph.validate()
-    opts = RunOptions(
-        **{
-            k: v
-            for k, v in options.items()
-            if k
-            in (
-                "check",
-                "on_error",
-                "monitor",
-                "queue_size",
-                "control",
-                "resume",
-                "strict",
-                "provenance",
-            )
-        }
-    )
+    opts = RunOptions(**{k: v for k, v in options.items() if k in _RUN_OPTIONS})
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE
 

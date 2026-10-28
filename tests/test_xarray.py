@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import inspect
 import pickle
@@ -23,6 +24,8 @@ from sigflow import (
     default_labels,
     dsp,
     from_iterable,
+    iterate,
+    iterate_sync,
     linalg,
     parallel,
     run,
@@ -332,21 +335,27 @@ def test_mismatched_return_shapes_reach_the_checker(xr):
 
 @block
 def follows_the_run(x: Sig[float, tuple[N]]) -> Sig[float, tuple[N]]:
-    """No ``labels`` option: label-aware only when the run (or the default) says so."""
-    return x * 2
+    """No ``labels`` option: label-aware only when the run (or the default) says so.
+    The body strips a ``DataArray`` it is handed, so the payload that comes out
+    tells which path ran: a labelled array only when the wrapper rebuilt it."""
+    return np.asarray(x) * 2
 
 
 def test_labels_are_a_run_option(xr, default_off):
     x = signal(xr).isel(channel=0)
-    plain = run(from_iterable([x]) >> follows_the_run)[0].data
-    assert isinstance(plain, xr.DataArray)  # untouched: xarray did the arithmetic
-    labelled = run(from_iterable([x]) >> follows_the_run, labels=True)[0].data
+
+    def payload(**options):
+        return run(from_iterable([x]) >> follows_the_run, **options)[0].data
+
+    assert isinstance(payload(), np.ndarray)  # the body got the DataArray itself
+    labelled = payload(labels=True)
+    assert isinstance(labelled, xr.DataArray)
     assert labelled.dims == ("time",) and labelled.time.equals(x.time)
-    assert isinstance(
-        run(from_iterable([x]) >> follows_the_run, labels=False)[0].data, xr.DataArray
-    )
-    # the package default is read when the run starts, not while it runs
+    assert isinstance(payload(labels=False), np.ndarray)
     default_labels(True)
+    assert isinstance(payload(), xr.DataArray)  # the package default, when unset
+    assert isinstance(payload(labels=False), np.ndarray)  # the run option wins
+    # the package default is read when the run starts, not while it runs
     opts = RunOptions()
     default_labels(False)
     assert opts.labels is True and RunOptions().labels is False
@@ -356,18 +365,36 @@ def test_labels_are_a_run_option(xr, default_off):
     assert center.resolve_call(False) is center.adapted  # its own option wins
 
 
+def test_every_entry_point_takes_labels(xr, default_off):
+    x = signal(xr).isel(channel=0)
+    graph = from_iterable([x]) >> follows_the_run
+    assert isinstance(next(iter(iterate_sync(graph, labels=True))).data, xr.DataArray)
+    assert isinstance(next(iter(iterate_sync(graph))).data, np.ndarray)
+
+    async def first(**options):
+        async for frame in iterate(graph, **options):
+            return frame.data
+
+    assert isinstance(asyncio.run(first(labels=True)), xr.DataArray)
+    assert isinstance(asyncio.run(first()), np.ndarray)
+    callable_graph = dsp.scale(gain=1.0) >> follows_the_run
+    assert isinstance(callable_graph([x], labels=True)[0].data, xr.DataArray)
+    assert isinstance(callable_graph([x])[0].data, np.ndarray)
+
+
 def test_process_workers_get_the_resolved_flag(xr, default_off):
     x = signal(xr).isel(channel=0)
     # what a process-pool worker does: unpickle the definition, apply the run's flag
     defn = pickle.loads(pickle.dumps(follows_the_run))
     assert isinstance(_call_block(defn, x, {}, True), xr.DataArray)
     assert _call_block(defn, x, {}, True).dims == ("time",)
-    assert isinstance(_call_block(defn, x.values, {}, True), np.ndarray)
+    assert isinstance(_call_block(defn, x, {}, False), np.ndarray)
     out = run(
         from_iterable([x, x])
         >> parallel(follows_the_run, workers=2, backend="process"),
         labels=True,
     )
+    assert all(isinstance(f.data, xr.DataArray) for f in out)
     assert [f.data.dims for f in out] == [("time",), ("time",)]
 
 

@@ -28,7 +28,7 @@ from typing import Any
 
 from .graph import Node, Select, TupleType, as_node, describe
 from .ratio import Ratio, RatioMismatch
-from .types import Env, SignalType, TypeMismatch, narrow, unify
+from .types import Env, SignalType, TypeMismatch, narrow, resolve, unify
 
 __all__ = ["Graph", "Ref", "Join", "Chain", "lower"]
 
@@ -317,12 +317,17 @@ class Graph(Node):
     def _resolve_types(self) -> None:
         """Let members that carry their producer's contract (``preserve_type``) pick it
         up, in topological order so a contract propagates through several of them
-        whatever order the edges were connected in, then recheck every edge."""
+        whatever order the edges were connected in, then recheck every edge. What
+        the edges have bound so far (a size a source fixed, reaching a transfer
+        through generic members) is applied to the contract a member picks up."""
+        self._env = Env()
+        for src, target, slot in self.edges:
+            self._check_edge(src, Ref(self, self.members[target], target), slot)
         for name in self.order():
             produced = self._produced(name)
             if produced is not None:
                 upstream = Node()
-                upstream.out_type = produced
+                upstream.out_type = resolve(produced, self._env)
                 self.members[name] = self.members[name].resolve_ports(upstream)
         self._env = Env()
         for src, target, slot in self.edges:

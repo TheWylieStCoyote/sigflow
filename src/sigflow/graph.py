@@ -30,6 +30,7 @@ from .types import (
     as_type,
     describe,
     narrow,
+    resolve,
     scoped,
     slice_shape,
     unify,
@@ -375,6 +376,14 @@ def type_name(o: Any) -> str:
     return type(o).__name__
 
 
+def _producer(node: Node, env: Env) -> Node:
+    """A stand-in for ``node`` whose output type has ``env``'s bindings applied."""
+    stand_in = Node()
+    stand_in.name = node.name
+    stand_in.out_type = resolve(node.out_type, env)
+    return stand_in
+
+
 class Pipeline(Node):
     """A chain of nodes. Validated on construction."""
 
@@ -390,8 +399,16 @@ class Pipeline(Node):
             flat.extend(s.stages if isinstance(s, Pipeline) else [s])
         if not flat:
             raise ValueError("empty pipeline")
-        for i in range(1, len(flat)):
-            flat[i] = flat[i].resolve_ports(flat[i - 1])
+        # a stage that carries its producer's contract (preserve_type) gets it as
+        # the prefix has pinned it down: sizes and dtypes a source fixed reach it
+        # through generic stages, not only the producer's declared symbols
+        env = Env()
+        for i, s in enumerate(flat):
+            if i:
+                s = flat[i] = s.resolve_ports(_producer(flat[i - 1], env))
+            env = s.validate(env)
+            if i and s.in_type is not None:
+                s.accept(flat[i - 1].out_type, env, f"{flat[i - 1].name} -> {s.name}")
         self.stages = flat
         self.name = " >> ".join(s.name for s in flat)
         self.in_type = flat[0].in_type

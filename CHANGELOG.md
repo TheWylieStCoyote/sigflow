@@ -32,9 +32,10 @@ New
   `labels=False` opts out. `Framed` inputs and `DataArray` results pass
   through untouched. A stream block keeps only the item it is processing.
 - `@block(preserve_type=True)`: a single-input map block that carries its
-  producer's complete contract (`types.narrow`), so shape, rate and unit checks
-  and reframing ratios see through it, in pipelines, reused subgraphs and
-  `Graph` wiring in any order. A `Graph.connect` that fails is rolled back.
+  producer's complete contract (`types.narrow`) as the graph has pinned it
+  down so far (`types.resolve`), so shape, rate and unit checks and reframing
+  ratios see through it, in pipelines, reused subgraphs and `Graph` wiring in
+  any order. A `Graph.connect` that fails is rolled back.
 - CPU / CUDA transfers (`sigflow.to_device`, `sigflow.to_host`; CuPy is
   optional): explicit moves of a frame's payload that keep dtype, shape,
   annotations and, for a `DataArray`, its labels, and carry the producer's

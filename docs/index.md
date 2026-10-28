@@ -521,9 +521,10 @@ preserve dtype, shape, frame annotations and issues, and add provenance like any
 other map block. Arrays already at the destination can be reused; `copy=True`
 forces an independent copy. Both are `preserve_type` blocks: placed after a
 producer they carry its complete contract, so shape, rate and unit checks and
-reframing ratios (`sine(n=1024) >> to_host() >> chunk(256)` is still `1:4`)
-survive the transfer, in operator pipelines, reused subgraphs and `Graph`
-wiring in any order.
+reframing ratios (`sine(n=1024) >> to_host() >> chunk(256)` is still `1:4`,
+with or without generic blocks such as `scale` in between) survive the
+transfer, in operator pipelines, reused subgraphs and `Graph` wiring in any
+order.
 
 A transfer is a barrier. Before a device array is read, everything running on
 its device has finished (the whole device is synchronised, since a producer may

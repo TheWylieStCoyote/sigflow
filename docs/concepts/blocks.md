@@ -51,7 +51,10 @@ GPU-backed arrays and the `run(labels=True)` option.
 what it was given, as far as the contract is concerned. Placed after a
 producer, its input and output contract become the producer's: dtype, shape,
 rate, units and required keys, narrowed by whatever the block declared itself.
-Downstream shape checks and reframing ratios then see through the block. The
+Downstream shape checks and reframing ratios then see through the block. What
+is carried is the contract as the graph has pinned it down at that point, not
+only what the producer declared: a size a source fixed reaches the block
+through generic stages in between. The
 transfer blocks `to_device` and `to_host` use it, so moving data between
 devices does not weaken a graph's checks. Sample annotations are kept by
 default. The promise is checked at runtime like any other output contract, so
