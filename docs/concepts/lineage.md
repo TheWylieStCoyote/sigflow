@@ -7,11 +7,11 @@ input; stream blocks exactly the frames consumed since their previous output;
 selections record the selected branch first so `chain()` follows it.
 
 ```python
-f.prov[0], f.prov[2], f.prov[-1]     # this node, two steps up, the root
-f.prov["fft"].params                 # the nearest fft's configuration
-f.prov.chain(), f.prov.roots()       # main line of descent; the source frames
+f.prov[0], f.prov[2], f.prov[-1]  # this node, two steps up, the root
+f.prov["fft"].params  # the nearest fft's configuration
+f.prov.chain(), f.prov.roots()  # main line of descent; the source frames
 "fft" in f.prov
-f.trace()                            # rendered tree; shared ancestors marked once
+f.trace()  # rendered tree; shared ancestors marked once
 ```
 
 ## Across many frames
@@ -31,7 +31,7 @@ checking first that the sources are configured as recorded.
 
 ## How much to keep
 
-`run(g, provenance="full" | "roots" | "off")`. *full* keeps every node (the
-default); *roots* keeps, for each node, only the source frames it descends from —
-replay and `blame()` still work and memory stays flat over long runs; *off*
+`run(g, provenance="full" | "roots" | "off")`. _full_ keeps every node (the
+default); _roots_ keeps, for each node, only the source frames it descends from —
+replay and `blame()` still work and memory stays flat over long runs; _off_
 keeps nothing beyond the producing block's name.

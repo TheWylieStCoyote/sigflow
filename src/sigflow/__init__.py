@@ -1,63 +1,98 @@
 """sigflow — a small, typed, functional framework for signal-processing graphs.
 
-from sigflow import block, Sig, run
+from sigflow import N, Sig, block, run
 import numpy as np
 
 @block
-def scale(x: Sig[float, "N"], gain: float = 1.0) -> Sig[float, "N"]:
+def scale(x: Sig[float, N], gain: float = 1.0) -> Sig[float, N]:
     return x * gain
 
-frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, "N"]) >> scale(gain=2)).run()
+frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, N]) >> scale(gain=2)).run()
 """
 
+from . import io
+from .block import BlockDef, Framed, block, lift, source, tap
+from .builder import Graph
+from .control import Knob, Run
+from .device import to_device, to_host
+from .dims import (
+    A,
+    B,
+    C,
+    D,
+    E,
+    F,
+    G,
+    H,
+    I,
+    J,
+    K,
+    L,
+    M,
+    N,
+    O,
+    P,
+    Q,
+    R,
+    S,
+    T,
+    U,
+    V,
+    W,
+    X,
+    Y,
+    Z,
+)
+from .frame import MISSING, NO_PROV, Frame, Issue, Provenance, Tag, Tags, TimeSpan
+from .graph import (
+    Block,
+    Fanout,
+    Merge,
+    Node,
+    Pipeline,
+    Select,
+    Source,
+    Zip,
+    align,
+    as_node,
+    feedback,
+    from_iterable,
+    merge,
+    parallel,
+    port,
+    switch,
+    validate,
+    when,
+)
+from .lineage import Lineage
+from .persist import Checkpoint, ReplayMismatch, Stateful, load_checkpoint, replay
+from .progress import Monitor
+from .ratio import Ratio, RatioMismatch
+from .runtime import arun, iterate, iterate_sync, run
 from .types import (
     Any,
+    CMatrix,
+    CVector,
+    Env,
+    Matrix,
+    Scalar,
     Sig,
     SignalType,
-    TupleType,
     Stream,
-    TypeMismatch,
-    Env,
-    Scalar,
-    Vector,
-    Matrix,
     Tensor,
-    CVector,
-    CMatrix,
+    TupleType,
+    TypeMismatch,
+    Vector,
+    clears,
+    provides,
+    requires,
     unify,
 )
-from .frame import Frame, Issue, Provenance, MISSING, TimeSpan
-from .block import block, source, tap, lift, BlockDef, Framed
-from .graph import (
-    Node,
-    Block,
-    Source,
-    Pipeline,
-    Fanout,
-    Zip,
-    Merge,
-    Select,
-    port,
-    merge,
-    as_node,
-    from_iterable,
-    validate,
-    feedback,
-    when,
-    align,
-    parallel,
-)
-from .runtime import run, arun, iterate, iterate_sync
-from .progress import Monitor
-from .control import Run, Knob
 from .ui import dashboard, require_widgets
-from .builder import Graph
-from .lineage import Lineage
-from .persist import replay, Stateful, Checkpoint, load_checkpoint, ReplayMismatch
-from . import io
+from .xarray import default_labels
 
-__version__ = "0.3.0"
-__all__ = [
+__version__ = "0.4.0"
+__all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "Any",
     "Sig",
     "SignalType",
@@ -75,6 +110,12 @@ __all__ = [
     "Frame",
     "Issue",
     "Provenance",
+    "NO_PROV",
+    "Tag",
+    "Tags",
+    "requires",
+    "provides",
+    "clears",
     "MISSING",
     "TimeSpan",
     "block",
@@ -98,6 +139,12 @@ __all__ = [
     "when",
     "align",
     "parallel",
+    "to_device",
+    "to_host",
+    "default_labels",
+    "switch",
+    "Ratio",
+    "RatioMismatch",
     "from_iterable",
     "validate",
     "run",
@@ -117,4 +164,31 @@ __all__ = [
     "Checkpoint",
     "load_checkpoint",
     "ReplayMismatch",
+    # dimension / dtype-variable symbols (sigflow.dims)
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
 ]

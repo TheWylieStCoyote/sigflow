@@ -4,7 +4,7 @@ A block is an ordinary Python function with a typed signature:
 
 ```python
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 ```
 
@@ -17,23 +17,62 @@ reusable on their own.
 
 ## Three kinds, inferred
 
-* **map** blocks are called once per frame and should be pure.
-* **stream** blocks are generator functions (sync or async) that receive the
+- **map** blocks are called once per frame and should be pure.
+- **stream** blocks are generator functions (sync or async) that receive the
   whole stream of items and may keep state: windows, filters with memory,
   decimators, trackers. A generator that yields several items for one input, or
   none, changes the cardinality of the stream — and the runtime records exactly
   which input frames each output consumed.
-* **sources** have no signal inputs and yield the stream. `@source(threaded=True)`
-  runs a *blocking* source (hardware reads, wall-clock pacing) in a worker thread.
+- **sources** have no signal inputs and yield the stream. `@source(threaded=True)`
+  runs a _blocking_ source (hardware reads, wall-clock pacing) in a worker thread.
 
 ## Reusing existing code
 
 ```python
-fft   = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
-eigh  = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-              outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})   # named ports
-anything = lift(some_function)                     # Any -> Any, checked at run time
+fft = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
+eigh = block(
+    np.linalg.eigh,
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
+)  # named ports
+anything = lift(some_function)  # Any -> Any, checked at run time
 ```
+
+For `xarray.DataArray` inputs, `@block(labels=True)` lines the array up with the
+contract, gives the body the bare array and rebuilds a labelled array around the
+result; name the dimensions in the contract (`Sig[float, tuple[Literal["channel"],
+Literal["time"]]]`) to match them by name. The [labelled arrays
+guide](../guide/xarray.md) covers reductions, several inputs, stream blocks,
+GPU-backed arrays and the `run(labels=True)` option.
+
+## Carrying the producer's contract
+
+`@block(preserve_type=True)` declares that a single-input map block hands on
+what it was given, as far as the contract is concerned. Placed after a
+producer, its input and output contract become the producer's: dtype, shape,
+rate, units and required keys, narrowed by whatever the block declared itself.
+Downstream shape checks and reframing ratios then see through the block. What
+is carried is the contract as the graph has pinned it down at that point, not
+only what the producer declared: a size a source fixed reaches the block
+through generic stages in between. The
+transfer blocks `to_device` and `to_host` use it, so moving data between
+devices does not weaken a graph's checks. Sample annotations are kept by
+default. The promise is checked at runtime like any other output contract, so
+a body that changes shape or dtype fails the inherited contract.
+
+Narrowing combines constraints axis by axis: a producer shape `(None,)` and a
+declared input shape `(4,)` carry `(4,)`, not `(None,)`. Symbolic dimensions keep
+the sizes and equality relationships established during unification, including
+relationships shared by tuple elements. Required metadata keys from both
+contracts are retained. Unknown shape information does not disable known rate
+or unit checks.
+
+Resolution happens in operator pipelines and in explicit `Graph` wiring,
+including reused subgraphs and edges connected in reverse order; a `Graph`
+`connect` that fails validation leaves the graph as it was. This includes invalid
+port names, indices and key types, as well as type/rate mismatches. Nodes added
+implicitly during the failed call and the builder's naming counter are restored
+too; the original exception is re-raised.
 
 ## Options worth knowing
 

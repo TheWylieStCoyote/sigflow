@@ -13,6 +13,8 @@ What this exercises
 import os
 import tempfile
 import time
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal
 
 import numpy as np
 
@@ -24,18 +26,21 @@ from sigflow import (
     TypeMismatch,
     align,
     block,
+    dsp,
+    linalg,
+    plot,
     replay,
     run,
     source,
 )
-from sigflow import dsp, linalg, plot
+from sigflow.dims import N, T
 
 WORK = tempfile.mkdtemp(prefix="sigflow_v02_")
 RATE = 1000.0
 
 
 @source(total=lambda frames, **_: frames)
-def adc(frames: int = 40, n: int = 100) -> Sig[float, "N", None, "mV"]:
+def adc(frames: int = 40, n: int = 100) -> Iterator[Sig[float, N, None, Literal["mV"]]]:
     """A sensor in millivolts with a timestamp on every frame."""
     for k in range(frames):
         t = (np.arange(n) + k * n) / RATE
@@ -48,7 +53,7 @@ def adc(frames: int = 40, n: int = 100) -> Sig[float, "N", None, "mV"]:
 
 
 @source
-async def gps_fixes(count: int = 10) -> Sig[dict]:
+async def gps_fixes(count: int = 10) -> AsyncIterator[Sig[dict]]:
     """Slow, jittery fixes with their own timestamps."""
     rng = np.random.default_rng(3)
     for j in range(count):
@@ -56,7 +61,7 @@ async def gps_fixes(count: int = 10) -> Sig[dict]:
 
 
 @block
-def volts_rms(x: Sig[float, "N", None, "V"]) -> Sig[float, ()]:
+def volts_rms(x: Sig[float, N, None, Literal["V"]]) -> Sig[float, tuple[()]]:
     return float(np.sqrt(np.mean(x**2)))
 
 
@@ -66,7 +71,7 @@ class Integrator(Stateful):
     def __init__(self) -> None:
         self.total = 0.0
 
-    def __call__(self, x: Sig[float, "N"]) -> Sig[float, ()]:
+    def __call__(self, x: Sig[float, N]) -> Sig[float, tuple[()]]:
         self.total += float(np.sum(x**2))
         return self.total
 
@@ -113,13 +118,13 @@ if __name__ == "__main__":
     eigh = block(
         np.linalg.eigh,
         name="eigh",
-        inputs=Sig["T", ("N", "N")],
-        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+        inputs=Sig[T, tuple[N, N]],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
     )
 
     @block
     def summarize(
-        vals: Sig[float, "N"], vecs: Sig["T", ("N", "N")], raw: Sig[float, ("N", "N")]
+        vals: Sig[float, N], vecs: Sig[T, tuple[N, N]], raw: Sig[float, tuple[N, N]]
     ) -> Sig[dict]:
         return {
             "top": round(float(vals[-1]), 1),
@@ -132,10 +137,10 @@ if __name__ == "__main__":
         adc(frames=16) >> dsp.to_units("V") >> dsp.buffer(count=4) >> linalg.covariance,
         "cov",
     )
-    e = g.add(eigh)
+    eig = g.add(eigh)
     s = g.add(summarize)
-    g.connect(cov, e).connect(e["vals"], s, "vals").connect(
-        e["vecs"], s, "vecs"
+    g.connect(cov, eig).connect(eig["vals"], s, "vals").connect(
+        eig["vecs"], s, "vecs"
     ).connect(cov, s, "raw")
     g.output(s)
     print(g.describe())

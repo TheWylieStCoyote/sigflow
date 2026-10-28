@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["Monitor", "Stats", "Reporter"]
+__all__ = ["Monitor", "Reporter", "Stats"]
 
 
 @dataclass
@@ -25,6 +25,7 @@ class Monitor:
     """Collects live statistics for a run. Pass ``monitor=`` to ``run`` to keep it."""
 
     total: int | None = None
+    ratio: Any = None  # the graph's output-per-source-frame ratio, when known
     produced: int = 0
     started: float | None = None
     finished: float | None = None
@@ -76,17 +77,25 @@ class Monitor:
         if self.total is not None:
             return self.total
         totals = [s.total for s in self._stats.values() if s.total is not None]
-        return min(totals) if totals else None
+        if not totals:
+            return None
+        r = self.ratio
+        if r is not None and getattr(r, "kind", None) == "exact" and r.value != 1:
+            return max(1, round(min(totals) * r.value))
+        return min(totals)
 
     @property
     def percent(self) -> float | None:
-        exp = self.expected
+        # progress is measured at the sources (first thing to advance) when
+        # outputs are not 1:1 with inputs; the expected output count is only informative
+        src = [s for s in self._stats.values() if s.total is not None]
+        if src and self.total is None:
+            exp = min(s.total for s in src if s.total is not None)
+            done = max(s.out for s in src)
+        else:
+            exp, done = self.expected or 0, self.produced
         if not exp:
             return None
-        # progress is measured at the sources (first thing to advance) when
-        # outputs are not 1:1 with inputs
-        src = [s for s in self._stats.values() if s.total is not None]
-        done = max((s.out for s in src), default=self.produced)
         return min(100.0, 100.0 * done / exp)
 
     @property

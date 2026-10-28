@@ -12,18 +12,6 @@ What this exercises
   * fan-out: the same map feeds a plot, a detector and a summary statistic, and
     `[1:]` selects the ports worth keeping
 
-## Output
-
-Files the script writes when run:
-
-![pulse_doppler_radar.svg](assets/05_pulse_doppler_radar/pulse_doppler_radar.svg)
-
-*`pulse_doppler_radar.svg`*
-
-![range_doppler.gif](assets/05_pulse_doppler_radar/range_doppler.gif)
-
-*`range_doppler.gif`*
-
 ## Source
 
 ```python
@@ -40,43 +28,48 @@ What this exercises
     `[1:]` selects the ports worth keeping
 """
 
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow import Frame, Framed, Sig, SignalType, Stream, block, plot, run, source
+from sigflow.dims import P, R
 
-P, R = 64, 256  # pulses per coherent interval, range cells
+PULSES, CELLS = 64, 256  # pulses per coherent interval, range cells
 PRF = 5000.0  # Hz  (unambiguous velocity +-37.5 m/s)
 RANGE_RES = 15.0  # metres per cell
 WAVELENGTH = 0.03  # 10 GHz
 
 
-@source(total=lambda cpis, **_: cpis, refine=lambda **_: Sig[complex, (P, R)])
+@source(
+    total=lambda cpis, **_: cpis,
+    refine=lambda **_: SignalType(complex, (PULSES, CELLS)),
+)
 def radar_returns(
     cpis: int = 12, snr_db: float = 12.0, seed: int = 3
-) -> Sig[complex, ("P", "R")]:
+) -> Iterator[Sig[complex, tuple[P, R]]]:
     """Raw (pulse x range) data cubes with two moving targets and clutter at zero Doppler."""
     rng = np.random.default_rng(seed)
     targets = [
-        dict(r=60, v=18.0, a=1.0),
-        dict(r=140, v=-26.0, a=0.6),
+        {"r": 60, "v": 18.0, "a": 1.0},
+        {"r": 140, "v": -26.0, "a": 0.6},
     ]  # cell, m/s, amplitude
     noise = 10 ** (-snr_db / 20)
-    t_cpi = P / PRF
+    t_cpi = PULSES / PRF
     for k in range(cpis):
         cube = (
             noise
-            * (rng.normal(size=(P, R)) + 1j * rng.normal(size=(P, R)))
+            * (rng.normal(size=(PULSES, CELLS)) + 1j * rng.normal(size=(PULSES, CELLS)))
             / np.sqrt(2)
         )
         cube[:, 20:40] += 3.0 * np.exp(
             1j * rng.uniform(0, 2 * np.pi, (1, 20))
         )  # stationary ground clutter
         for tg in targets:
-            cell = int(
-                round(tg["r"] + tg["v"] * k * t_cpi / RANGE_RES)
-            )  # target migrates
+            cell = round(tg["r"] + tg["v"] * k * t_cpi / RANGE_RES)  # target migrates
             fd = 2 * tg["v"] / WAVELENGTH
-            cube[:, cell] += tg["a"] * np.exp(2j * np.pi * fd * np.arange(P) / PRF)
+            cube[:, cell] += tg["a"] * np.exp(2j * np.pi * fd * np.arange(PULSES) / PRF)
         yield Frame(
             cube,
             meta={"cpi": k, "t": k * t_cpi},
@@ -85,14 +78,14 @@ def radar_returns(
 
 
 @block
-def pulse_compress(cube: Sig[complex, ("P", "R")]) -> Sig[complex, ("P", "R")]:
+def pulse_compress(cube: Sig[complex, tuple[P, R]]) -> Sig[complex, tuple[P, R]]:
     """Stand-in for matched filtering along range (here a 3-cell smoothing kernel)."""
     k = np.array([0.25, 0.5, 0.25])
     return np.apply_along_axis(lambda row: np.convolve(row, k, mode="same"), 1, cube)
 
 
 @block
-def mti(cube: Sig[complex, ("P", "R")]) -> Sig[complex, ("P", "R")]:
+def mti(cube: Sig[complex, tuple[P, R]]) -> Sig[complex, tuple[P, R]]:
     """Two-pulse canceller: removes stationary clutter (zero Doppler)."""
     out = np.zeros_like(cube)
     out[1:] = cube[1:] - cube[:-1]
@@ -101,25 +94,29 @@ def mti(cube: Sig[complex, ("P", "R")]) -> Sig[complex, ("P", "R")]:
 
 # Doppler processing: window along pulses, FFT across pulses, log power.
 doppler_fft = block(
-    lambda c: np.fft.fftshift(np.fft.fft(c * np.hanning(P)[:, None], axis=0), axes=0),
+    lambda c: np.fft.fftshift(
+        np.fft.fft(c * np.hanning(PULSES)[:, None], axis=0), axes=0
+    ),
     name="doppler_fft",
-    inputs=Sig[complex, ("P", "R")],
-    outputs=Sig[complex, ("P", "R")],
+    inputs=Sig[complex, tuple[P, R]],
+    outputs=Sig[complex, tuple[P, R]],
 )
 
 
 @block
-def power_db(x: Sig[complex, ("P", "R")]) -> Sig[float, ("P", "R"), None, "dB"]:
+def power_db(
+    x: Sig[complex, tuple[P, R]],
+) -> Sig[float, tuple[P, R], None, Literal["dB"]]:
     return 20 * np.log10(np.abs(x) + 1e-9)
 
 
 @block
 def cfar(
-    f: Framed[Sig[float, ("P", "R")]],
+    f: Framed[Sig[float, tuple[P, R]]],
     guard: int = 2,
     train: int = 8,
     margin_db: float = 12.0,
-) -> Sig[float, ("P", "R")]:
+) -> Sig[float, tuple[P, R]]:
     """Cell-averaging CFAR along range with peak picking. Returns the map unchanged, with
     detections in meta and a boolean 'detected' mask over the map (sample level)."""
     m = f.data
@@ -135,7 +132,7 @@ def cfar(
     pad = np.pad(m, 1, constant_values=-np.inf)
     neigh = np.stack(
         [
-            pad[1 + dp : 1 + dp + P, 1 + dr : 1 + dr + R]
+            pad[1 + dp : 1 + dp + PULSES, 1 + dr : 1 + dr + CELLS]
             for dp in (-1, 0, 1)
             for dr in (-1, 0, 1)
         ]
@@ -143,7 +140,7 @@ def cfar(
     mask &= m >= neigh.max(axis=0)
     dets = []
     for p, r in zip(*np.nonzero(mask)):
-        fd = (p - P / 2) * f.stream["prf"] / P
+        fd = (p - PULSES / 2) * f.stream["prf"] / PULSES
         dets.append(
             {
                 "range_m": r * f.stream["range_res"],
@@ -164,14 +161,14 @@ def cfar(
 
 
 @block
-def strongest(f: Framed[Sig[float, ("P", "R")]]) -> Sig[dict]:
+def strongest(f: Framed[Sig[float, tuple[P, R]]]) -> Sig[dict]:
     dets = f.meta.get("detections", [])
     best = max(dets, key=lambda d: d["snr_db"]) if dets else None
     return {"cpi": f.meta["cpi"], "count": len(dets), "best": best}
 
 
 @block
-def tracker(reports: Stream[Sig[dict]], gate_mps: float = 5.0) -> Sig[dict]:
+def tracker(reports: Stream[Sig[dict]], gate_mps: float = 5.0) -> Iterator[Sig[dict]]:
     """Nearest-neighbour association of detections into tracks across CPIs (stateful)."""
     tracks: list[dict] = []
     for rep in reports:
@@ -193,7 +190,7 @@ def tracker(reports: Stream[Sig[dict]], gate_mps: float = 5.0) -> Sig[dict]:
 
 
 @block
-def reports(f: Framed[Sig[float, ("P", "R")]]) -> Sig[dict]:
+def reports(f: Framed[Sig[float, tuple[P, R]]]) -> Sig[dict]:
     return {"cpi": f.meta["cpi"], "dets": f.meta["detections"]}
 
 
@@ -214,7 +211,7 @@ def draw_map(ax, m, f: Frame) -> None:
         p, r = np.nonzero(f.samples["detected"])
         ax.scatter(
             r * f.stream["range_res"] / 1000,
-            (p - P / 2) * prf / P * WAVELENGTH / 2,
+            (p - PULSES / 2) * prf / PULSES * WAVELENGTH / 2,
             s=60,
             facecolors="none",
             edgecolors="cyan",
@@ -226,7 +223,7 @@ def draw_map(ax, m, f: Frame) -> None:
 
 if __name__ == "__main__":
     rd_map = plot.custom(
-        draw_map, name="range_doppler", in_type=Sig[float, ("P", "R")], figsize=(7, 4)
+        draw_map, name="range_doppler", in_type=Sig[float, tuple[P, R]], figsize=(7, 4)
     )
 
     processing = (

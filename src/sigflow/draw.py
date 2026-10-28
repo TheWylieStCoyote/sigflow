@@ -72,7 +72,7 @@ class _Cell:
     entries: list[int] = field(default_factory=list)  # box ids that receive input
     exits: list[int] = field(default_factory=list)  # box ids that emit output
 
-    def shift(self, dx: float, dy: float) -> "_Cell":
+    def shift(self, dx: float, dy: float) -> _Cell:
         for b in self.boxes:
             b.x += dx
             b.y += dy
@@ -178,6 +178,19 @@ class _Layout:
                 [self.layout(node.otherwise)] if node.otherwise is not None else []
             )
             return self.column(cells, "when", node, broadcast=True)
+        if type(node).__name__ == "Switch":
+            members = _members(node)
+            cells = [self.layout(b) for b in members]
+            keys = [repr(k) for k in node.branches] + (
+                ["default"] if len(members) > len(node.branches) else []
+            )
+            for c, k in zip(cells, keys):  # label each branch's first box with its key
+                if c.boxes:
+                    b0 = c.boxes[0]
+                    b0.sub = k + (" · " + b0.sub if b0.sub else "")
+                    b0.h = max(b0.h, _H + 12)
+                    b0.w = max(b0.w, len(b0.sub) * _CHAR + 24)
+            return self.column(cells, "switch", node, broadcast=True)
         if isinstance(node, Select) or type(node).__name__ in (
             "PortRef",
             "Slice",
@@ -246,12 +259,13 @@ class _Layout:
         x = 0.0
         out = _Cell(0, h)
         prev: _Cell | None = None
+        prev_stage: Any = None
         for stage, c in zip(node.stages, cells):
             c.shift(x, (h - c.h) / 2)
             out.boxes += c.boxes
             out.edges += c.edges
             if prev is not None:
-                label = describe(prev_stage.out_type)  # type: ignore[name-defined]
+                label = describe(prev_stage.out_type)
                 for a in prev.exits:
                     for b in c.entries:
                         out.edges.append((a, b, label))
@@ -289,6 +303,8 @@ class _Layout:
 def _members(node: Any) -> list[Any]:
     if type(node).__name__ == "When":
         return [node.then] + ([node.otherwise] if node.otherwise is not None else [])
+    if type(node).__name__ == "Switch":
+        return node._all()
     return getattr(node, "branches", None) or getattr(node, "parts", None) or []
 
 
@@ -322,12 +338,16 @@ class Diagram:
         W, H = c.w + 2 * m, c.h + 2 * m
         boxes = {bx.id: bx for bx in c.boxes}
         parts = [
-            f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
-            f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
-            f"font-size='12'>",
-            "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
-            "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
-            "</marker></defs>",
+            (
+                f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
+                f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
+                f"font-size='12'>"
+            ),
+            (
+                "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
+                "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
+                "</marker></defs>"
+            ),
         ]
         for a, b_id, label in c.edges:
             A, B = boxes[a], boxes[b_id]

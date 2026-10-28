@@ -28,6 +28,8 @@ nav:
       - Runs: concepts/runs.md
   - Guide:
       - Composing graphs: guide/composing.md
+      - Labelled arrays (xarray): guide/xarray.md
+      - Array backends and GPU: guide/array-backends.md
       - Time, units and slicing: guide/time-units-slicing.md
       - Notebooks and control: guide/notebooks.md
       - Files, sockets and GNU Radio: guide/io.md

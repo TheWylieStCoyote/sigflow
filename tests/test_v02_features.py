@@ -1,6 +1,8 @@
 """Units, slicing, time axis, align, Graph builder, plotting, persistence (0.2 features)."""
 
 import time
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -8,24 +10,27 @@ import pytest
 from sigflow import (
     Frame,
     Graph,
+    Provenance,
+    ReplayMismatch,
     Sig,
     Stateful,
+    Stream,
+    TimeSpan,
     TypeMismatch,
     align,
     block,
-    from_iterable,
+    dsp,
+    plot,
     replay,
     run,
     source,
-    ReplayMismatch,
-    Provenance,
-    TimeSpan,
+    units,
 )
-from sigflow import dsp, linalg, plot, units
+from sigflow.dims import N, T
 
 
 @source
-def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
+def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield Frame(
             np.full(n, float(i)),
@@ -46,11 +51,11 @@ def test_units_registry_and_type_contract():
     assert units.factor("mV", "V") == pytest.approx(1e-3)
 
     @block
-    def volts(x: Sig[float, "N", None, "V"]) -> Sig[float, ()]:
+    def volts(x: Sig[float, N, None, Literal["V"]]) -> Sig[float, tuple[()]]:
         return float(x.mean())
 
     @source
-    def mv() -> Sig[float, "N", None, "mV"]:
+    def mv() -> Iterator[Sig[float, N, None, Literal["mV"]]]:
         yield Frame(np.full(3, 1500.0), stream={"units": "mV"})
 
     with pytest.raises(TypeMismatch, match="to_units"):
@@ -109,19 +114,22 @@ def test_time_axis_propagates_through_reframing():
         and span.n == 8
         and span.t1 == pytest.approx(0.12)
     )
-    assert out[1].at(0.05) == 0.0 and out[1].between(0.05, 0.09).time.n == 4
+    part = out[1].between(0.05, 0.09).time
+    assert out[1].at(0.05) == 0.0 and part is not None and part.n == 4
     rs = run(ramp(count=2, n=10, rate=100.0) >> dsp.resample(up=1, down=2))[1]
-    assert rs.time.rate == 50.0 and rs.time.n == 5 and rs["t0"] == pytest.approx(0.1)
+    rt = rs.time
+    assert rt is not None and rt.rate == 50.0 and rt.n == 5
+    assert rs["t0"] == pytest.approx(0.1)
 
 
 def test_align_joins_by_time():
     @source
-    def fast() -> Sig[dict]:
+    def fast() -> Iterator[Sig[dict]]:
         for i in range(12):
             yield Frame({"i": i}, meta={"t0": i * 0.1})
 
     @source
-    def slow() -> Sig[dict]:
+    def slow() -> Iterator[Sig[dict]]:
         for j in range(4):
             yield Frame({"j": j}, meta={"t0": j * 0.3 + 0.01})
 
@@ -139,22 +147,22 @@ def test_graph_builder_diamond_ports_and_cycles():
     eigh = block(
         np.linalg.eigh,
         name="eigh",
-        inputs=Sig["T", ("N", "N")],
-        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+        inputs=Sig[T, tuple[N, N]],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
     )
 
     @block
-    def count_big(v: Sig[float, "N"]) -> Sig[int]:
+    def count_big(v: Sig[float, N]) -> Sig[int]:
         return int((v > 1).sum())
 
     @block
     def combine(
-        vecs: Sig["T", ("N", "N")], k: Sig[int], raw: Sig[float, ("N", "N")]
+        vecs: Sig[T, tuple[N, N]], k: Sig[int], raw: Sig[float, tuple[N, N]]
     ) -> Sig[dict]:
         return {"k": k, "n": vecs.shape[0], "trace": float(np.trace(raw))}
 
     @source
-    def spd() -> Sig[float, (3, 3)]:
+    def spd() -> Iterator[Sig[float, tuple[Literal[3], Literal[3]]]]:
         yield np.diag([1.0, 2.0, 3.0])
 
     g = Graph("diamond")
@@ -181,7 +189,7 @@ def test_graph_builder_diamond_ports_and_cycles():
         b = h.add(dsp.rms)
         h.connect(a, b)  # matrix into a vector block
     sub = Graph("front")
-    i = sub.input(Sig[float, "N"])
+    i = sub.input(Sig[float, N])
     w = i >> dsp.window
     sub.output(w)
     assert run(ramp(count=2) >> sub)[0].data.shape == (4,)
@@ -234,7 +242,7 @@ def test_checkpoint_and_resume(tmp_path):
         def __init__(self) -> None:
             self.total = 0.0
 
-        def __call__(self, x: Sig[float, "N"]) -> Sig[float, ()]:
+        def __call__(self, x: Sig[float, N]) -> Sig[float, tuple[()]]:
             self.total += float(x.sum())
             return self.total
 
@@ -258,7 +266,18 @@ def test_checkpoint_and_resume(tmp_path):
 
 
 def test_strict_fanout():
-    g = ramp(count=6) >> (dsp.rms | dsp.buffer(count=2))
+    from sigflow import RatioMismatch
+
+    with pytest.raises(RatioMismatch):  # declared rates: caught before running
+        ramp(count=6) >> (dsp.rms | dsp.buffer(count=2))
+
+    @block  # no declared ratio: caught at run time
+    def halve(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
+        for i, x in enumerate(xs):
+            if i % 2:
+                yield x
+
+    g = ramp(count=6) >> (dsp.rms | halve)
     assert len(run(g)) == 3
     with pytest.raises(TypeMismatch, match="different numbers"):
         run(g, strict=True)

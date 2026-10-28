@@ -14,7 +14,8 @@ L.table()                                # per-block counts over the indexed fra
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .frame import Frame, Provenance
 
@@ -79,7 +80,7 @@ class Lineage:
         c: Counter = Counter()
         for f in self.failed():
             for issue in f.errors:
-                root = issue.prov[-1] if issue.prov is not None else None
+                root = issue.prov[-1] if issue.prov else None
                 c[
                     (issue.origin, root.op if root else "?", root.seq if root else None)
                 ] += 1

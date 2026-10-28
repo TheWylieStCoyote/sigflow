@@ -4,7 +4,7 @@ The ``@block`` decorator turns an ordinary function into a :class:`BlockDef`.
 Inputs and outputs are declared with annotations::
 
     @block
-    def scale(x: Sig[float, "N"], gain: float = 1.0) -> Sig[float, "N"]:
+    def scale(x: Sig[float, N], gain: float = 1.0) -> Sig[float, N]:
         return x * gain
 
 * Parameters annotated with a signal type (``Sig[...]``, a tuple of them,
@@ -26,20 +26,37 @@ Kinds of block (inferred automatically):
 
 Existing library functions are reused without modification::
 
-    fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
+    fft = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
 """
 
 from __future__ import annotations
 
+import collections.abc
 import functools
 import inspect
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    get_args,
+    get_origin,
+)
 
-from .frame import Frame, frozen
-from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
+from ._arrays import is_array
+from .frame import Frame
+from .types import (
+    SignalType,
+    StreamType,
+    TupleType,
+    as_type,
+    carry_tags,
+    is_signal_type,
+    tag_names,
+)
 
-__all__ = ["block", "source", "tap", "BlockDef", "Framed", "InputSpec", "lift"]
+__all__ = ["BlockDef", "Framed", "InputSpec", "block", "lift", "source", "tap"]
 
 
 class _FramedMarker:
@@ -48,7 +65,7 @@ class _FramedMarker:
     def __init__(self, item: Any) -> None:
         self.item = as_type(item)
 
-    def __class_getitem__(cls, item: Any) -> "_FramedMarker":
+    def __class_getitem__(cls, item: Any) -> _FramedMarker:
         return cls(item)
 
     def __repr__(self) -> str:
@@ -57,6 +74,8 @@ class _FramedMarker:
 
 if TYPE_CHECKING:
     from typing import Generic, TypeVar
+
+    from .graph import Block
 
     _F = TypeVar("_F")
 
@@ -87,6 +106,8 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
             f"annotation {annotation!r} is a string that could not be evaluated; import the "
             f"names it uses at module level (or avoid quoting signal-type annotations)"
         )
+    if get_origin(annotation) is Annotated:  # Annotated[Sig[...], requires("x")]
+        annotation = as_type(annotation)
     if annotation is Frame:
         return SignalType(), True, False
     if isinstance(annotation, _FramedMarker):
@@ -100,6 +121,12 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
         return inner, False, True
     if is_signal_type(annotation):
         return annotation, False, False
+    if get_origin(annotation) is tuple:  # tuple[Sig[...], Sig[...]]
+        annotation = get_args(annotation)
+    if isinstance(annotation, tuple):
+        annotation = tuple(
+            as_type(a) if get_origin(a) is Annotated else a for a in annotation
+        )
     if (
         isinstance(annotation, tuple)
         and annotation
@@ -115,15 +142,35 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
     return None
 
 
+_ITERATORS = (
+    collections.abc.Iterator,
+    collections.abc.AsyncIterator,
+    collections.abc.Generator,
+    collections.abc.AsyncGenerator,
+    collections.abc.Iterable,
+    collections.abc.AsyncIterable,
+)
+
+
+def _unwrap_iterator(annotation: Any) -> Any:
+    """``Iterator[X]`` / ``AsyncIterator[X]`` (a generator block's element type) -> X."""
+    if get_origin(annotation) in _ITERATORS and get_args(annotation):
+        return get_args(annotation)[0]
+    return annotation
+
+
 def _output_type(annotation: Any) -> Any:
     if annotation is inspect.Signature.empty or annotation is None:
         return SignalType()
+    annotation = _unwrap_iterator(annotation)
     if isinstance(annotation, StreamType):
         annotation = annotation.item
     if isinstance(annotation, _FramedMarker):
         return annotation.item
     if annotation is Frame:
         return SignalType()
+    if get_origin(annotation) is tuple:  # tuple[Sig[...], Sig[...]]
+        annotation = get_args(annotation)
     if isinstance(annotation, tuple):
         return TupleType(tuple(as_type(a) for a in annotation))
     return as_type(annotation)
@@ -149,10 +196,16 @@ class BlockDef:
         refine: Callable[..., Any] | None = None,
         total: Callable[..., int] | None = None,
         threaded: bool = False,
+        ratio: Any = None,
+        labels: bool | None = None,
+        preserve_type: bool = False,
     ) -> None:
         self.fn = fn
+        self.labels = labels  # None: follow the run (or sigflow.default_labels())
+        self.preserve_type = preserve_type
         self.refine = refine
         self.total = total
+        self.ratio_spec = ratio  # see sigflow.ratio: "1:1", "N:1", (4, 1), callable
         self.threaded = threaded
         self.name = name or getattr(fn, "__name__", type(fn).__name__)
         self.__doc__ = doc or getattr(fn, "__doc__", None)
@@ -187,6 +240,12 @@ class BlockDef:
             else:
                 kind = "map"
         self.kind = kind
+        if preserve_type and (kind != "map" or len(self.inputs) != 1):
+            raise TypeError("preserve_type requires a single-input map block")
+        if ratio is None and kind != "stream":
+            self.ratio_spec = (
+                "1:1"  # map blocks, taps and sources are one frame per frame
+            )
         if kind == "source" and not is_gen and not self.is_async:
             # A plain function with no inputs: a one-shot source (or an iterable factory).
             pass
@@ -203,12 +262,51 @@ class BlockDef:
             )
         if tap:
             self.out_type = self.in_type
+        elif self.inputs:
+            # tags the inputs carry reach the output unless the contract clears them
+            inherited = frozenset().union(
+                *(tag_names(spec.type) for spec in self.inputs)
+            )
+            if inherited:
+                self.out_type = carry_tags(self.out_type, inherited)
 
         # by default sample-level annotations survive a map block only if the
         # declared output shape has the same leading dimension as the input
         if keep_samples is None:
-            keep_samples = _same_leading(self.in_type, self.out_type)
+            keep_samples = preserve_type or _same_leading(self.in_type, self.out_type)
         self.keep_samples = keep_samples
+
+        # ``adapted`` is ``fn`` behind a thin wrapper that unwraps labelled (xarray)
+        # payloads for the body and rewraps outputs from the contract; plain arrays
+        # take its fast path. ``fn`` stays the raw body; ``resolve_call`` picks.
+        from .xarray import adapt
+
+        self.adapted = adapt(self)
+
+    def resolve_call(self, default_labels: bool) -> Callable[..., Any]:
+        """The callable a run invokes for this block: the labelled-payload wrapper
+        when the block is label-aware (its ``labels`` option, or ``default_labels``
+        when that is unset), else the raw body."""
+        flag = default_labels if self.labels is None else self.labels
+        return self.adapted if flag else self.fn
+
+    def call(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the body as a run would, following ``sigflow.default_labels()`` when
+        the block's ``labels`` option is unset."""
+        from .xarray import current_default
+
+        return self.resolve_call(current_default())(*args, **kwargs)
+
+    # -- stream-rate contract --------------------------------------------- #
+    def ratio_for(self, in_type: Any = None) -> Any:
+        """Output frames per input frame with default configuration (see :mod:`sigflow.ratio`)."""
+        from .graph import as_node
+
+        return as_node(self).ratio_for(in_type)
+
+    @property
+    def ratio(self) -> Any:
+        return self.ratio_for(self.in_type)
 
     # -- input parsing ----------------------------------------------------- #
     def _parse_inputs(
@@ -318,7 +416,8 @@ class BlockDef:
         Positional arguments are *data* when the first one is an array, Frame, list,
         tuple or dict (``scale(np.ones(4), gain=2)`` runs the function); otherwise they
         are configuration in signature order (``to_units("V")``, ``io.wav("x.wav", n=512)``
-        make nodes). ``blockdef.fn(...)`` always calls the function directly."""
+        make nodes). ``blockdef.fn(...)`` always calls the function directly
+        (bypassing the labelled-payload wrapper, ``blockdef.call``)."""
         if args and not _looks_like_data(args[0]):
             names = [k for k in self.config][: len(args)]
             if len(names) < len(args):
@@ -327,11 +426,11 @@ class BlockDef:
                 )
             return self.node(**{**dict(zip(names, args)), **kwargs})
         if args:
-            return self.fn(*args, **kwargs)
+            return self.call(*args, **kwargs)
         # keyword-only call: are any of the keywords inputs?  Then run directly.
         in_names = {i.name for i in self.inputs}
         if in_names and in_names <= set(kwargs):
-            return self.fn(**kwargs)
+            return self.call(**kwargs)
         return self.node(**kwargs)
 
     def apply(self, items: Any, **config: Any) -> list:
@@ -340,12 +439,12 @@ class BlockDef:
         annotations and provenance)."""
         return self.node(**config)(items)
 
-    def node(self, **config: Any) -> "Block":
+    def node(self, **config: Any) -> Block:
         from .graph import Block
 
         return Block(self, config)
 
-    def bind(self, **config: Any) -> "BlockDef":
+    def bind(self, **config: Any) -> BlockDef:
         """Return a new definition with some configuration baked in."""
         new = BlockDef(
             functools.partial(self.fn, **config),
@@ -356,6 +455,8 @@ class BlockDef:
             on_error=self.on_error,
             keep_samples=self.keep_samples,
             tap=self.tap,
+            labels=self.labels,
+            preserve_type=self.preserve_type,
             doc=self.__doc__,
             refine=self.refine,
             total=self.total,
@@ -458,6 +559,7 @@ def _looks_like_data(x: Any) -> bool:
         return False
     return (
         isinstance(x, (_np.ndarray, _np.generic, Frame, list, tuple, dict))
+        or is_array(x)
         or hasattr(x, "__array__")
         or hasattr(x, "__iter__")
         or hasattr(x, "__next__")
@@ -487,7 +589,7 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
 
     Usable bare (``@block``), with options (``@block(on_error="skip")``) or as
     a wrapper for existing code
-    (``block(scipy.signal.hilbert, inputs=Sig[float, "N"], outputs=Sig[complex, "N"])``).
+    (``block(scipy.signal.hilbert, inputs=Sig[float, N], outputs=Sig[complex, N])``).
 
     Options:
         name:         display name (defaults to the function name)
@@ -511,6 +613,28 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       generator stream blocks: force the worker-thread driver
                       (the default runs them inline on the loop via greenlet when
                       it is installed, which is much faster but must not block)
+        labels:       ``True``: an ``xarray.DataArray`` input is lined up with the
+                      input contract, the body gets the bare array, and outputs
+                      are rebuilt as labelled arrays from the output contract
+                      (see :mod:`sigflow.xarray`). ``False``: payloads pass
+                      through untouched. Unset: follow ``run(..., labels=)``
+                      or, when the run does not say, ``sigflow.default_labels()``
+        Tags: ``Annotated[Sig[...], requires("synced")]`` on an input means
+                      frames must carry that tag (checked against the producer's
+                      guarantees when the graph is built, and at run time);
+                      ``provides("bits")`` on the output means the block attaches
+                      it (checked at run time); ``clears("raw")`` stops an input
+                      tag from being carried on. Otherwise a block's output
+                      carries its input's tags. As values (``inputs=``,
+                      ``outputs=``, ``from_iterable(type=)``) the same is spelled
+                      ``SignalType(...).requires(...)`` / ``.provides`` / ``.clears``
+        preserve_type: a single-input map block that returns what it was given,
+                      as far as the contract is concerned (a CPU/GPU transfer):
+                      placed after a producer, its input and output contract
+                      become the producer's, so shape, rate, units and required
+                      keys are still checked downstream and reframing ratios
+                      still resolve. Sample annotations are kept. The promise is
+                      checked at runtime like any other output contract
     """
     if fn is None:
         return lambda f: BlockDef(f, **options)

@@ -15,11 +15,11 @@ What this exercises
 import asyncio
 import math
 import time
+from collections.abc import AsyncIterator, Iterator
 
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, merge, run, source
-from sigflow import plot
+from sigflow import Frame, Framed, Sig, Stream, block, merge, plot, run, source
 
 IMU_RATE = 50.0  # Hz, synchronous
 GPS_PERIOD = 0.4  # s, asynchronous and jittery
@@ -34,16 +34,17 @@ def true_state(t: float) -> tuple[float, float, float, float]:
 
 
 SPEEDUP = 20.0  # run the simulation 20x faster than real time
-_clock = {"t0": None}
+_clock: dict[str, float | None] = {"t0": None}
 
 
 def sim_time() -> float:
     """One shared clock for every sensor (sim seconds). Sensors that stamp from
     independent counters drift apart and bias the fused velocity — try it."""
     now = time.perf_counter()
-    if _clock["t0"] is None:
-        _clock["t0"] = now
-    return (now - _clock["t0"]) * SPEEDUP
+    t0 = _clock["t0"]
+    if t0 is None:
+        _clock["t0"] = t0 = now
+    return (now - t0) * SPEEDUP
 
 
 @source(total=lambda duration, rate, **_: int(duration * rate), threaded=True)
@@ -52,7 +53,7 @@ def imu(
     rate: float = IMU_RATE,
     sigma: float = 0.3,
     seed: int = 1,
-) -> Sig[dict]:
+) -> Iterator[Sig[dict]]:
     """Synchronous accelerometer stream, paced like a blocking device read.
     ``threaded=True`` keeps its time.sleep() from stalling the async GPS source."""
     rng = np.random.default_rng(seed)
@@ -74,7 +75,7 @@ async def gps(
     sigma: float = 0.8,
     corrupt_every: int = 5,
     seed: int = 2,
-) -> Sig[dict]:
+) -> AsyncIterator[Sig[dict]]:
     """Asynchronous position fixes with jitter; every ``corrupt_every``-th message is garbage."""
     rng = np.random.default_rng(seed)
     k = 0
@@ -106,7 +107,7 @@ def parse(ev: Sig[dict]) -> Sig[dict]:
 @block
 def kalman(
     events: Stream[Framed[Sig[dict]]], q: float = 1.0, r_gps: float = 0.8
-) -> Sig[dict]:
+) -> Iterator[Sig[dict]]:
     """Constant-velocity Kalman filter. IMU events predict; GPS events update.
     Emits the state after every event, annotated with the innovation on updates."""
     x = np.zeros(4)  # [px, py, vx, vy]
@@ -164,9 +165,12 @@ def error_vs_truth(s: Sig[dict]) -> Sig[dict]:
     return {**s, "err": float(math.hypot(s["pos"][0] - tx, s["pos"][1] - ty))}
 
 
+_track_history: list[tuple[float, float, int]] = []
+
+
 def draw_track(ax, s, f: Frame) -> None:
     """Draw the estimate path up to this frame (used after the run, via plot.animate)."""
-    hist = draw_track.history
+    hist = _track_history
     hist.append((s["pos"][0], s["pos"][1], s["step"]))
     ts = np.linspace(0, DURATION, 200)
     truth = np.array([true_state(t)[:2] for t in ts])
@@ -187,9 +191,6 @@ def draw_track(ax, s, f: Frame) -> None:
     ax.set_ylabel("y [m]")
     ax.legend(loc="upper left", fontsize=8)
     ax.set_title(f"t = {s['t']:.2f} s   error = {s['err']:.2f} m")
-
-
-draw_track.history = []
 
 
 if __name__ == "__main__":

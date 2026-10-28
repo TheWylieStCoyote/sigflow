@@ -26,20 +26,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from .frame import Frame
 from .graph import Node, Select, TupleType, as_node, describe
-from .types import Env, SignalType, TypeMismatch, unify
+from .ratio import Ratio, RatioMismatch
+from .types import Env, SignalType, TypeMismatch, narrow, resolve, unify
 
-__all__ = ["Graph", "Ref", "Join", "Chain", "lower"]
+__all__ = ["Chain", "Graph", "Join", "Ref", "lower"]
 
 
 class Ref:
     """A node placed in a :class:`Graph` (optionally with a port selected)."""
 
-    def __init__(self, graph: "Graph", node: Node, name: str, key: Any = None) -> None:
-        self.graph, self.node, self.name, self.key = graph, node, name, key
+    def __init__(self, graph: Graph, node: Node, name: str, key: Any = None) -> None:
+        self.graph, self._node, self.name, self.key = graph, node, name, key
 
-    def __getitem__(self, key: Any) -> "Ref":
+    @property
+    def node(self) -> Node:
+        # a member that carries its producer's contract (preserve_type) is replaced
+        # by a resolved copy when an upstream edge is connected
+        return self.graph.members.get(self.name, self._node)
+
+    def __getitem__(self, key: Any) -> Ref:
         if not isinstance(self.node.out_type, TupleType):
             raise TypeError(
                 f"{self.name} has a single output; [] selects ports of tuple outputs"
@@ -54,7 +60,7 @@ class Ref:
             else self.node.out_type
         )
 
-    def __rshift__(self, other: Any) -> "Ref":
+    def __rshift__(self, other: Any) -> Ref:
         """``a >> b`` inside a graph: add ``b`` if needed and connect."""
         dst = other if isinstance(other, Ref) else self.graph.add(other)
         self.graph.connect(self, dst)
@@ -75,6 +81,9 @@ class Join(Node):
         self.name = op
         self.port_names = port_names
 
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ONE
+
 
 class Chain(Node):
     """A linear run of members executed back to back without queues between them
@@ -86,8 +95,9 @@ class Chain(Node):
         self.in_type = stages[0].in_type
         self.out_type = stages[-1].out_type
         self.port_names = tuple(getattr(stages[-1], "port_names", ()))
-        if hasattr(stages[0], "join_op"):
-            self.join_op = stages[0].join_op
+        join_op = getattr(stages[0], "join_op", None)
+        if join_op is not None:
+            self.join_op = join_op
         self.name = " >> ".join(s.name for s in stages)
 
     def validate(self, env: Any = None) -> Any:
@@ -100,6 +110,21 @@ class Chain(Node):
 
     def nodes(self) -> list[Node]:
         return [n for s in self.stages for n in s.nodes()]
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        from .graph import Pipeline
+
+        first = self.stages[0].resolve_ports(upstream)
+        if first is self.stages[0]:
+            return self
+        return Chain(Pipeline.__new__(Pipeline)._init([first, *self.stages[1:]]).stages)
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        r, t = Ratio.ONE, in_type
+        for s in self.stages:
+            r = r * s.ratio_for(t if s.in_type is not None else None)
+            t = s.out_type
+        return r
 
     def describe(self, indent: str = "") -> str:
         return "\n".join(s.describe(indent) for s in self.stages)
@@ -129,6 +154,7 @@ class Graph(Node):
         self.out_type = SignalType()
         self._env = Env()
         self._count = 0
+        self._deferred = False  # lower(): resolve once after all edges are added
 
     # -- construction ------------------------------------------------------ #
     def input(self, type: Any = None, name: str = "input") -> Ref:
@@ -143,16 +169,36 @@ class Graph(Node):
     def add(self, node: Any, name: str | None = None) -> Ref:
         node = as_node(node)
         base = name or node.name.split(" ")[0].split("(")[0]
-        name = base
-        while name in self.members:
+        key = base
+        while key in self.members:
             self._count += 1
-            name = f"{base}#{self._count}"
-        self.members[name] = node
-        return Ref(self, node, name)
+            key = f"{base}#{self._count}"
+        self.members[key] = node
+        return Ref(self, node, key)
 
-    def connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
+    def connect(self, src: Any, dst: Any, slot: Any = None) -> Graph:
         """Connect ``src`` (a Ref, optionally with a port) to ``dst`` (a Ref or a node to add).
-        ``slot`` names the consumer's input parameter (or index) for multi-input blocks."""
+        ``slot`` names the consumer's input parameter (or index) for multi-input blocks.
+        Any validation error restores the graph, including implicitly added nodes.
+        """
+        if self._deferred:
+            # Internal lowering wires an already validated tree. Avoid a full
+            # graph snapshot per edge on this private fast path.
+            return self._connect(src, dst, slot)
+        previous = (
+            dict(self.members),
+            list(self.edges),
+            self._env,
+            self.out_type,
+            self._count,
+        )
+        try:
+            return self._connect(src, dst, slot)
+        except Exception:
+            self.members, self.edges, self._env, self.out_type, self._count = previous
+            raise
+
+    def _connect(self, src: Any, dst: Any, slot: Any = None) -> Graph:
         src = src if isinstance(src, Ref) else self.add(src)
         dst = dst if isinstance(dst, Ref) else self.add(dst)
         if dst.node is self._input:
@@ -189,11 +235,15 @@ class Graph(Node):
                 f"{dst.name} has {max(n_in, 1)} input(s); slot {slot} does not exist"
             )
         self.edges.append((src, dst.name, slot))
-        self._check_edge(src, dst, slot)
+        if self._deferred:
+            self._check_edge(src, dst, slot)
+            return self
         self._reject_cycles()
+        self._resolve_types()
+        self.ratios()
         return self
 
-    def output(self, *refs: Any) -> "Graph":
+    def output(self, *refs: Any) -> Graph:
         """Declare the graph's output(s); several outputs become one tuple frame."""
         self.outputs = [r if isinstance(r, Ref) else self.add(r) for r in refs]
         types = [r.out_type for r in self.outputs]
@@ -236,7 +286,8 @@ class Graph(Node):
         try:
             unify(t, need, self._env, where=f"{src.name} -> {dst.name}[{slot}]")
         except TypeMismatch as e:
-            self.edges.pop()
+            if self._deferred:
+                self.edges.pop()
             raise TypeMismatch(str(e)) from None
 
     def _reject_cycles(self) -> None:
@@ -278,6 +329,59 @@ class Graph(Node):
         return [e for e in self.edges if e[0].name == name]
 
     # -- Node protocol ----------------------------------------------------- #
+    def _resolve_types(self) -> None:
+        """Let members that carry their producer's contract (``preserve_type``) pick it
+        up, in topological order so a contract propagates through several of them
+        whatever order the edges were connected in, then recheck every edge. What
+        the edges have bound so far (a size a source fixed, reaching a transfer
+        through generic members) is applied to the contract a member picks up."""
+        self._env = Env()
+        for src, target, slot in self.edges:
+            self._check_edge(src, Ref(self, self.members[target], target), slot)
+        for name in self.order():
+            produced = self._produced(name)
+            if produced is not None:
+                upstream = Node()
+                upstream.out_type = resolve(produced, self._env)
+                self.members[name] = self.members[name].resolve_ports(upstream)
+        self._env = Env()
+        for src, target, slot in self.edges:
+            self._check_edge(src, Ref(self, self.members[target], target), slot)
+        if self.outputs:
+            types = [r.out_type for r in self.outputs]
+            self.out_type = types[0] if len(types) == 1 else TupleType(tuple(types))
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        """A reusable graph placed after a producer: its input becomes what the
+        producer carries, narrowed by what the graph declared, so transfers inside
+        it propagate the real shape; the template itself is left untouched."""
+        if self._input is None:
+            return self
+        carried = narrow(upstream.out_type, self.in_type, where=self.name)
+        if carried == self.in_type:
+            return self
+        import copy
+
+        from .graph import fresh
+
+        new = copy.copy(self)
+        seen = {id(n) for n in self.nodes()}
+        new.members = {name: fresh(node, seen) for name, node in self.members.items()}
+        input_name = next(n for n, node in self.members.items() if node is self._input)
+        new._input = _Input(carried)
+        new.members[input_name] = new._input
+        new.in_type = carried
+        new.edges = [
+            (Ref(new, new.members[src.name], src.name, src.key), dst, slot)
+            for src, dst, slot in self.edges
+        ]
+        new.outputs = [
+            Ref(new, new.members[r.name], r.name, r.key) for r in self.outputs
+        ]
+        new._resolve_types()
+        new.validate()
+        return new
+
     def validate(self, env: Env | None = None) -> Env:
         env = env if env is not None else Env()
         for name, node in self.members.items():
@@ -291,6 +395,7 @@ class Graph(Node):
                 unify(produced, node.in_type, env, where=f"-> {name}")
         if not self.outputs:
             raise TypeMismatch("graph has no output(); call g.output(ref)")
+        self.ratio_for(self.in_type)
         return env
 
     def nodes(self) -> list[Node]:
@@ -318,6 +423,43 @@ class Graph(Node):
     def consumers_of(self, name: str) -> list[tuple[Ref, str, Any]]:
         return [e for e in self.edges if e[1] == name]
 
+    # -- stream-rate contract --------------------------------------------- #
+    def ratios(self) -> dict[str, Ratio]:
+        """Each member's output frames per graph input / source frame. Edges meeting at a
+        multi-input member (or the graph's outputs) must carry compatible rates."""
+        out: dict[str, Ratio] = {}
+        for name in self.order():
+            node = self.members[name]
+            ins = sorted([e for e in self.edges if e[1] == name], key=lambda e: e[2])
+            if not ins:
+                out[name] = Ratio.ONE  # a source, or the graph input
+                continue
+            arriving = Ratio.ANY
+            for src, _, _ in ins:
+                r = out.get(src.name, Ratio.ANY)
+                if not arriving.compatible(r):
+                    raise RatioMismatch(
+                        f"-> {name}: inputs arrive at incompatible rates "
+                        f"({arriving} and {r} frames per source frame); re-frame one side"
+                    )
+                arriving = arriving.meet(r)
+            out[name] = arriving * node.ratio_for(self._produced(name))
+        return out
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        if not self.outputs:
+            return Ratio.ANY
+        rs = self.ratios()
+        r = Ratio.ANY
+        for ref in self.outputs:
+            x = rs.get(ref.name, Ratio.ANY)
+            if not r.compatible(x):
+                raise RatioMismatch(
+                    f"graph outputs run at incompatible rates ({r} and {x})"
+                )
+            r = r.meet(x)
+        return r
+
     def __repr__(self) -> str:
         return self.describe()
 
@@ -327,22 +469,25 @@ class Graph(Node):
 # --------------------------------------------------------------------------- #
 
 
-def lower(node: Node) -> "Graph":
+def lower(node: Node) -> Graph:
     """Compile an operator-tree node (pipelines, fan-outs, zips, ...) into a Graph of
     simple members and edges, so there is one scheduler for every graph."""
-    from .graph import Fanout, Pipeline, Zip
 
     if isinstance(node, Graph):
         return node
     g = Graph(node.name)
     g.transparent = True
+    g._deferred = True  # the tree is acyclic and already validated: resolve once
     src = g.input(node.in_type) if node.in_type is not None else None
     out = _lower_into(g, node, src)
     g.output(out)
+    g._deferred = False
+    g._resolve_types()
+    g.ratios()
     return g
 
 
-def _lower_into(g: "Graph", node: Node, src: Ref | None) -> Ref:
+def _lower_into(g: Graph, node: Node, src: Ref | None) -> Ref:
     from .graph import Fanout, Pipeline, Zip
 
     if isinstance(node, Pipeline):
@@ -388,7 +533,7 @@ def _lower_into(g: "Graph", node: Node, src: Ref | None) -> Ref:
     return ref
 
 
-def _lower_join(g: "Graph", node: Node, src: Ref | None) -> tuple[list[Ref], "Join"]:
+def _lower_join(g: Graph, node: Node, src: Ref | None) -> tuple[list[Ref], Join]:
     """Lower the branches of a fan-out / zip; return their refs and the (unplaced) join."""
     from .graph import Fanout, Zip
 

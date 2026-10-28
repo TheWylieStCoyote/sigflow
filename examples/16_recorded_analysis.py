@@ -15,13 +15,15 @@ What this exercises
   * a scrubber built from `Knob` + `on_change` driving a plot block
 """
 
+from itertools import pairwise
+
 import numpy as np
 
-from sigflow import Frame, Knob, Sig, block, from_iterable, run, source
-from sigflow import dsp, plot
+from sigflow import Knob, Sig, block, dsp, plot, run
+from sigflow.dims import N
 
 RATE = 8_000.0
-N = 512
+N_SAMPLES = 512
 
 
 # ------------------------------------------------------------ a recording
@@ -42,7 +44,7 @@ def record(seconds: float = 6.0, seed: int = 0) -> np.ndarray:
 
 
 @block
-def dominant(x: Sig[float, "N"], rate: float = RATE) -> Sig[dict]:
+def dominant(x: Sig[float, N], rate: float = RATE) -> Sig[dict]:
     X = np.abs(np.fft.rfft(x * np.hanning(len(x))))
     f = np.fft.rfftfreq(len(x), 1 / rate)
     k = int(np.argmax(X[1:])) + 1
@@ -62,9 +64,12 @@ if __name__ == "__main__":
     x = record()
     features.draw().save("features_graph.svg")  # a source-less graph draws too
     windows = run(
-        dsp.from_array(x, n=N, rate=RATE) >> dsp.overlap(n=N, hop=N // 2)
+        dsp.from_array(x, n=N_SAMPLES, rate=RATE)
+        >> dsp.overlap(n=N_SAMPLES, hop=N_SAMPLES // 2)
     )  # offline re-framing
-    print(f"{len(windows)} windows of {N} from a {len(x) / RATE:.0f} s recording\n")
+    print(
+        f"{len(windows)} windows of {N_SAMPLES} from a {len(x) / RATE:.0f} s recording\n"
+    )
 
     # 1. apply graphs as functions to any slice of the recording
     print("one window      :", front_end(windows[10].data)[0].data.shape)
@@ -75,30 +80,31 @@ if __name__ == "__main__":
     print("frames in, frames out (annotations kept):", features(windows[:2])[1].meta)
 
     # 2. the same analysis block used live and offline
-    live = run(dsp.from_array(x, n=N, rate=RATE) >> dominant)
+    live = run(dsp.from_array(x, n=N_SAMPLES, rate=RATE) >> dominant)
     offline = dominant.apply(windows)  # a block over frames (keeps annotations)
     print("\nlive  :", [round(f.data["freq_hz"]) for f in live[::12]])
     print("offline:", [round(f.data["freq_hz"]) for f in offline[::24]])
 
     # 3. ask questions of the recording
     hops = [
-        (round(w["t0"] if "t0" in w else i * N / 2 / RATE, 2), d.data["freq_hz"])
+        (
+            round(w["t0"] if "t0" in w else i * N_SAMPLES / 2 / RATE, 2),
+            d.data["freq_hz"],
+        )
         for i, (w, d) in enumerate(zip(windows, offline))
     ]
-    changes = [(t, f) for (t0, f0), (t, f) in zip(hops, hops[1:]) if abs(f - f0) > 50]
+    changes = [(t, f) for (t0, f0), (t, f) in pairwise(hops) if abs(f - f0) > 50]
     print("\nfrequency changes at (s, Hz):", changes[:6])
     dirty = [i for i, d in enumerate(offline) if not d.data["clean"]]
     print(
         f"windows with interference: {dirty[:3]}... ({len(dirty)} total) "
-        f"= {dirty[0] * N / 2 / RATE:.2f}-{dirty[-1] * N / 2 / RATE:.2f} s"
+        f"= {dirty[0] * N_SAMPLES / 2 / RATE:.2f}-{dirty[-1] * N_SAMPLES / 2 / RATE:.2f} s"
     )
     print(
         "offline result provenance:",
         [n.op for n in offline[dirty[0]].prov.chain()],
         "offset",
-        offline[dirty[0]]["offset"]
-        if "offset" in offline[dirty[0]]
-        else "(from overlap)",
+        offline[dirty[0]].get("offset", "(from overlap)"),
     )
 
     # 4. a scrubber: a Knob selects the window, a plot block redraws on change.
@@ -108,7 +114,9 @@ if __name__ == "__main__":
     spec = plot.spectrum(title="scrub", ylim=(-80, 10))
 
     def show(i: int) -> None:
-        spec.redraw(windows[int(i)].annotate(seq=int(i), t0=int(i) * N / 2 / RATE))
+        spec.redraw(
+            windows[int(i)].annotate(seq=int(i), t0=int(i) * N_SAMPLES / 2 / RATE)
+        )
         spec.frames.append(windows[int(i)])
 
     idx.on_change(show)

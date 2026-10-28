@@ -5,15 +5,16 @@ telemetry ticker; a merged stream interleaves both as they arrive.
 """
 
 import asyncio
+from collections.abc import AsyncIterator
 
-import numpy as np
-
-from sigflow import Sig, Stream, block, merge, run, source
-from sigflow import dsp
+from sigflow import Sig, Stream, block, dsp, merge, run, source
+from sigflow.dims import N
 
 
 @source(total=lambda count, **_: count)
-async def gain_control(count: int = 5, period: float = 0.02) -> Sig[dict]:
+async def gain_control(
+    count: int = 5, period: float = 0.02
+) -> AsyncIterator[Sig[dict]]:
     """Pretend AGC commands arriving over the network."""
     for i in range(count):
         await asyncio.sleep(period)
@@ -21,12 +22,14 @@ async def gain_control(count: int = 5, period: float = 0.02) -> Sig[dict]:
 
 
 @block
-def apply_gain(x: Sig[float, "N"], cmd: Sig[dict]) -> Sig[float, "N"]:
+def apply_gain(x: Sig[float, N], cmd: Sig[dict]) -> Sig[float, N]:
     return x * cmd["gain"]
 
 
 @block
-async def smooth(xs: Stream[Sig[float, "N"]], alpha: float = 0.5) -> Sig[float, "N"]:
+async def smooth(
+    xs: Stream[Sig[float, N]], alpha: float = 0.5
+) -> AsyncIterator[Sig[float, N]]:
     """An *async* stream block: identical shape to a sync one, with `async for`."""
     acc = None
     async for x in xs:

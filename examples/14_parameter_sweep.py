@@ -20,7 +20,6 @@ What this exercises
 
 import importlib.util
 import os
-import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -34,6 +33,7 @@ def load_qpsk():
     spec = importlib.util.spec_from_file_location(
         "qpsk_link", os.path.join(HERE, "04_qpsk_link.py")
     )
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -100,7 +100,6 @@ if __name__ == "__main__":
     print(f"processes: {time.perf_counter() - t0:.1f}s for {len(grid)} points\n")
 
     # --- threads: several background runs, polled together -------------------
-    from sigflow import Monitor
 
     t0 = time.perf_counter()
     runs = {snr: link(snr).start() for snr in grid}

@@ -6,9 +6,9 @@ dimensions such as ``"N"`` that must agree across a graph), an optional sample
 rate and physical units.  Types are written with a subscript syntax that reads
 like a type annotation::
 
-    Sig[np.complex64, "N"]             # 1-D complex vector of symbolic length N
-    Sig[float, ("M", "N")]             # M x N real matrix
-    Sig[float, (1024,), 48_000, "V"]   # fixed-length frame at 48 kHz, in volts
+    Sig[np.complex64, N]             # 1-D complex vector of symbolic length N
+    Sig[float, tuple[M, N]]             # M x N real matrix
+    Sig[float, tuple[Literal[1024]], Literal[48_000], Literal["V"]]   # fixed-length frame at 48 kHz, in volts
     Sig[dict]                          # any Python dict (non-array payload)
     Sig[Any]                           # anything at all
 
@@ -20,36 +20,50 @@ that ``"N"`` means the same thing everywhere in a graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Mapping, Sequence
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args, get_origin
 
 import numpy as np
 
+from ._arrays import array_metadata as _array_metadata
+from .dims import M, N
+
 __all__ = [
     "Any",
-    "Sig",
-    "Stream",
-    "SignalType",
+    "CMatrix",
+    "CVector",
     "DVar",
-    "TupleType",
-    "StreamType",
-    "TypeMismatch",
-    "unify",
-    "Env",
     "Dim",
+    "Env",
+    "Matrix",
+    "Scalar",
+    "Sig",
+    "SignalType",
+    "Stream",
+    "StreamType",
+    "TagSpec",
+    "Tensor",
+    "TupleType",
+    "TypeMismatch",
+    "Vector",
+    "carry_tags",
+    "cleared_names",
+    "clears",
+    "describe",
+    "is_signal_type",
+    "narrow",
+    "provides",
+    "requires",
+    "resolve",
     "scoped",
     "slice_shape",
-    "Scalar",
-    "Vector",
-    "Matrix",
-    "Tensor",
-    "CVector",
-    "CMatrix",
-    "is_signal_type",
-    "describe",
+    "tag_names",
+    "unify",
 ]
 
 # A dimension is a fixed int, a symbolic name (str), or None (= any length).
-Dim = int | str | None
+Dim = (
+    int | str | type | None
+)  # ``type``: a ``sigflow.dims`` symbol as a checker sees it
 
 
 class TypeMismatch(TypeError):
@@ -58,7 +72,7 @@ class TypeMismatch(TypeError):
 
 @dataclass(frozen=True)
 class DVar:
-    """A dtype variable: ``Sig["T", "N"] -> Sig["T", "N"]`` preserves the input dtype."""
+    """A dtype variable: ``Sig[T, N] -> Sig[T, N]`` preserves the input dtype."""
 
     name: str
 
@@ -203,7 +217,7 @@ def _norm_dtype(dt: Any) -> Any:
     if isinstance(dt, DVar):
         return dt
     if isinstance(dt, str):
-        # Single letters are dtype *variables* (Sig["T", "N"]); longer names are
+        # Single letters are dtype *variables* (Sig[T, N]); longer names are
         # NumPy dtype names ("float32", "complex128", ...).
         if len(dt) == 1 and dt.isalpha():
             return DVar(dt)
@@ -221,15 +235,41 @@ def _norm_dtype(dt: Any) -> Any:
 def _norm_shape(shape: Any) -> tuple[Dim, ...] | None:
     if shape is None or shape is Any:
         return None
+    if get_origin(shape) is tuple:  # tuple[M, N], tuple[()], tuple[Literal[1024]]
+        args = get_args(shape)
+        shape = () if args == ((),) else args
+    shape = _unlit(shape)
     if isinstance(shape, (str, int)):
         return (shape,)
     out: list[Dim] = []
     for d in shape:
+        d = _unlit(d)
         if d is None or isinstance(d, (int, str)):
             out.append(d)
         else:
             raise TypeError(f"bad dimension {d!r}; use int, str (symbolic) or None")
     return tuple(out)
+
+
+def _unlit(x: Any) -> Any:
+    """``Literal["V"]`` -> ``"V"``: the checker-readable spelling of a rate or unit."""
+    return get_args(x)[0] if get_origin(x) is Literal else x
+
+
+def _labelled_shape(value: Any, want: Any, shape: tuple[int, ...]) -> tuple[int, ...]:
+    """A labelled array (``xarray.DataArray``) is matched to a contract that names
+    all of its dimensions *by name*: ``Sig[float, tuple[CHANNEL, TIME]]`` accepts the
+    array in any layout, and the sizes are read per name. Otherwise, by position."""
+    sizes = getattr(value, "sizes", None)
+    if (
+        want is not None
+        and sizes is not None
+        and len(want) == len(shape)
+        and all(isinstance(d, str) for d in want)
+        and all(_plain(d) in sizes for d in want)
+    ):
+        return tuple(int(sizes[_plain(d)]) for d in want)
+    return shape
 
 
 @dataclass(frozen=True)
@@ -243,7 +283,12 @@ class SignalType:
             ``()`` denotes a scalar.
         rate: sample rate in Hz (``None`` = unspecified / don't care).
         units: free-form unit string (``None`` = unspecified).
-        meta: required frame-level annotation keys (``None`` = no requirement).
+        meta: tag names the frames carry. On an input contract these are
+            *required* (``.requires("synced")``); on an output contract they are
+            *guaranteed* (``.provides("bits")``). A block's output carries its
+            input's tags too, minus ``cleared``.
+        cleared: tag names a block's output does not carry on from its input
+            (``.clears("raw")``).
     """
 
     dtype: Any = Any
@@ -251,15 +296,16 @@ class SignalType:
     rate: float | None = None
     units: str | None = None
     meta: frozenset[str] = field(default_factory=frozenset)
+    cleared: frozenset[str] = field(default_factory=frozenset)
 
     # -- construction ------------------------------------------------------ #
-    def __class_getitem__(cls, params: Any) -> "SignalType":
+    def __class_getitem__(cls, params: Any) -> SignalType:
         if not isinstance(params, tuple):
             params = (params,)
         dtype = params[0] if len(params) > 0 else Any
         shape = params[1] if len(params) > 1 else None
-        rate = params[2] if len(params) > 2 else None
-        units = params[3] if len(params) > 3 else None
+        rate = _unlit(params[2]) if len(params) > 2 else None
+        units = _unlit(params[3]) if len(params) > 3 else None
         if len(params) > 4:
             raise TypeError(
                 "Sig[dtype, shape, rate, units] takes at most four parameters"
@@ -269,6 +315,8 @@ class SignalType:
     def __post_init__(self) -> None:
         object.__setattr__(self, "dtype", _norm_dtype(self.dtype))
         object.__setattr__(self, "shape", _norm_shape(self.shape))
+        object.__setattr__(self, "rate", _unlit(self.rate))
+        object.__setattr__(self, "units", _unlit(self.units))
 
     # -- derived views ----------------------------------------------------- #
     @property
@@ -291,17 +339,27 @@ class SignalType:
     def symbols(self) -> set[str]:
         return {d for d in (self.shape or ()) if isinstance(d, str)}
 
-    def with_(self, **changes: Any) -> "SignalType":
+    def with_(self, **changes: Any) -> SignalType:
         """Return a copy with some fields replaced (``shape`` is re-normalised)."""
         from dataclasses import replace
 
         return replace(self, **changes)
 
-    def requires(self, *keys: str) -> "SignalType":
-        """Require these frame-level annotation keys to be present."""
-        return self.with_(meta=self.meta | frozenset(keys))
+    def requires(self, *names: str) -> SignalType:
+        """As an input contract: frames must carry these tags (checked when the
+        graph is built against what the producer guarantees, and at run time)."""
+        return self.with_(meta=self.meta | frozenset(names))
 
-    def resolve(self, env: Env) -> "SignalType":
+    def provides(self, *names: str) -> SignalType:
+        """As an output contract: frames carry these tags (the block must attach
+        them; checked at run time like the rest of the contract)."""
+        return self.with_(meta=self.meta | frozenset(names))
+
+    def clears(self, *names: str) -> SignalType:
+        """As an output contract: these input tags are not carried on."""
+        return self.with_(cleared=self.cleared | frozenset(names))
+
+    def resolve(self, env: Env) -> SignalType:
         """Substitute bound symbolic dimensions with their integers."""
         t = self
         if isinstance(self.dtype, DVar) and env.value(self.dtype.name) is not None:
@@ -323,23 +381,23 @@ class SignalType:
         if self.dtype is Any and self.shape is None:
             return env
         if isinstance(self.dtype, DVar):
-            arr = np.asarray(value)
-            env.bind_dtype(self.dtype.name, arr.dtype, where)
+            dtype, _ = _array_metadata(value)
+            env.bind_dtype(self.dtype.name, dtype, where)
             if self.shape is not None:
-                self.with_(dtype=arr.dtype).check(value, env, where)
+                self.with_(dtype=dtype).check(value, env, where)
             return env
         if self.is_array:
-            arr = np.asarray(value)
-            if not np.can_cast(arr.dtype, self.dtype, casting="same_kind"):
-                raise TypeMismatch(
-                    f"{where}: value dtype {arr.dtype} is not {self.dtype}"
-                )
+            dtype, shape = _array_metadata(value)
+            shape = _labelled_shape(value, self.shape, shape)
+            target: Any = self.dtype
+            if not np.can_cast(dtype, target, casting="same_kind"):
+                raise TypeMismatch(f"{where}: value dtype {dtype} is not {self.dtype}")
             if self.shape is not None:
-                if arr.ndim != len(self.shape):
+                if len(shape) != len(self.shape):
                     raise TypeMismatch(
-                        f"{where}: value has rank {arr.ndim}, type requires {len(self.shape)}"
+                        f"{where}: value has rank {len(shape)}, type requires {len(self.shape)}"
                     )
-                for i, (d, n) in enumerate(zip(self.shape, arr.shape)):
+                for i, (d, n) in enumerate(zip(self.shape, shape)):
                     if isinstance(d, int) and d != n:
                         raise TypeMismatch(
                             f"{where}: axis {i} has length {n}, expected {d}"
@@ -347,7 +405,8 @@ class SignalType:
                     if isinstance(d, str):
                         env.bind(d, int(n), where)
         elif isinstance(self.dtype, type):
-            if not isinstance(value, self.dtype):
+            cls: Any = self.dtype
+            if not isinstance(value, cls):
                 raise TypeMismatch(
                     f"{where}: value of type {type(value).__name__} is not {self.dtype.__name__}"
                 )
@@ -355,7 +414,7 @@ class SignalType:
 
     # -- display ----------------------------------------------------------- #
     def __str__(self) -> str:
-        if self.is_any:
+        if self.is_any and not self.meta and not self.cleared:
             return "Sig[Any]"
         parts = [_dn(self.dtype)]
         if self.shape is not None or self.rate is not None or self.units is not None:
@@ -374,27 +433,31 @@ class SignalType:
             parts.append(f"{self.rate}Hz" if self.rate is not None else "_")
         if self.units is not None:
             parts.append(repr(self.units))
+        if self.meta:
+            parts.append("tags=" + "|".join(sorted(self.meta)))
+        if self.cleared:
+            parts.append("clears=" + "|".join(sorted(self.cleared)))
         return "Sig[" + ", ".join(parts) + "]"
 
     __repr__ = __str__
 
 
 if TYPE_CHECKING:
-    # To a static type checker a block parameter annotated ``Sig[...]`` is a NumPy
-    # array, so block bodies type-check (``x * gain``, ``x.mean()``); at runtime ``Sig``
-    # is :class:`SignalType`, whose subscription builds the contract. The symbolic
-    # dimension strings ("N") are the one thing checkers cannot read, which is why the
-    # package's mypy config disables ``name-defined`` / ``valid-type``.
+    # ``Sig[...]`` is a *contract*: what a block body returns for it may be an array, a
+    # NumPy scalar, a float, a dict or a Frame, so to a checker it is ``Any`` carrying the
+    # DSL's parameters. Signatures then type-check as written (``Sig[float, N]``,
+    # ``Sig[T, tuple[M, N]]``, ``Sig[float, N, None, Literal["V"]]``) and bodies are not
+    # second-guessed; at runtime ``Sig`` is :class:`SignalType`, whose subscription
+    # builds the contract. ``Stream[X]`` is an iterable of X to a checker.
     from typing import Generic
 
-    from typing_extensions import TypeVarTuple, Unpack
+    from typing_extensions import TypeAliasType, TypeVarTuple
 
     _Ts = TypeVarTuple("_Ts")
 
-    class Sig(np.ndarray, Generic[Unpack[_Ts]]):  # type: ignore[misc,type-arg]
-        ...
+    Sig = TypeAliasType("Sig", Any, type_params=(_Ts,))
 
-    class Stream(Generic[Unpack[_Ts]]):  # Stream[X] is an iterable of X to a checker
+    class Stream(Generic[*_Ts]):
         def __iter__(self) -> Any: ...
         def __aiter__(self) -> Any: ...
 else:
@@ -412,7 +475,7 @@ class TupleType:
 
     items: tuple[Any, ...]
 
-    def __class_getitem__(cls, params: Any) -> "TupleType":
+    def __class_getitem__(cls, params: Any) -> TupleType:
         if not isinstance(params, tuple):
             params = (params,)
         return cls(tuple(_as_type(p) for p in params))
@@ -423,16 +486,16 @@ class TupleType:
     def __iter__(self):
         return iter(self.items)
 
-    def resolve(self, env: Env) -> "TupleType":
+    def resolve(self, env: Env) -> TupleType:
         return TupleType(tuple(t.resolve(env) for t in self.items))
 
     def check(self, value: Any, env: Env | None = None, where: str = "") -> Env:
-        env = env if env is not None else Env()
+        bound: Env = env if env is not None else Env()
         if not isinstance(value, tuple) or len(value) != len(self.items):
             raise TypeMismatch(f"{where}: expected a {len(self.items)}-tuple")
         for i, (t, v) in enumerate(zip(self.items, value)):
-            env = t.check(v, env, f"{where}[{i}]")
-        return env
+            bound = t.check(v, bound, f"{where}[{i}]")
+        return bound
 
     def __str__(self) -> str:
         return "(" + ", ".join(str(t) for t in self.items) + ")"
@@ -450,7 +513,7 @@ class StreamType:
 
     item: Any
 
-    def __class_getitem__(cls, item: Any) -> "StreamType":
+    def __class_getitem__(cls, item: Any) -> StreamType:
         # Stream[Framed[...]] and Stream[Frame] deliver whole frames; keep those markers as-is
         if (
             isinstance(item, type)
@@ -474,12 +537,58 @@ def is_signal_type(obj: Any) -> bool:
     return isinstance(obj, (SignalType, TupleType))
 
 
+@dataclass(frozen=True)
+class TagSpec:
+    """What :func:`requires`, :func:`provides` and :func:`clears` put inside an
+    ``Annotated[...]`` contract: tag names to add to the contract's guarantees (or
+    requirements) and tag names it clears."""
+
+    meta: frozenset[str] = frozenset()
+    cleared: frozenset[str] = frozenset()
+
+    def apply(self, t: Any) -> Any:
+        if isinstance(t, TupleType):
+            return TupleType(tuple(self.apply(i) for i in t.items))
+        if isinstance(t, StreamType):
+            return StreamType(self.apply(t.item))
+        if not isinstance(t, SignalType):
+            return t
+        return t.with_(meta=t.meta | self.meta, cleared=t.cleared | self.cleared)
+
+
+def requires(*names: str) -> TagSpec:
+    """Checker-legible tag requirement for an input contract:
+    ``x: Annotated[Sig[float, N], requires("speech")]``."""
+    return TagSpec(meta=frozenset(names))
+
+
+def provides(*names: str) -> TagSpec:
+    """Checker-legible tag guarantee for an output contract:
+    ``-> Annotated[Sig[float, N], provides("speech")]``."""
+    return TagSpec(meta=frozenset(names))
+
+
+def clears(*names: str) -> TagSpec:
+    """Checker-legible: the output does not carry these input tags on:
+    ``-> Annotated[Sig[float, N], clears("raw")]``."""
+    return TagSpec(cleared=frozenset(names))
+
+
 def _as_type(obj: Any) -> Any:
     """Coerce loose specs into a type object."""
     if isinstance(obj, (SignalType, TupleType, StreamType)):
         return obj
     if obj is Any or obj is None:
         return SignalType()
+    if get_origin(obj) is Annotated:  # Annotated[Sig[...], requires("x"), ...]
+        base, *extras = get_args(obj)
+        t = _as_type(base)
+        for extra in extras:
+            if isinstance(extra, TagSpec):
+                t = extra.apply(t)
+        return t
+    if get_origin(obj) is tuple:  # tuple[Sig[...], Sig[...]]
+        obj = get_args(obj)
     if isinstance(obj, tuple):
         return TupleType(tuple(_as_type(o) for o in obj))
     if isinstance(obj, (type, np.dtype, str)):
@@ -496,12 +605,13 @@ as_type = _as_type
 
 
 def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
+    if produced is Any or required is Any:
+        return  # gradual dtype information must not bind a variable to Any
     if isinstance(produced, DVar) and isinstance(required, DVar):
         env.union_dtype(produced.name, required.name, where)
         return
     if isinstance(required, DVar):
-        if produced is not Any:
-            env.bind_dtype(required.name, produced, where)
+        env.bind_dtype(required.name, produced, where)
         return
     if isinstance(produced, DVar):
         v = env.value(produced.name)
@@ -543,6 +653,13 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
     if isinstance(required, TupleType) or isinstance(produced, TupleType):
         if not (isinstance(required, TupleType) and isinstance(produced, TupleType)):
             if isinstance(required, SignalType) and required.is_any:
+                missing = required.meta - tag_names(produced)
+                if missing:
+                    have = "|".join(sorted(tag_names(produced))) or "none"
+                    raise TypeMismatch(
+                        f"{where}: needs tag(s) {'|'.join(sorted(missing))}, "
+                        f"producer guarantees {have}"
+                    )
                 return env
             raise TypeMismatch(f"{where}: {produced} is not compatible with {required}")
         if len(required) != len(produced):
@@ -555,9 +672,14 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
 
     _unify_dtype(produced.dtype, required.dtype, env, where)
 
-    if required.shape is not None:
-        if produced.shape is None:
-            return env  # gradual: unknown shape is checked at runtime
+    missing = required.meta - produced.meta
+    if missing:
+        have = "|".join(sorted(produced.meta)) or "none"
+        raise TypeMismatch(
+            f"{where}: needs tag(s) {'|'.join(sorted(missing))}, producer guarantees {have}"
+        )
+
+    if required.shape is not None and produced.shape is not None:
         if len(produced.shape) != len(required.shape):
             raise TypeMismatch(
                 f"{where}: rank {len(produced.shape)} produced, rank {len(required.shape)} required "
@@ -590,6 +712,107 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
             f"{where}: units {produced.units!r} produced, {required.units!r} required{hint}"
         )
     return env
+
+
+def narrow(produced: Any, required: Any, where: str = "") -> Any:
+    """The contract carried by a node that passes its input through unchanged
+    (``required`` is its declared input) once ``produced`` is connected to it:
+    ``produced`` wherever it says something, ``required`` where ``produced`` is
+    gradual (``Any`` dtype, unknown axes, no rate or units). Unification bindings
+    and repeated-variable relationships are retained across the entire contract.
+    Raises :class:`TypeMismatch` when ``produced`` does not satisfy ``required``.
+    """
+    produced, required = _as_type(produced), _as_type(required)
+    env = unify(produced, required, Env(), where)
+
+    def dimension(d: Dim) -> Dim:
+        if not isinstance(d, str):
+            return d
+        bound = env.value(d)
+        return bound if bound is not None else env.find(d)
+
+    def merge(p: Any, r: Any) -> Any:
+        if isinstance(p, TupleType) and isinstance(r, TupleType):
+            return TupleType(tuple(merge(a, b) for a, b in zip(p.items, r.items)))
+        if not (isinstance(p, SignalType) and isinstance(r, SignalType)):
+            return p
+        dtype = r.dtype if p.dtype is Any else p.dtype
+        if isinstance(dtype, DVar):
+            bound = env.value(dtype.name)
+            dtype = bound if bound is not None else DVar(env.find(dtype.name))
+        if p.shape is None:
+            shape = r.shape
+        elif r.shape is None:
+            shape = p.shape
+        else:
+            shape = tuple(a if a is not None else b for a, b in zip(p.shape, r.shape))
+        if shape is not None:
+            shape = tuple(dimension(d) for d in shape)
+        return SignalType(
+            dtype,
+            shape,
+            p.rate if p.rate is not None else r.rate,
+            p.units if p.units is not None else r.units,
+            p.meta | r.meta,
+        )
+
+    return merge(produced, required)
+
+
+def resolve(t: Any, env: Env) -> Any:
+    """``t`` with the symbols ``env`` has bound replaced by their values: a dtype
+    variable by its dtype, a symbolic dimension by its size. Unbound symbols stay."""
+    if isinstance(t, TupleType):
+        return TupleType(tuple(resolve(i, env) for i in t.items))
+    if isinstance(t, StreamType):
+        return StreamType(resolve(t.item, env))
+    if not isinstance(t, SignalType):
+        return t
+    dtype = t.dtype
+    if isinstance(dtype, DVar):
+        bound = env.value(dtype.name)
+        if bound is not None:
+            dtype = bound
+    shape = t.shape
+    if shape is not None:
+        shape = tuple(
+            env.value(d) if isinstance(d, str) and env.value(d) is not None else d
+            for d in shape
+        )
+    if dtype is t.dtype and shape == t.shape:
+        return t
+    return t.with_(dtype=dtype, shape=shape)
+
+
+def tag_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract guarantees (or requires), across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(tag_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return tag_names(t.item)
+    return t.meta if isinstance(t, SignalType) else frozenset()
+
+
+def cleared_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract clears, across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(cleared_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return cleared_names(t.item)
+    return t.cleared if isinstance(t, SignalType) else frozenset()
+
+
+def carry_tags(out: Any, inherited: frozenset[str]) -> Any:
+    """A block's output contract once the tags its inputs carry are added, minus
+    those it clears: what a consumer can rely on."""
+    if isinstance(out, TupleType):
+        return TupleType(tuple(carry_tags(i, inherited) for i in out.items))
+    if isinstance(out, StreamType):
+        return StreamType(carry_tags(out.item, inherited))
+    if not isinstance(out, SignalType):
+        return out
+    carried = out.meta | (inherited - out.cleared)
+    return out if carried == out.meta else out.with_(meta=carried)
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:
@@ -683,9 +906,9 @@ def describe(t: Any) -> str:
 # Handy aliases for linear-algebra primitives
 # --------------------------------------------------------------------------- #
 
-Scalar = Sig[float, ()]
-Vector = Sig[float, ("N",)]
-Matrix = Sig[float, ("M", "N")]
+Scalar = Sig[float, tuple[()]]
+Vector = Sig[float, tuple[N]]
+Matrix = Sig[float, tuple[M, N]]
 Tensor = Sig[float, None]
-CVector = Sig[complex, ("N",)]
-CMatrix = Sig[complex, ("M", "N")]
+CVector = Sig[complex, tuple[N]]
+CMatrix = Sig[complex, tuple[M, N]]

@@ -1,7 +1,7 @@
 name: ci
 on:
   push:
-    branches: [master]
+    branches: [master, main]
   pull_request:
 jobs:
   test:
@@ -10,8 +10,17 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12", "3.13", "3.14", "3.15"]
         numpy: ["numpy<2", "numpy>=2"]
+        exclude:
+          # NumPy 1.x ships no wheels for 3.13+: pip would build it and a matching
+          # SciPy from source, which is slow and needs OpenBLAS the runner lacks
+          - python: "3.13"
+            numpy: "numpy<2"
+          - python: "3.14"
+            numpy: "numpy<2"
+          - python: "3.15"
+            numpy: "numpy<2"
         include:
           - os: windows-latest
             python: "3.12"
@@ -24,10 +33,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq]"
+      - run: python -m pip install -U pip "${{ matrix.numpy }}" -e ".[test,perf,zmq,xarray]" "dask[array]"
         env:
           MPLBACKEND: Agg
-      - run: python -m pytest -q examples/18_testing_pipelines.py
+      - run: python -m pytest -q tests examples/18_testing_pipelines.py
         env:
           MPLBACKEND: Agg
   typecheck:
@@ -37,8 +46,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e . mypy
-      - run: mypy src/sigflow
+      - run: python -m pip install -e ".[dev]" pyright  # the optional imports must resolve
+      - run: mypy src/sigflow tests examples
+      - run: pyright
   examples:
     runs-on: ubuntu-latest
     steps:

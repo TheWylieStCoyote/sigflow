@@ -17,11 +17,12 @@ What this exercises
 """
 
 from collections import Counter
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 
-from sigflow import MISSING, Frame, Framed, Sig, block, port, run, source
-from sigflow import dsp
+from sigflow import Frame, Framed, Sig, block, port, run, source
 
 
 @source(total=lambda frames, **_: frames)
@@ -32,7 +33,7 @@ def sensor(
     drift: float = 0.0,
     dropout_every: int = 0,
     seed: int = 0,
-) -> Sig[float, (64,)]:
+) -> Iterator[Sig[float, tuple[Literal[64]]]]:
     """A sensor with per-instance configuration that will show up in provenance."""
     rng = np.random.default_rng(seed)
     for k in range(frames):
@@ -53,7 +54,9 @@ def sensor(
 
 
 @block
-def validate(f: Framed[Sig[float, (64,)]]) -> Sig[float, (64,)]:
+def validate(
+    f: Framed[Sig[float, tuple[Literal[64]]]],
+) -> Sig[float, tuple[Literal[64]]]:
     if np.isnan(f.data).any():
         raise ValueError(f"{f['sensor']} frame {f['k']}: NaN samples")
     return f.annotate(level=float(np.sqrt(np.mean(f.data**2))))
@@ -61,9 +64,9 @@ def validate(f: Framed[Sig[float, (64,)]]) -> Sig[float, (64,)]:
 
 @block
 def fuse(
-    a: Framed[Sig[float, (64,)]],
-    b: Framed[Sig[float, (64,)]],
-    c: Framed[Sig[float, (64,)]],
+    a: Framed[Sig[float, tuple[Literal[64]]]],
+    b: Framed[Sig[float, tuple[Literal[64]]]],
+    c: Framed[Sig[float, tuple[Literal[64]]]],
 ) -> Sig[dict]:
     """Combine three channels; flag when one disagrees with the other two."""
     levels = np.array([a["level"], b["level"], c["level"]])

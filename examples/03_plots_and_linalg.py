@@ -1,9 +1,11 @@
 """Plot taps, animation export, and shape-checked linear algebra."""
 
+from collections.abc import Iterator
+
 import numpy as np
 
-from sigflow import Sig, run, source
-from sigflow import dsp, linalg, plot
+from sigflow import Sig, dsp, linalg, plot, run, source
+from sigflow.dims import M, N
 
 # --- a spectrum analyser with a waterfall, animated ------------------------
 spec = plot.spectrum(title="chirp spectrum", ylim=(-80, 10))
@@ -27,7 +29,7 @@ print(fall.save("chirp_waterfall.gif", interval=60))
 @source
 def snapshots(
     channels: int = 4, samples: int = 256, frames: int = 3
-) -> Sig[complex, ("M", "N")]:
+) -> Iterator[Sig[complex, tuple[M, N]]]:
     """M=samples x N=channels array snapshots with a plane wave + noise."""
     rng = np.random.default_rng(0)
     steering = np.exp(1j * np.pi * np.arange(channels) * np.sin(np.deg2rad(20)))

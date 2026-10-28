@@ -1,4 +1,6 @@
 import asyncio
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -11,14 +13,14 @@ from sigflow import (
     Stream,
     TypeMismatch,
     block,
+    dsp,
     from_iterable,
     merge,
     run,
     source,
     tap,
 )
-from sigflow import dsp
-
+from sigflow.dims import M, N, T
 
 # --------------------------------------------------------------------------- #
 # Blocks used by the tests
@@ -26,27 +28,27 @@ from sigflow import dsp
 
 
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 
 @block
-def energy(x: Sig["T", "N"]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
 @block
-def add(a: Sig["T", "N"], b: Sig["T", "N"]) -> Sig["T", "N"]:
+def add(a: Sig[T, N], b: Sig[T, N]) -> Sig[T, N]:
     return a + b
 
 
 @block
-def boom(x: Sig[float, "N"]) -> Sig[float, "N"]:
+def boom(x: Sig[float, N]) -> Sig[float, N]:
     raise ValueError("kaboom")
 
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:
     buf = []
     for x in xs:
         buf.append(x)
@@ -56,13 +58,13 @@ def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:
 
 
 @source(total=lambda count, **_: count)
-def ramp(count: int = 4, n: int = 3) -> Sig[float, "N"]:
+def ramp(count: int = 4, n: int = 3) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield np.full(n, float(i))
 
 
 @source
-async def aramp(count: int = 4, n: int = 3) -> Sig[float, "N"]:
+async def aramp(count: int = 4, n: int = 3) -> AsyncIterator[Sig[float, N]]:
     for i in range(count):
         await asyncio.sleep(0)
         yield np.full(n, float(10 + i))
@@ -81,7 +83,7 @@ def test_block_is_still_a_function():
 
 
 def test_wrapping_library_functions():
-    fft = block(np.fft.fft, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
+    fft = block(np.fft.fft, inputs=Sig[complex, N], outputs=Sig[complex, N])
     out = run(ramp(count=1) >> dsp.to_complex >> fft)
     assert out[0].data.shape == (3,)
     with pytest.raises(TypeError):
@@ -114,11 +116,11 @@ def test_type_mismatch_is_raised_at_build_time():
 
 def test_dimension_conflict_detected_before_running():
     @source
-    def ten() -> Sig[float, (10,)]:
+    def ten() -> Iterator[Sig[float, tuple[Literal[10]]]]:
         yield np.ones(10)
 
     @source
-    def twenty() -> Sig[float, (20,)]:
+    def twenty() -> Iterator[Sig[float, tuple[Literal[20]]]]:
         yield np.ones(20)
 
     with pytest.raises(TypeMismatch, match="dimension 'N'"):
@@ -149,7 +151,7 @@ def test_zip_and_merge_mix_sync_and_async_sources():
 
 
 def test_from_iterable_and_plain_functions():
-    g = from_iterable([np.ones(2), np.ones(2) * 2], Sig[float, "N"]) >> (
+    g = from_iterable([np.ones(2), np.ones(2) * 2], Sig[float, N]) >> (
         lambda x: x.sum()
     )
     assert [f.data for f in run(g)] == [2.0, 4.0]
@@ -157,7 +159,7 @@ def test_from_iterable_and_plain_functions():
 
 def test_runtime_check_catches_lying_blocks():
     @block
-    def liar(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def liar(x: Sig[float, N]) -> Sig[float, N]:
         return np.zeros((2, 2))
 
     with pytest.raises(TypeMismatch, match="runtime check"):
@@ -171,7 +173,7 @@ def test_runtime_check_catches_lying_blocks():
 
 def test_annotations_propagate_through_blocks():
     src = from_iterable(
-        [Frame(np.ones(4), meta={"seq": 7}, stream={"rate": 100.0})], Sig[float, "N"]
+        [Frame(np.ones(4), meta={"seq": 7}, stream={"rate": 100.0})], Sig[float, N]
     )
     out = run(src >> scale(gain=2) >> scale(gain=2))
     assert out[0].meta["seq"] == 7 and out[0].stream["rate"] == 100.0
@@ -179,7 +181,7 @@ def test_annotations_propagate_through_blocks():
 
 def test_sample_annotations_follow_the_leading_axis():
     @block
-    def mark(f: Framed[Sig[float, "N"]]) -> Sig[float, "N"]:
+    def mark(f: Framed[Sig[float, N]]) -> Sig[float, N]:
         return f.annotate_samples(flag=f.data > 1)
 
     out = run(ramp(count=3) >> mark >> scale(gain=2))  # N -> N keeps samples
@@ -218,7 +220,7 @@ def test_warnings_do_not_stop_computation():
 
 def test_failed_frames_bypass_stream_blocks():
     @block
-    def failing_first(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def failing_first(x: Sig[float, N]) -> Sig[float, N]:
         if x[0] == 0:
             raise RuntimeError("first")
         return x
@@ -235,7 +237,7 @@ def test_filter_by_returning_none_and_taps():
     seen = []
 
     @block
-    def only_even(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def only_even(x: Sig[float, N]) -> Sig[float, N]:
         return x if x[0] % 2 == 0 else None
 
     out = run(ramp(count=4) >> only_even >> tap(lambda x: seen.append(x[0])))
@@ -278,7 +280,7 @@ def test_monitor_and_progress(capsys):
 
 def test_stream_block_with_async_generator():
     @block
-    async def running_sum(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+    async def running_sum(xs: Stream[Sig[float, N]]) -> AsyncIterator[Sig[float, N]]:
         acc = None
         async for x in xs:
             acc = x if acc is None else acc + x
@@ -290,7 +292,7 @@ def test_stream_block_with_async_generator():
 
 def test_fanout_validates_every_branch():
     @block
-    def wants_matrix(x: Sig[float, ("M", "N")]) -> Sig[float, ()]:
+    def wants_matrix(x: Sig[float, tuple[M, N]]) -> Sig[float, tuple[()]]:
         return 0.0
 
     with pytest.raises(TypeMismatch):
@@ -347,7 +349,7 @@ def test_background_run_pause_step_stop():
 
 def test_source_exception_is_attributed_to_the_source():
     @source
-    def broken(count: int = 3) -> Sig[float, "N"]:
+    def broken(count: int = 3) -> Iterator[Sig[float, N]]:
         for i in range(count):
             if i == 1:
                 raise RuntimeError("sensor unplugged")
@@ -370,7 +372,7 @@ def test_port_selection():
     from sigflow import linalg
 
     @source
-    def mats() -> Sig[float, (3, 3)]:
+    def mats() -> Iterator[Sig[float, tuple[Literal[3], Literal[3]]]]:
         yield np.diag([1.0, 2.0, 3.0])
 
     vals = run(mats() >> linalg.eigh[0])[0]
@@ -397,8 +399,8 @@ def test_port_selection():
     # named output ports on a wrapped library function
     eigh = block(
         np.linalg.eigh,
-        inputs=Sig["T", ("N", "N")],
-        outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+        inputs=Sig[T, tuple[N, N]],
+        outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
     )
     assert run(mats() >> eigh["vecs"] >> linalg.transpose)[0].data.shape == (3, 3)
     assert run(mats() >> eigh["vals"])[0].prov.op == "[vals]"
@@ -430,7 +432,10 @@ def test_frame_and_provenance_selection():
 
 def test_selected_port_lineage_follows_the_branch():
     post = block(
-        lambda e: e + 1.0, name="post", inputs=Sig[float, ()], outputs=Sig[float, ()]
+        lambda e: e + 1.0,
+        name="post",
+        inputs=Sig[float, tuple[()]],
+        outputs=Sig[float, tuple[()]],
     )
     f = run(ramp(count=1) >> (scale(gain=2) | energy >> post)["post"])[0]
     assert [n.op for n in f.prov.chain()] == ["[post]", "post", "energy", "ramp"]
@@ -440,8 +445,8 @@ def test_selected_port_lineage_follows_the_branch():
 def test_multi_input_framed_block_skips_failed_parts():
     @block
     def combine(
-        a: Framed[Sig[float, "N"]], b: Framed[Sig[float, "N"]]
-    ) -> Sig[float, ()]:
+        a: Framed[Sig[float, N]], b: Framed[Sig[float, N]]
+    ) -> Sig[float, tuple[()]]:
         return float(a.data.sum() + b.data.sum())
 
     out = run(ramp(count=3) >> (scale(gain=1) | boom) >> combine)
@@ -453,6 +458,7 @@ def test_multi_input_framed_block_skips_failed_parts():
 
 def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
     import time
+
     from sigflow import Knob
 
     gain = Knob(1.0, "gain")
@@ -473,7 +479,7 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 
     # a source reads the knob itself
     @source
-    def tone(level: Knob, frames: int = 10**6) -> Sig[float, ()]:
+    def tone(level: Knob, frames: int = 10**6) -> Iterator[Sig[float, tuple[()]]]:
         for _ in range(frames):
             yield float(level.value)
 
@@ -488,6 +494,7 @@ def test_knobs_tune_running_graphs_and_runs_keep_bounded_buffers():
 
 def test_throttle_record_snapshot_and_knob_kinds():
     import time
+
     from sigflow import Knob
 
     win = Knob("hann", "window", choices=["hann", "hamming"])

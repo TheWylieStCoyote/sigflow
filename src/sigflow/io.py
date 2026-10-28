@@ -27,28 +27,28 @@ from __future__ import annotations
 import asyncio
 import csv
 import os
-import threading
-import time
-from typing import Any, Iterator
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Self
 
 import numpy as np
 
 from .block import source, tap
+from .dims import N, T
 from .frame import Frame
 from .graph import Block
-from .types import Sig
+from .types import Sig, SignalType
 
 __all__ = [
-    "wav",
-    "raw",
-    "npy",
-    "csv_rows",
-    "udp",
-    "zmq",
-    "wav_sink",
-    "npy_sink",
     "csv_log",
+    "csv_rows",
+    "npy",
+    "npy_sink",
+    "raw",
+    "udp",
     "udp_sink",
+    "wav",
+    "wav_sink",
+    "zmq",
     "zmq_sink",
 ]
 
@@ -73,19 +73,40 @@ def _frames_of(
         )
 
 
+def _wav_type(path: str, n: int, channel: int | None, **_: Any) -> SignalType:
+    if channel is not None:
+        return SignalType(T, (n,))
+    from scipy.io import wavfile
+
+    try:
+        _, data = wavfile.read(path, mmap=True)
+    except (OSError, ValueError):
+        # Some WAV encodings (notably 24-bit PCM) cannot be memory-mapped.
+        # Keep their rank gradual rather than loading the recording at build time.
+        return SignalType(T, None)
+    return SignalType(T, (n, *data.shape[1:]))
+
+
 @source(
     total=lambda path, n, **_: _wav_frames(path, n),
-    refine=lambda n, **_: Sig["T", (n,)],
+    refine=_wav_type,
 )
 def wav(
     path: str, n: int = 1024, channel: int | None = None, float32: bool = True
-) -> Sig["T", "N"]:
-    """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one."""
+) -> Iterator[Sig[T, N]]:
+    """Stream a WAV file. Multi-channel files give (n, channels) frames unless ``channel`` picks one.
+    Integer PCM is normalized to floating point when ``float32=True``; unsigned
+    PCM is centered on zero before scaling.
+    """
     from scipy.io import wavfile
 
     rate, data = wavfile.read(path)
     if float32 and data.dtype.kind in "iu":
-        data = data.astype(np.float32) / np.iinfo(data.dtype).max
+        if data.dtype.kind == "u":
+            midpoint = (np.iinfo(data.dtype).max + 1) / 2
+            data = (data.astype(np.float32) - midpoint) / midpoint
+        else:
+            data = data.astype(np.float32) / np.iinfo(data.dtype).max
     if channel is not None and data.ndim == 2:
         data = data[:, channel]
     yield from _frames_of(data, n, float(rate), "wav", path)
@@ -95,7 +116,7 @@ def _wav_frames(path: str, n: int) -> int | None:
     try:
         from scipy.io import wavfile
 
-        rate, data = wavfile.read(path, mmap=True)
+        _rate, data = wavfile.read(path, mmap=True)
         return len(data) // n
     except Exception:
         return None
@@ -103,11 +124,11 @@ def _wav_frames(path: str, n: int) -> int | None:
 
 @source(
     total=lambda path, dtype, n, **_: _raw_frames(path, dtype, n),
-    refine=lambda n, dtype, **_: Sig[dtype, (n,)],
+    refine=lambda n, dtype, **_: SignalType(dtype, (n,)),
 )
 def raw(
     path: str, dtype: Any = np.complex64, n: int = 1024, rate: float | None = None
-) -> Sig["T", "N"]:
+) -> Iterator[Sig[T, N]]:
     """Stream a raw binary file (what a GNU Radio file sink writes), memory-mapped."""
     data = np.memmap(path, dtype=np.dtype(dtype), mode="r")
     yield from _frames_of(data, n, rate, "raw", path)
@@ -120,15 +141,15 @@ def _raw_frames(path: str, dtype: Any, n: int) -> int | None:
         return None
 
 
-@source(refine=lambda n, **_: Sig["T", (n,)])
-def npy(path: str, n: int = 1024, rate: float | None = None) -> Sig["T", "N"]:
+@source(refine=lambda n, **_: SignalType(T, (n,)))
+def npy(path: str, n: int = 1024, rate: float | None = None) -> Iterator[Sig[T, N]]:
     """Stream a 1-D ``.npy`` array without loading it all (memory-mapped)."""
     data = np.load(path, mmap_mode="r")
     yield from _frames_of(data, n, rate, "npy", path)
 
 
 @source
-def csv_rows(path: str, numeric: bool = True) -> Sig[dict]:
+def csv_rows(path: str, numeric: bool = True) -> Iterator[Sig[dict]]:
     """One dict per row; numeric-looking fields are converted to float when ``numeric``."""
     with open(path, newline="") as fh:
         for i, row in enumerate(csv.DictReader(fh)):
@@ -153,7 +174,7 @@ async def udp(
     host: str = "127.0.0.1",
     count: int | None = None,
     timeout: float | None = None,
-) -> Sig["T", None]:
+) -> AsyncIterator[Sig[T, None]]:
     """Asynchronous UDP receiver: each datagram becomes one frame (array of ``dtype``).
     Stops after ``count`` datagrams, or ``timeout`` seconds of silence."""
     loop = asyncio.get_running_loop()
@@ -169,7 +190,7 @@ async def udp(
         while count is None or k < count:
             try:
                 data, addr = await asyncio.wait_for(q.get(), timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return
             yield Frame(
                 np.frombuffer(data, dtype=np.dtype(dtype)).copy(),
@@ -181,9 +202,6 @@ async def udp(
         transport.close()
 
 
-_ZMQ_POLL_MS = 50  # how often the receive thread checks for stop / timeout
-
-
 @source
 async def zmq(
     address: str = "tcp://127.0.0.1:5555",
@@ -193,67 +211,24 @@ async def zmq(
     count: int | None = None,
     timeout: float | None = None,
     connect: bool = True,
-) -> Sig["T", None]:
-    """ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a GNU Radio
-    *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes one frame
-    of ``dtype``. ``connect=False`` binds instead of connecting. ``timeout`` is the longest
-    wait for any single message (seconds) before the stream ends.
-
-    The socket is owned by a worker thread that hands messages to the event loop, so it
-    works on every asyncio loop (including Windows' default Proactor loop, which lacks the
-    ``add_reader`` support that ``zmq.asyncio`` needs)."""
+) -> AsyncIterator[Sig[T, None]]:
+    """Asynchronous ZeroMQ receiver (``pip install pyzmq``). ``kind`` is ``"SUB"`` (matches a
+    GNU Radio *ZMQ PUB Sink*) or ``"PULL"`` (matches *ZMQ PUSH Sink*); each message becomes
+    one frame of ``dtype``. ``connect=False`` binds instead of connecting."""
     import zmq as _zmq
+    import zmq.asyncio as _zmqa
 
-    loop = asyncio.get_running_loop()
-    q: asyncio.Queue[Any] = asyncio.Queue()
-    stop = threading.Event()
-    end = object()
-
-    def post(item: Any) -> None:
-        if stop.is_set():
-            return
-        try:
-            loop.call_soon_threadsafe(q.put_nowait, item)
-        except RuntimeError:  # loop already closed
-            pass
-
-    def pump() -> None:
-        try:
-            sock: Any = _zmq.Context.instance().socket(
-                _zmq.SUB if kind.upper() == "SUB" else _zmq.PULL
-            )
-        except BaseException as e:  # noqa: BLE001
-            post(e)
-            return
-        try:
-            if kind.upper() == "SUB":
-                sock.setsockopt(_zmq.SUBSCRIBE, topic)
-            (sock.connect if connect else sock.bind)(address)
-            k = 0
-            t_last = time.monotonic()
-            while not stop.is_set() and (count is None or k < count):
-                if sock.poll(_ZMQ_POLL_MS):
-                    post(sock.recv())
-                    k += 1
-                    t_last = time.monotonic()
-                elif timeout is not None and time.monotonic() - t_last >= timeout:
-                    break
-            post(end)
-        except BaseException as e:  # noqa: BLE001
-            post(e)
-        finally:
-            sock.close(linger=0)
-
-    thread = threading.Thread(target=pump, name=f"sigflow-zmq:{address}", daemon=True)
-    thread.start()
+    ctx = _zmqa.Context.instance()
+    sock = ctx.socket(_zmq.SUB if kind.upper() == "SUB" else _zmq.PULL)
+    if kind.upper() == "SUB":
+        sock.setsockopt(_zmq.SUBSCRIBE, topic)
+    (sock.connect if connect else sock.bind)(address)
     try:
         k = 0
-        while True:
-            msg = await q.get()
-            if msg is end:
+        while count is None or k < count:
+            if timeout is not None and not await sock.poll(int(timeout * 1000)):
                 return
-            if isinstance(msg, BaseException):
-                raise msg
+            msg = await sock.recv()
             if topic and msg.startswith(topic):
                 msg = msg[len(topic) :]
             yield Frame(
@@ -263,8 +238,7 @@ async def zmq(
             )
             k += 1
     finally:
-        stop.set()
-        thread.join(timeout=1.0)
+        sock.close(linger=0)
 
 
 # --------------------------------------------------------------------------- #
@@ -279,10 +253,10 @@ class _Sink(Block):
     def close(self) -> Any:  # pragma: no cover - overridden
         pass
 
-    def __enter__(self) -> "_Sink":
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
 
@@ -308,7 +282,15 @@ class wav_sink(_Sink):
             return self.path
         x = np.concatenate(self.chunks)
         if self.dtype.kind in "iu" and x.dtype.kind == "f":
-            x = (np.clip(x, -1, 1) * np.iinfo(self.dtype).max).astype(self.dtype)
+            info = np.iinfo(self.dtype)
+            if self.dtype.kind == "u":
+                midpoint = (info.max + 1) / 2
+                x = np.clip(
+                    np.rint(np.clip(x, -1, 1) * midpoint + midpoint), 0, info.max
+                )
+                x = x.astype(self.dtype)
+            else:
+                x = (np.clip(x, -1, 1) * info.max).astype(self.dtype)
         wavfile.write(self.path, int(self.rate or 1), x)
         return self.path
 
@@ -333,7 +315,7 @@ class csv_log(_Sink):
     def __init__(self, path: str, fields: Any = None) -> None:
         self.path = path
         self.fields = list(fields) if fields else None
-        self._fh = open(path, "w", newline="")
+        self._fh = open(path, "w", newline="")  # noqa: SIM115  (closed by the sink)
         self._writer: csv.DictWriter | None = None
         super().__init__(self._add, "csv_log")
 

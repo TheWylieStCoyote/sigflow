@@ -15,18 +15,6 @@ What this exercises
   * `on_error="drop"` on a block vs. propagating by default
   * a block that catches its own exception and emits a warning instead of failing
 
-## Output
-
-Files the script writes when run:
-
-![robustness_graph.svg](assets/15_robustness/robustness_graph.svg)
-
-*`robustness_graph.svg`*
-
-![routing_graph.svg](assets/15_robustness/routing_graph.svg)
-
-*`routing_graph.svg`*
-
 ## Source
 
 ```python
@@ -46,12 +34,14 @@ What this exercises
   * a block that catches its own exception and emits a warning instead of failing
 """
 
+from collections.abc import Iterator
+
 import numpy as np
 
-from sigflow import Frame, Framed, MISSING, Sig, Stream, block, source, run, when
-from sigflow import dsp
+from sigflow import Frame, Framed, Sig, block, dsp, run, source, when
+from sigflow.dims import N
 
-N = 128
+N_SAMPLES = 128
 
 
 # --------------------------------------------------------- a flaky device
@@ -70,17 +60,19 @@ class Device:
 
     def read(self) -> np.ndarray:
         if self.k >= self.lifetime:
-            raise IOError("device reset")
+            raise OSError("device reset")
         self.k += 1
         snr = 20 if self.rng.random() > 0.3 else 0  # occasional low-SNR frames
-        x = np.sin(2 * np.pi * 5 * np.arange(N) / N) + 10 ** (
+        x = np.sin(2 * np.pi * 5 * np.arange(N_SAMPLES) / N_SAMPLES) + 10 ** (
             -snr / 20
-        ) * self.rng.normal(size=N)
+        ) * self.rng.normal(size=N_SAMPLES)
         return x
 
 
 @source(total=lambda frames, **_: frames)
-def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[float, "N"]:
+def watchdog(
+    frames: int = 60, max_restarts: int = 5, seed: int = 0
+) -> Iterator[Sig[float, N]]:
     """Read from the device; when it dies, re-open it and continue. The restart count
     rides along as a stream annotation and the frame right after a restart carries a
     warning so downstream (and the lineage) know the stream was interrupted."""
@@ -90,13 +82,15 @@ def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[floa
     while k < frames:
         try:
             x = dev.read()
-        except IOError as e:
+        except OSError as e:
             if restarts >= max_restarts:
                 raise  # give up: the stream ends with a failed frame
             restarts += 1
             dev = Device(seed)
             yield Frame(
-                np.zeros(N), meta={"seq": k, "gap": True}, stream={"restarts": restarts}
+                np.zeros(N_SAMPLES),
+                meta={"seq": k, "gap": True},
+                stream={"restarts": restarts},
             ).with_issue(f"{e}; restarted ({restarts})", "warning", "watchdog")
             k += 1
             continue
@@ -108,7 +102,7 @@ def watchdog(frames: int = 60, max_restarts: int = 5, seed: int = 0) -> Sig[floa
 
 
 @block
-def assess(f: Framed[Sig[float, "N"]]) -> Sig[float, "N"]:
+def assess(f: Framed[Sig[float, N]]) -> Sig[float, N]:
     """Estimate SNR crudely and tag the frame; a gap frame is tagged as such."""
     x = f.data
     X = np.abs(np.fft.rfft(x))
@@ -118,7 +112,7 @@ def assess(f: Framed[Sig[float, "N"]]) -> Sig[float, "N"]:
 
 
 @block
-def precise_frequency(x: Sig[float, "N"]) -> Sig[dict]:
+def precise_frequency(x: Sig[float, N]) -> Sig[dict]:
     """Interpolated FFT peak: accurate, but fragile when the peak is buried."""
     X = np.abs(np.fft.rfft(x))
     k = int(np.argmax(X[1:-1])) + 1
@@ -131,14 +125,14 @@ def precise_frequency(x: Sig[float, "N"]) -> Sig[dict]:
 
 
 @block
-def robust_frequency(x: Sig[float, "N"]) -> Sig[dict]:
+def robust_frequency(x: Sig[float, N]) -> Sig[dict]:
     """Zero-crossing count: coarse, but never fails."""
     zc = np.count_nonzero(np.diff(np.signbit(x)))
     return {"bin": zc / 2, "method": "robust"}
 
 
 @block
-def guarded(f: Framed[Sig[float, "N"]]) -> Sig[dict]:
+def guarded(f: Framed[Sig[float, N]]) -> Sig[dict]:
     """A block that handles its own exception: on failure it emits a warning frame with
     a fallback value rather than a failed frame."""
     try:

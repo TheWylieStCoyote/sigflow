@@ -4,17 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sigflow"
-version = "0.3.0"
+version = "0.5.0"
 description = "Typed, functional, generator-based signal-processing graphs for Python"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
 
 [project.optional-dependencies]
 notebook = ["ipython", "jupyter", "ipywidgets"]
 test = ["pytest"]
 perf = ["greenlet"] # sync generator stream blocks run inline on the event loop
-zmq = ["pyzmq"] # io.zmq / io.zmq_sink
+zmq = [
+  "pyzmq",
+  "tornado; sys_platform == 'win32'", # zmq.asyncio on a Windows proactor loop needs it
+] # io.zmq / io.zmq_sink
+cupy = ["cupy"] # optional CUDA transfers; CUDA-specific wheels may be installed separately
+xarray = ["xarray"] # labelled DataArray payloads: @block(labels=True), default_labels()
 docs = ["mkdocs-material", "pytest"] # python docs/build_docs.py && mkdocs build
 dev = [
   "pytest",
@@ -24,6 +29,8 @@ dev = [
   "nbconvert",
   "greenlet",
   "pyzmq",
+  "xarray",
+  "dask[array]",
   "mkdocs-material",
 ]
 
@@ -39,17 +46,22 @@ testpaths = ["tests"]
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
-# Sig[...] reads as np.ndarray to checkers (see types.py); the symbolic dimension
-# strings ("N") and tuple return annotations are the DSL parts they cannot read.
-# A block's return annotation is a *contract* (Sig[float, ()] may be returned as a
-# float, Sig[dict] as a dict, any output as a Frame), not the body's Python return
-# type, so return-value checking is off for the package.
-disable_error_code = [
-  "name-defined",
-  "valid-type",
-  "misc",
-  "type-arg",
-  "syntax",
-  "has-type",
-  "return-value",
-]
+mypy_path = "src"             # resolve sigflow from this checkout, installed or not
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+include = ["src", "tests", "examples"]
+extraPaths = [
+  "src",
+] # resolve sigflow from this checkout, whatever interpreter is selected
+reportMissingModuleSource = false
+
+[tool.ruff]
+extend-exclude = ["*.ipynb"]  # notebooks are edited in Jupyter, not linted
+
+[tool.ruff.lint]
+# Errors are data in sigflow: the runtime catches everything a block raises and
+# attaches it to the frame, and best-effort cleanup (sockets, widgets, figures)
+# must not raise. Broad catches are the policy, not an oversight.
+ignore = ["BLE001", "S110"]

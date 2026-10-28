@@ -1,10 +1,11 @@
 import os
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 import pytest
 
-from sigflow import Sig, TypeMismatch, run, source
-from sigflow import dsp, linalg, plot
+from sigflow import Sig, TypeMismatch, dsp, linalg, plot, run, source
 
 
 def test_dsp_chain_types_and_metadata():
@@ -45,11 +46,11 @@ def test_collect_sink():
 
 def test_linalg_shape_contracts():
     @source
-    def A() -> Sig[float, (3, 4)]:
+    def A() -> Iterator[Sig[float, tuple[Literal[3], Literal[4]]]]:
         yield np.arange(12.0).reshape(3, 4)
 
     @source
-    def b() -> Sig[float, (4,)]:
+    def b() -> Iterator[Sig[float, tuple[Literal[4]]]]:
         yield np.ones(4)
 
     out = run((A() & b()) >> linalg.matvec)
@@ -73,8 +74,7 @@ def test_plot_blocks_record_frames_and_animate(tmp_path):
     s = plot.spectrum()
     run(dsp.chirp(frames=4, n=128) >> p >> dsp.to_complex >> s)
     assert len(p.frames) == 4 and len(s.frames) == 4
-    anim = p.animate(interval=50)
-    assert anim is not None
+    assert p.animate(interval=50).to_jshtml()  # rendered, not just built
     path = p.save(str(tmp_path / "a.gif"), interval=50)
     assert os.path.getsize(path) > 0
     assert "<img" in p._repr_html_()

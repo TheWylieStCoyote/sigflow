@@ -12,12 +12,16 @@ What this exercises
     input frame — the right shape for multi-port, multi-rate outputs
 """
 
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 import scipy.signal as ss
 
 from sigflow import (
     Frame,
     Sig,
+    SignalType,
     Stream,
     TypeMismatch,
     block,
@@ -27,26 +31,29 @@ from sigflow import (
     run,
     source,
 )
+from sigflow.dims import K, N
 
 FS = 48_000.0
 M = 4  # channels
 
 
 def channel_type(M: int, rate: float, n: int):
-    return tuple(Sig[complex, (n // M,), rate / M] for _ in range(M))
+    return tuple(SignalType(complex, (n // M,), rate / M) for _ in range(M))
 
 
 @block(refine=lambda M, rate, n, **_: channel_type(M, rate, n))
 def channelizer(
-    xs: Stream[Sig[complex, "N", None]],
+    xs: Stream[Sig[complex, N, None]],
     M: int = M,
     rate: float = FS,
     n: int = 1024,
     taps_per_phase: int = 16,
-) -> tuple:
+) -> Iterator[tuple]:
     """Polyphase (critically sampled) channelizer: N complex samples at `rate` in,
     M frames of N/M samples at rate/M out, one per channel, as one tuple frame."""
-    h = ss.firwin(M * taps_per_phase, 1.0 / M)  # prototype low-pass, cutoff fs/(2M)
+    h = np.asarray(
+        ss.firwin(M * taps_per_phase, 1.0 / M)
+    )  # prototype low-pass, cutoff fs/(2M)
     poly = h.reshape(taps_per_phase, M)  # poly[j, rho] = h[j*M + rho]
     hist = np.zeros((taps_per_phase, M), dtype=complex)
     for x in xs:
@@ -60,22 +67,24 @@ def channelizer(
         yield tuple(chans[:, k] for k in range(M))
 
 
-@block(refine=lambda up, down, rate, **_: Sig[float, None, rate * up / down])
+@block(refine=lambda up, down, rate, **_: SignalType(float, None, rate * up / down))
 def resample(
-    x: Sig[float, "N", None], up: int = 1, down: int = 1, rate: float = FS
+    x: Sig[float, N, None], up: int = 1, down: int = 1, rate: float = FS
 ) -> Sig[float, None, None]:
     """Rational resampler whose declared output rate follows its configuration."""
     return ss.resample_poly(x, up, down)
 
 
 @block
-def needs_48k(x: Sig[float, None, 48_000]) -> Sig[float, ()]:
+def needs_48k(x: Sig[float, None, Literal[48_000]]) -> Sig[float, tuple[()]]:
     """A consumer with a hard rate requirement in its type."""
     return float(np.sqrt(np.mean(x**2)))
 
 
 @source(total=lambda frames, **_: frames)
-def multitone(frames: int = 40, n: int = 1024, rate: float = FS) -> Sig[complex, "N"]:
+def multitone(
+    frames: int = 40, n: int = 1024, rate: float = FS
+) -> Iterator[Sig[complex, N]]:
     """Three carriers, each sitting in a different channelizer bin."""
     t0 = 0
     for k in range(frames):
@@ -93,7 +102,7 @@ def multitone(frames: int = 40, n: int = 1024, rate: float = FS) -> Sig[complex,
 
 
 @block
-def tone_freq(c: Sig[complex, "K", None]) -> Sig[dict]:
+def tone_freq(c: Sig[complex, K, None]) -> Sig[dict]:
     """Where is the energy within a channel (Hz relative to the channel centre)?"""
     X = np.fft.fftshift(np.abs(np.fft.fft(c)))
     f = np.fft.fftshift(np.fft.fftfreq(len(c), 1 / (FS / M)))

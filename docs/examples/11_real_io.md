@@ -12,14 +12,6 @@ What this exercises
   * provenance across the file boundary: the output frame knows the file and offset it
     came from
 
-## Output
-
-Files the script writes when run:
-
-![real_io_graph.svg](assets/11_real_io/real_io_graph.svg)
-
-*`real_io_graph.svg`*
-
 ## Source
 
 ```python
@@ -43,8 +35,7 @@ import time
 import numpy as np
 from scipy.io import wavfile
 
-from sigflow import Sig, block, run
-from sigflow import dsp, io
+from sigflow import dsp, io, run
 
 WORK = tempfile.mkdtemp(prefix="sigflow_io_")
 RATE = 16_000
@@ -74,9 +65,10 @@ if __name__ == "__main__":
     with wav_out, log:
         out = run(g, progress=True)
     rate, y = wavfile.read(wav_out.path)
+    with open(log.path, encoding="utf-8") as fh:
+        rows = sum(1 for _ in fh) - 1
     print(
-        f"\nwrote {wav_out.path}: {len(y)} samples at {rate} Hz;  {log.path}: "
-        f"{sum(1 for _ in open(log.path)) - 1} rows"
+        f"\nwrote {wav_out.path}: {len(y)} samples at {rate} Hz;  {log.path}: {rows} rows"
     )
     f = out[-1]
     print(

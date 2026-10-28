@@ -10,10 +10,12 @@ What this exercises
   * provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
 """
 
+from collections.abc import Iterator
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, block, port, run, source
-from sigflow import linalg, plot
+from sigflow import Frame, Framed, Sig, block, linalg, plot, port, run, source
+from sigflow.dims import G, K, M, N, T
 
 N_SENSORS, N_SNAP = 8, 200
 TRUE_DOAS = (-30.0, 10.0, 45.0)  # degrees
@@ -27,7 +29,7 @@ def steering(theta_deg: float, n: int = N_SENSORS) -> np.ndarray:
 @source(total=lambda frames, **_: frames)
 def array_snapshots(
     frames: int = 6, snr_db: float = 10.0, seed: int = 4
-) -> Sig[complex, ("M", "N")]:
+) -> Iterator[Sig[complex, tuple[M, N]]]:
     """M snapshots of an N-element uniform linear array with three sources; the
     middle source fades out over the frames so the model order changes."""
     rng = np.random.default_rng(seed)
@@ -53,33 +55,33 @@ def array_snapshots(
 eigh = block(
     np.linalg.eigh,
     name="eigh",
-    inputs=Sig["T", ("N", "N")],
-    outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]},
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
 )
 
 
 @block
-def model_order(vals: Sig[float, "N"], gap_db: float = 10.0) -> Sig[int]:
+def model_order(vals: Sig[float, N], gap_db: float = 10.0) -> Sig[int]:
     """Count signal eigenvalues: those more than `gap_db` above the smallest (noise) one."""
     db = 10 * np.log10(vals / vals.min())
     return int(np.sum(db > gap_db))
 
 
 @block
-def noise_subspace(vecs: Sig["T", ("N", "N")], order: Sig[int]) -> Sig["T", ("N", "K")]:
+def noise_subspace(vecs: Sig[T, tuple[N, N]], order: Sig[int]) -> Sig[T, tuple[N, K]]:
     """Eigenvectors spanning the noise subspace: all but the `order` largest."""
     return vecs[:, : vecs.shape[1] - order]
 
 
 @block
-def music_spectrum(En: Sig["T", ("N", "K")]) -> Sig[float, "G"]:
+def music_spectrum(En: Sig[T, tuple[N, K]]) -> Sig[float, G]:
     A = np.stack([steering(th) for th in GRID], axis=1)  # N x G
     proj = En.conj().T @ A  # K x G
     return 1.0 / np.maximum(np.sum(np.abs(proj) ** 2, axis=0), 1e-12)
 
 
 @block
-def peaks(f: Framed[Sig[float, "G"]], order: Sig[int]) -> Sig[dict]:
+def peaks(f: Framed[Sig[float, G]], order: Sig[int]) -> Sig[dict]:
     p = f.data
     idx = [i for i in range(1, len(p) - 1) if p[i] > p[i - 1] and p[i] >= p[i + 1]]
     best = sorted(idx, key=lambda i: -p[i])[:order]
@@ -110,7 +112,7 @@ if __name__ == "__main__":
     # selectors does the routing, and the second fan-out re-exports the order so the
     # peak picker can use it alongside the spectrum.
     spectrum = plot.custom(
-        draw_spectrum, name="spectrum", in_type=Sig[float, "G"], figsize=(7, 3.2)
+        draw_spectrum, name="spectrum", in_type=Sig[float, G], figsize=(7, 3.2)
     )
     g = (
         decomposition

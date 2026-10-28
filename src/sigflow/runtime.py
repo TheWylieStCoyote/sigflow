@@ -25,13 +25,14 @@ import inspect
 import queue
 import threading
 import time
-from typing import Any, AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any, NoReturn, cast
 
 import numpy as np
 
 from .block import BlockDef
-from .control import Knob, live
-from .frame import MISSING, Frame, Issue, Provenance, frozen, merge_annotations
+from .control import live
+from .frame import MISSING, Frame, Issue, Provenance, Tags, merge_annotations
 from .graph import (
     Align,
     Block,
@@ -45,15 +46,30 @@ from .graph import (
     Slice,
     Source,
     StreamSlice,
+    Switch,
     When,
     Zip,
 )
 from .progress import Monitor, Reporter
-from .types import Env, SignalType, TupleType, TypeMismatch
+from .types import Env, TypeMismatch, tag_names
 
-__all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
+__all__ = ["RunOptions", "Runner", "arun", "iterate", "iterate_sync", "run"]
 
 _DONE = object()
+
+
+def _reraise(failure: asyncio.Future[Any]) -> NoReturn:
+    """Raise the error a member recorded in the shared failure future."""
+    exc = failure.exception()
+    assert exc is not None
+    raise exc
+
+
+def _unwrap(item: Any) -> Any:
+    """A queue item: re-raise a forwarded ``("error", exc)``; anything else is data."""
+    if isinstance(item, tuple) and len(item) == 2 and item[0] == "error":
+        raise item[1]
+    return item
 
 
 class RunOptions:
@@ -67,6 +83,7 @@ class RunOptions:
         resume: Any = None,
         strict: bool = False,
         provenance: str = "full",
+        labels: bool | None = None,
     ) -> None:
         if provenance not in ("full", "roots", "off"):
             raise ValueError("provenance must be 'full', 'roots' or 'off'")
@@ -85,6 +102,18 @@ class RunOptions:
         self.monitor = monitor or Monitor()
         self.queue_size = queue_size
         self.env = Env()
+        # blocks with an unset ``labels`` option follow the run; the package default
+        # is read once here, so the choice travels with the run (threads, workers)
+        if labels is None:
+            from .xarray import current_default
+
+            labels = current_default()
+        self.labels = bool(labels)
+
+
+# every keyword ``RunOptions`` takes, so entry points that filter their options
+# (``iterate``) cannot drift from its signature
+_RUN_OPTIONS = tuple(inspect.signature(RunOptions.__init__).parameters)[1:]
 
 
 # --------------------------------------------------------------------------- #
@@ -92,12 +121,19 @@ class RunOptions:
 # --------------------------------------------------------------------------- #
 
 
+def _is_factory(obj: object) -> bool:
+    """A callable that is not itself iterable: call it to get the iterable."""
+    return (
+        callable(obj) and not hasattr(obj, "__iter__") and not hasattr(obj, "__aiter__")
+    )
+
+
 async def aiter_any(obj: Any, threaded: bool = False) -> AsyncIterator[Any]:
     """Iterate anything — sync or async iterable, generator or factory — asynchronously."""
-    if callable(obj) and not hasattr(obj, "__iter__") and not hasattr(obj, "__aiter__"):
-        obj = obj()
+    if _is_factory(obj):
+        obj = cast(Any, obj())
         if inspect.isawaitable(obj):
-            obj = await obj
+            obj = cast(Any, await obj)
     if hasattr(obj, "__aiter__"):
         async for item in obj:
             yield item
@@ -178,6 +214,13 @@ class Runner:
         if isinstance(node, When):
             assert upstream is not None
             return self._when(node, upstream)
+        if isinstance(node, Switch):
+            assert upstream is not None
+            return (
+                self._switch_ordered(node, upstream)
+                if node.ordered
+                else self._switch(node, upstream)
+            )
         raise TypeError(f"cannot run {node!r}")
 
     async def _stream_slice(
@@ -290,6 +333,8 @@ class Runner:
         Provenance still gets one node per block; annotations are merged once."""
         stats_ = [self.mon.stats(n.name, n) for n in nodes]
         policies = [self._policy(n) for n in nodes]
+        calls = [n.defn.resolve_call(self.opts.labels) for n in nodes]
+        needs = [bool(tag_names(n.in_type)) for n in nodes]  # input tag requirements
         seqs = [0] * len(nodes)
         check_first = self.opts.check == "first"
         check_all = self.opts.check == "all"
@@ -298,8 +343,6 @@ class Runner:
             value: Any = f.data
             frame = f  # the current frame as a *framed* block would see it
             failed = f.failed
-            keep_samples = True
-            cfg_used: list = []
             for i, node in enumerate(nodes):
                 st = stats_[i]
                 st.inp += 1
@@ -311,6 +354,8 @@ class Runner:
                     seqs[i] += 1
                     st.out += 1
                     continue
+                if needs[i] and (check_all or (check_first and st.out == 0)):
+                    _check_required(node.in_type, frame, f"{node.name} input")
                 t0 = time.perf_counter()
                 try:
                     if d.framed and (frame.data is not value or frame.prov is not prov):
@@ -319,7 +364,7 @@ class Runner:
                         )  # materialize what a framed block sees
                     arg = frame if d.framed else value
                     cfg = live(node.given) if node.live else node.given
-                    result = d.fn(arg, **cfg)
+                    result = calls[i](arg, **cfg)
                 except Exception as e:
                     st.errors += 1
                     st.time += time.perf_counter() - t0
@@ -354,14 +399,15 @@ class Runner:
                 )
                 seqs[i] += 1
                 if isinstance(result, Frame):
-                    frame = result.evolve(prov=prov)
+                    frame = _stamp_tags(result.evolve(prov=prov), node.name, (frame,))
                     value = result.data
                 else:
                     value = result
-                    if not d.keep_samples and frame.samples:
+                    if not d.keep_samples and (frame.samples or frame.tags):
                         frame = _clear_samples(frame)
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
+                frame = _drop_cleared(frame, node.out_type)
                 if (
                     check_all or (check_first and st.out == 0)
                 ) and value is not MISSING:
@@ -369,6 +415,7 @@ class Runner:
                         node.out_type.check(
                             value, self.opts.env, where=f"{node.name} output"
                         )
+                        _check_tags(node.out_type, frame, where=f"{node.name} output")
                     except TypeMismatch as e:
                         raise TypeMismatch(f"runtime check failed: {e}") from None
                 st.out += 1
@@ -445,12 +492,9 @@ class Runner:
                         await queues[(dst, slot)].put(item)
                     for q in outs:
                         await q.put(f)
-            except asyncio.CancelledError:
-                # cancelled by the graph's own teardown (below): not a member failure
-                raise
-            except BaseException as e:  # noqa: BLE001
-                # a failure is recorded once for the whole graph; every consumer checks
-                # it, so the run re-raises instead of ending quietly
+            except BaseException as e:
+                # a failure (or cancellation) is recorded once for the whole graph; every
+                # consumer checks it, so the run re-raises instead of ending quietly
                 if not failure.done():
                     failure.set_exception(e)
                 for q in [queues[(dst, slot)] for _, dst, slot in edges] + outs:
@@ -495,7 +539,7 @@ class Runner:
                 assert direct_stream is not None
                 async for f in direct_stream:
                     if failure.done():
-                        raise failure.exception()  # type: ignore[misc]
+                        _reraise(failure)
                     if sel is not None:
                         f = _select_frame(f, sel)
                     if stats is None:
@@ -508,32 +552,33 @@ class Runner:
                             )
                         )
                 if failure.done():
-                    raise failure.exception()  # type: ignore[misc]
+                    _reraise(failure)
             elif len(g.outputs) == 1:
                 q = out_qs[g.outputs[0].name]
                 key = g.outputs[0].key
                 while True:
                     if failure.done():
-                        raise failure.exception()  # type: ignore[misc]
+                        _reraise(failure)
                     it = await q.get()
                     if it is _DONE:
                         if failure.done():
-                            raise failure.exception()  # type: ignore[misc]
+                            _reraise(failure)
                         return
-                    if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-                        raise it[1]
-                    f = (
-                        _select_frame(it, Select(g.members[g.outputs[0].name], key))
-                        if key is not None
-                        else it
-                    )
+                    frame: Frame = _unwrap(it)
+                    if key is not None:
+                        frame = _select_frame(
+                            frame, Select(g.members[g.outputs[0].name], key)
+                        )
                     if stats is None:
-                        yield f  # lowered operator tree: no wrapper node
+                        yield frame  # lowered operator tree: no wrapper node
                     else:
                         stats.out += 1
-                        yield f.evolve(
+                        yield frame.evolve(
                             prov=Provenance(
-                                g.name, {}, (f.prov,) if f.prov else (), stats.out - 1
+                                g.name,
+                                {},
+                                (frame.prov,) if frame.prov else (),
+                                stats.out - 1,
                             )
                         )
             else:
@@ -551,11 +596,9 @@ class Runner:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
-            if failure.done():
-                failure.exception()  # retrieved: the consumer raised first
 
     # -- per-frame sub-pipelines (feedback / when) ------------------------- #
-    def _subpipe(self, node: Node) -> "_SubPipe":
+    def _subpipe(self, node: Node) -> _SubPipe:
         return _SubPipe(self, node)
 
     async def _feedback(
@@ -584,6 +627,7 @@ class Runner:
                         "loop", {}, tuple(p.prov for p in (f, state) if p.prov), seq
                     ),
                     parts=(f, state),
+                    tags=f.tags.whole(),
                 )
                 out = await body.one(pair)
                 if out is None:
@@ -647,6 +691,147 @@ class Runner:
             if other is not None:
                 await other.close()
 
+    # -- keyed routing ------------------------------------------------------ #
+    _NOKEY = object()
+
+    def _route(self, node: Switch, f: Frame) -> tuple[Any, Frame]:
+        """Pick the branch key for a frame; a selector error marks the frame as failed."""
+        try:
+            key = node.key_of(f)
+        except Exception as e:
+            issue = Issue(f"{type(e).__name__}: {e}", "error", node.name, e, f.prov)
+            return self._NOKEY, f.evolve(data=MISSING, issues=f.issues + (issue,))
+        return (key if key in node.branches else self._NOKEY), f
+
+    async def _switch(
+        self, node: Switch, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Concurrent routing: each branch is a real stream fed by its own queue; outputs are
+        merged in completion order (frames routed to one branch keep their order)."""
+        stats = self.mon.stats(node.name, node)
+        outq: asyncio.Queue = asyncio.Queue()
+        inqs: dict[Any, asyncio.Queue] = {}
+        tasks: list[asyncio.Task] = []
+        labels: dict[Any, str] = {}
+
+        async def feed(q: asyncio.Queue) -> AsyncIterator[Frame]:
+            async for f in _drain(q):
+                yield f
+
+        async def drive(label: str, branch: Node, q: asyncio.Queue) -> None:
+            try:
+                async for f in self.compile(branch, feed(q)):
+                    await outq.put((label, f))
+            except BaseException as e:
+                await outq.put(("error", e))
+                raise
+            finally:
+                await outq.put(_DONE)
+
+        members: list[tuple[Any, str, Node]] = [
+            (k, repr(k), b) for k, b in node.branches.items()
+        ]
+        if isinstance(node.default, Node):
+            members.append((self._NOKEY, "default", node.default))
+        for key, label, branch in members:
+            q: asyncio.Queue = asyncio.Queue(maxsize=self.opts.queue_size)
+            inqs[key], labels[key] = q, label
+            tasks.append(asyncio.create_task(drive(label, branch, q)))
+        live_ = len(tasks)
+
+        async def router() -> None:
+            try:
+                async for f in upstream:
+                    stats.inp += 1
+                    key, f = self._route(node, f)
+                    if key is self._NOKEY and self._NOKEY not in inqs:
+                        if node.default == "pass":
+                            await outq.put(("pass", f))
+                        elif self.opts.strict:
+                            raise KeyError(
+                                f"{node.name}: no branch for key {node.key_of(f)!r} and no default"
+                            )
+                        continue  # dropped
+                    await inqs[key].put(f)
+            except BaseException as e:
+                await outq.put(("error", e))
+                raise
+            finally:
+                for q in inqs.values():
+                    await q.put(_DONE)
+                await outq.put(_DONE)
+
+        rt = asyncio.create_task(router())
+        live_ += 1
+        seq = 0
+        try:
+            while live_:
+                it = await outq.get()
+                if it is _DONE:
+                    live_ -= 1
+                    continue
+                label, f = it
+                if label == "error":
+                    raise f
+                stats.out += 1
+                yield f.evolve(
+                    prov=Provenance(
+                        f"{node.name}[{label}]", {}, (f.prov,) if f.prov else (), seq
+                    )
+                )
+                seq += 1
+        finally:
+            for t in [rt, *tasks]:
+                t.cancel()
+            for t in [rt, *tasks]:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _switch_ordered(
+        self, node: Switch, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """Ordered routing: one frame at a time through 1:1 branches, like when()."""
+        stats = self.mon.stats(node.name, node)
+        pipes = {k: self._subpipe(b) for k, b in node.branches.items()}
+        dflt = self._subpipe(node.default) if isinstance(node.default, Node) else None
+        seq = 0
+        try:
+            async for f in upstream:
+                stats.inp += 1
+                key, f = self._route(node, f)
+                if key is self._NOKEY:
+                    if dflt is not None:
+                        out, label = await dflt.one(f), "default"
+                    elif node.default == "pass":
+                        out, label = f, "pass"
+                    elif self.opts.strict:
+                        raise KeyError(
+                            f"{node.name}: no branch for key {node.key_of(f)!r} and no default"
+                        )
+                    else:
+                        continue
+                else:
+                    out, label = await pipes[key].one(f), repr(key)
+                if out is None:
+                    continue
+                yield out.evolve(
+                    prov=Provenance(
+                        f"{node.name}[{label}]",
+                        {},
+                        (out.prov,) if out.prov else (),
+                        seq,
+                    )
+                )
+                stats.out += 1
+                seq += 1
+        finally:
+            for p in pipes.values():
+                await p.close()
+            if dflt is not None:
+                await dflt.close()
+
     async def _select(
         self, node: Select, upstream: AsyncIterator[Frame]
     ) -> AsyncIterator[Frame]:
@@ -669,7 +854,7 @@ class Runner:
                 # the selected branch comes first so lineage follows it; the tuple node stays reachable
                 if node.single:
                     part = parts[node.indices[0]]
-                    parents = _unique(p for p in (part.prov, f.prov) if p is not None)
+                    parents = _unique(p for p in (part.prov, f.prov) if p)
                     yield part.evolve(prov=Provenance(node.name, {}, parents, seq))
                 else:
                     chosen = [parts[i] for i in node.indices]
@@ -707,7 +892,7 @@ class Runner:
         stats = self.mon.stats(node.name, node)
         d = node.defn
         try:
-            produced = d.fn(
+            produced = d.resolve_call(self.opts.labels)(
                 **node.given
             )  # sources get Knob objects and read .value per frame
         except Exception as e:
@@ -775,8 +960,10 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
+        call = d.resolve_call(self.opts.labels)
         policy = self._policy(node)
         seq = 0
+        needs = bool(tag_names(node.in_type))  # input tag requirements
         async for f in upstream:
             stats.inp += 1
             if f.failed and (not d.framed or len(d.inputs) > 1):
@@ -791,13 +978,18 @@ class Runner:
                 seq += 1
                 stats.out += 1
                 continue
+            if needs and (
+                self.opts.check == "all"
+                or (self.opts.check == "first" and stats.out == 0)
+            ):
+                _check_required(node.in_type, f, f"{node.name} input")
             t0 = time.perf_counter()
             try:
                 args = self._args(d, f)
                 cfg = (
                     live(node.given) if node.live else node.given
                 )  # knobs resolved per call
-                result = d.fn(*args, **cfg)
+                result = call(*args, **cfg)
                 if inspect.isawaitable(result):
                     result = await result
             except Exception as e:
@@ -856,12 +1048,16 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
+        call = d.resolve_call(self.opts.labels)
         spec = d.inputs[0]
+        needs = bool(tag_names(node.in_type))  # input tag requirements
         if len(d.inputs) != 1:
             raise TypeError(f"{d.name}: stream blocks take exactly one stream input")
         policy = self._policy(node)
         consumed: list[Frame] = []
         failed_q: asyncio.Queue = asyncio.Queue()
+
+        first_len: list[int] = []
 
         async def frames() -> AsyncIterator[Frame]:
             async for f in upstream:
@@ -871,6 +1067,17 @@ class Runner:
                     # generator that raised cannot be resumed, so it must never see MISSING data.
                     failed_q.put_nowait(f)
                     continue
+                if (
+                    not first_len
+                    and hasattr(f.data, "shape")
+                    and getattr(f.data, "ndim", 0) >= 1
+                ):
+                    first_len.append(len(f.data))
+                if needs and (
+                    self.opts.check == "all"
+                    or (self.opts.check == "first" and stats.out == 0)
+                ):
+                    _check_required(node.in_type, f, f"{node.name} input")
                 yield f
 
         async def items() -> AsyncIterator[Any]:
@@ -883,7 +1090,7 @@ class Runner:
         seq = 0
         try:
             if inspect.isasyncgenfunction(d.fn):
-                agen = d.fn(items(), **node.given)
+                agen = call(items(), **node.given)
                 last: tuple[Frame, ...] = ()
                 async for out in agen:
                     parents, consumed[:] = tuple(consumed) or last, []
@@ -910,7 +1117,7 @@ class Runner:
                     else _run_sync_stream
                 )
                 async for out, parents in driver(
-                    d.fn,
+                    call,
                     node.given,
                     frames(),
                     consumed,
@@ -952,6 +1159,27 @@ class Runner:
         while not failed_q.empty():
             yield self._forward_failed(failed_q.get_nowait(), node, seq)
             seq += 1
+        if self.opts.strict:
+            self._check_ratio(node, stats, first_len[0] if first_len else None)
+
+    def _check_ratio(self, node: Block, stats: Any, n_in: int | None) -> None:
+        """strict=True: a stream block with an exact ratio must have honoured it."""
+        from types import SimpleNamespace
+
+        from .ratio import RatioMismatch
+
+        r = node.ratio_for(
+            SimpleNamespace(shape=(n_in,)) if n_in is not None else node.in_type
+        )
+        if r.kind != "exact" or r.value is None or stats.inp == 0:
+            return
+        v = float(r.value)
+        expected = stats.inp * v
+        if abs(stats.out - expected) > max(1.0, v) + 1:
+            raise RatioMismatch(
+                f"{node.name} declares ratio {r} but emitted {stats.out} frames for "
+                f"{stats.inp} inputs (expected about {expected:.0f})"
+            )
 
     def _forward_failed(self, f: Frame, node: Block, seq: int) -> Frame:
         self.mon.stats(node.name).out += 1
@@ -1004,6 +1232,7 @@ class Runner:
                     merged["issues"],
                     Provenance(op, {}, tuple(f.prov for f in items if f.prov), seq),
                     parts=tuple(items),
+                    tags=merged["tags"],
                 )
                 stats.out += 1
                 seq += 1
@@ -1025,10 +1254,12 @@ class Runner:
 
         inner = node.inner
         d = inner.defn
+        call = d.resolve_call(self.opts.labels)
+        needs = bool(tag_names(inner.in_type))  # input tag requirements
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
         pool = (
-            cf.ProcessPoolExecutor(node.workers)
+            cf.ProcessPoolExecutor(node.workers, mp_context=_worker_context())
             if node.backend == "process"
             else cf.ThreadPoolExecutor(node.workers)
         )
@@ -1098,13 +1329,19 @@ class Runner:
                 if f.failed:
                     pending.append((f, None))
                 else:
+                    if needs and (
+                        self.opts.check == "all"
+                        or (self.opts.check == "first" and stats.out == 0)
+                    ):
+                        _check_required(inner.in_type, f, f"{inner.name} input")
                     cfg = live(inner.given) if inner.live else dict(inner.given)
                     fut = loop.run_in_executor(
                         pool,
                         _call_block,
-                        d if node.backend == "process" else d.fn,
+                        d if node.backend == "process" else call,
                         f.data,
                         cfg,
+                        self.opts.labels,
                     )
                     pending.append((f, fut))
                 async for out in emit_ready(block_on_first=len(pending) >= node.window):
@@ -1160,6 +1397,7 @@ class Runner:
                             tuple(f.prov for f in items if f.prov),
                             seq,
                         ),
+                        tags=merged["tags"],
                         parts=tuple(items),
                     )
                     stats.out += 1
@@ -1202,11 +1440,12 @@ class Runner:
                 if it is _DONE:
                     live -= 1
                     continue
-                if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-                    raise it[1]
+                merged: Frame = _unwrap(it)
                 stats.out += 1
-                yield it.evolve(
-                    prov=Provenance("merge", {}, (it.prov,) if it.prov else (), seq)
+                yield merged.evolve(
+                    prov=Provenance(
+                        "merge", {}, (merged.prov,) if merged.prov else (), seq
+                    )
                 )
                 seq += 1
         finally:
@@ -1246,18 +1485,29 @@ class Runner:
             out = result.evolve(
                 prov=prov
             )  # a block's output is a new computation, whatever it returned
+            out = _stamp_tags(out, op, parents)
         else:
             ann = merge_annotations(parents, keep_samples=keep_samples)
             out = Frame(
-                result, ann["meta"], ann["stream"], ann["samples"], ann["issues"], prov
+                result,
+                ann["meta"],
+                ann["stream"],
+                ann["samples"],
+                ann["issues"],
+                prov,
+                tags=ann["tags"],
             )
+        out = _drop_cleared(out, out_type)
         # runtime contract check
-        if self.opts.check == "all" or (self.opts.check == "first" and stats.out == 0):
-            if out.data is not MISSING:
-                try:
-                    out_type.check(out.data, self.opts.env, where=f"{op} output")
-                except TypeMismatch as e:
-                    raise TypeMismatch(f"runtime check failed: {e}") from None
+        checked = self.opts.check == "all" or (
+            self.opts.check == "first" and stats.out == 0
+        )
+        if checked and out.data is not MISSING:
+            try:
+                out_type.check(out.data, self.opts.env, where=f"{op} output")
+                _check_tags(out_type, out, where=f"{op} output")
+            except TypeMismatch as e:
+                raise TypeMismatch(f"runtime check failed: {e}") from None
         return out
 
 
@@ -1288,7 +1538,7 @@ class _SubPipe:
         try:
             async for f in self.stream:
                 await self.outq.put(f)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             await self.outq.put(("error", e))
         finally:
             await self.outq.put(_DONE)
@@ -1320,9 +1570,7 @@ class _SubPipe:
                 return None  # dropped by the body
         if item is _DONE:
             return None
-        if isinstance(item, tuple) and len(item) == 2 and item[0] == "error":
-            raise item[1]
-        return item
+        return _unwrap(item)
 
     async def close(self) -> None:
         await self.inq.put(_DONE)
@@ -1333,14 +1581,150 @@ class _SubPipe:
             pass
 
 
-def _call_block(target: Any, data: Any, cfg: dict) -> Any:
-    """Worker-side call (module-level so it pickles for process pools)."""
-    fn = target.fn if isinstance(target, BlockDef) else target
+def _worker_context() -> Any:
+    """How process-pool workers start. The runtime is multi-threaded (an event loop,
+    helper threads), so forking it is unsafe and Python 3.12+ warns; a fork server
+    (Linux) or a fresh interpreter starts workers cleanly. Blocks sent to a worker
+    are re-imported there, which ``backend="process"`` already requires."""
+    import multiprocessing
+
+    try:
+        return multiprocessing.get_context("forkserver")
+    except ValueError:  # no fork server on this platform
+        return multiprocessing.get_context("spawn")
+
+
+def _call_block(target: Any, data: Any, cfg: dict, labels: bool = False) -> Any:
+    """Worker-side call (module-level so it pickles for process pools). A process
+    worker gets the definition and the run's resolved ``labels`` flag."""
+    fn = target.resolve_call(labels) if isinstance(target, BlockDef) else target
     return fn(data, **cfg)
 
 
 def _clear_samples(f: Frame) -> Frame:
-    return Frame(f.data, f.meta, f.stream, {}, f.issues, f.prov, f.parts)
+    """The frame without what only made sense along its leading axis: sample
+    annotations and spanned tags."""
+    return Frame(
+        f.data, f.meta, f.stream, {}, f.issues, f.prov, f.parts, f.tags.whole()
+    )
+
+
+def _stamp_tags(frame: Frame, op: str, parents: tuple[Frame, ...]) -> Frame:
+    """Record ``op`` as the origin of the tags this block attached: those without an
+    origin that no parent already carried."""
+    if not frame.tags:
+        return frame
+    inherited = {id(t) for p in parents for t in p.tags}
+    stamped = [
+        t if t.origin or id(t) in inherited else _with_origin(t, op) for t in frame.tags
+    ]
+    if all(a is b for a, b in zip(stamped, frame.tags)):
+        return frame
+    from dataclasses import replace
+
+    return replace(frame, tags=Tags(stamped))
+
+
+def _with_origin(tag: Any, op: str) -> Any:
+    from dataclasses import replace
+
+    return replace(tag, origin=op)
+
+
+def _drop_cleared(frame: Frame, out_type: Any) -> Frame:
+    """The tags a block's contract clears do not leave it. A tuple output is cleared
+    port by port: a frame that kept its parts has each part cleared, a plain tuple
+    payload gets parts made for it when the ports differ, and the aggregate loses
+    what every port clears."""
+    if not frame.tags and not any(p.tags for p in frame.parts):
+        return frame
+    from dataclasses import replace
+
+    from .types import TupleType, cleared_names
+
+    if isinstance(out_type, TupleType):
+        per = [cleared_names(t) for t in out_type.items]
+        parts = frame.parts
+        if (
+            not parts
+            and isinstance(frame.data, tuple)
+            and len(frame.data) == len(per)
+            and any(p != per[0] for p in per)
+            and any(p & frame.tags.names for p in per)
+        ):
+            parts = tuple(
+                Frame(
+                    d,
+                    frame.meta,
+                    frame.stream,
+                    {},
+                    frame.issues,
+                    frame.prov,
+                    tags=frame.tags,
+                )
+                for d in frame.data
+            )
+        if parts and len(parts) == len(per):
+            cleared = tuple(_drop_cleared(p, t) for p, t in zip(parts, out_type.items))
+            gone = frozenset.intersection(*per)
+            # identity, not ==: comparing frames would compare their arrays
+            unchanged = len(cleared) == len(frame.parts) and all(
+                a is b for a, b in zip(cleared, frame.parts)
+            )
+            if unchanged and not (gone & frame.tags.names):
+                return frame
+            return replace(
+                frame,
+                parts=cleared,
+                tags=Tags(t for t in frame.tags if t.name not in gone),
+            )
+    gone = cleared_names(out_type)
+    if not gone or not (gone & frame.tags.names):
+        return frame
+    return replace(frame, tags=Tags(t for t in frame.tags if t.name not in gone))
+
+
+def _check_tags(out_type: Any, frame: Frame, where: str) -> None:
+    """A guarantee is about whole-frame tags: a span need not reach every frame. A
+    tuple frame with parts is checked port by port."""
+    from .types import TupleType, tag_names
+
+    if (
+        isinstance(out_type, TupleType)
+        and frame.parts
+        and len(frame.parts) == len(out_type.items)
+    ):
+        for i, (t, p) in enumerate(zip(out_type.items, frame.parts)):
+            _check_tags(t, p, f"{where}[{i}]")
+        return
+    missing = tag_names(out_type) - frame.tags.whole().names
+    if missing:
+        raise TypeMismatch(
+            f"{where}: contract guarantees tag(s) {'|'.join(sorted(missing))}, "
+            f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
+        )
+
+
+def _check_required(in_type: Any, frame: Frame, where: str) -> None:
+    """What a block's input contract requires must be on the frame it gets (whole-
+    frame tags; port by port for a tuple frame with parts). Producers' output checks
+    cover this in a graph; this guards frames that reach a block another way."""
+    from .types import TupleType, tag_names
+
+    if (
+        isinstance(in_type, TupleType)
+        and frame.parts
+        and len(frame.parts) == len(in_type.items)
+    ):
+        for i, (t, p) in enumerate(zip(in_type.items, frame.parts)):
+            _check_required(t, p, f"{where}[{i}]")
+        return
+    missing = tag_names(in_type) - frame.tags.whole().names
+    if missing:
+        raise TypeMismatch(
+            f"runtime check failed: {where}: needs tag(s) {'|'.join(sorted(missing))}, "
+            f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
+        )
 
 
 def _select_frame(f: Frame, node: Select) -> Frame:
@@ -1383,19 +1767,17 @@ def _unique(items: Any) -> tuple:
 
 
 async def _drain(
-    q: asyncio.Queue, failure: "asyncio.Future | None" = None
+    q: asyncio.Queue, failure: asyncio.Future | None = None
 ) -> AsyncIterator[Frame]:
     while True:
         if failure is not None and failure.done():
-            raise failure.exception()  # type: ignore[misc]
+            _reraise(failure)
         it = await q.get()
         if it is _DONE:
             if failure is not None and failure.done():
-                raise failure.exception()  # type: ignore[misc]
+                _reraise(failure)
             return
-        if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-            raise it[1]
-        yield it
+        yield _unwrap(it)
 
 
 try:
@@ -1415,6 +1797,7 @@ async def _run_inline_stream(
     """Run a synchronous generator stream block *on the event loop* with greenlet: the
     generator's pull for input switches back here, we await the next frame, and switch it
     in. No thread, no queues — a few microseconds per frame instead of hundreds."""
+    assert _greenlet is not None  # only reached when greenlet is installed
     parent = _greenlet.getcurrent()
     NEED, OUT, DONE_ = "need", "out", "done"
 
@@ -1489,7 +1872,7 @@ async def _run_sync_stream(
                     parents, consumed[:] = tuple(consumed) or last, []
                     last = parents
                 loop.call_soon_threadsafe(outq.put_nowait, ("item", out, parents))
-        except BaseException as e:  # noqa: BLE001 - forwarded to the loop
+        except BaseException as e:
             loop.call_soon_threadsafe(outq.put_nowait, ("error", e, ()))
         finally:
             loop.call_soon_threadsafe(outq.put_nowait, ("done", None, ()))
@@ -1543,23 +1926,7 @@ def _length_of(obj: Any) -> int | None:
 def iterate(graph: Node, **options: Any) -> AsyncIterator[Frame]:
     """Async iterator over the output frames of a graph."""
     graph.validate()
-    opts = RunOptions(
-        **{
-            k: v
-            for k, v in options.items()
-            if k
-            in (
-                "check",
-                "on_error",
-                "monitor",
-                "queue_size",
-                "control",
-                "resume",
-                "strict",
-                "provenance",
-            )
-        }
-    )
+    opts = RunOptions(**{k: v for k, v in options.items() if k in _RUN_OPTIONS})
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE
 
@@ -1589,6 +1956,12 @@ async def arun(
     mon = opts.monitor
     mon.total = total
     graph.validate()
+    try:
+        mon.ratio = (
+            graph.ratio
+        )  # scales the sources' totals into an expected output count
+    except Exception:  # pragma: no cover - never let a ratio bug stop a run
+        mon.ratio = None
     graph.last_monitor = mon  # type: ignore[attr-defined]
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE
@@ -1630,7 +2003,7 @@ def run(graph: Node, **kw: Any) -> list[Frame]:
     def target() -> None:
         try:
             result.append(asyncio.run(coro))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             error.append(e)
 
     t = threading.Thread(target=target, name="sigflow-run")
@@ -1649,7 +2022,7 @@ def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
         try:
             async for f in iterate(graph, **options):
                 await asyncio.get_running_loop().run_in_executor(None, q.put, f)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             q.put(("error", e))
         finally:
             q.put(_DONE)
@@ -1662,6 +2035,4 @@ def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
         it = q.get()
         if it is _DONE:
             return
-        if isinstance(it, tuple) and len(it) == 2 and it[0] == "error":
-            raise it[1]
-        yield it
+        yield _unwrap(it)

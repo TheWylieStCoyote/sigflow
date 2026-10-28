@@ -8,61 +8,68 @@ to write stateful stream blocks as plain generators.
 from __future__ import annotations
 
 import asyncio
+import math
 import time as _time
-from typing import Any, Iterable, Iterator
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
+from fractions import Fraction
+from typing import Any, Literal
 
 import numpy as np
 import scipy.signal as ss
 
+from .block import Framed, block, source, tap
+from .dims import K, M, N, T
+from .frame import Frame, Tag, Tags
+from .graph import Block
+from .ratio import Ratio
+from .types import Sig, SignalType, Stream
+
 complex_ = complex
 
-from .block import Framed, block, source, tap
-from .frame import Frame
-from .graph import Block
-from .types import Sig, Stream
 
 __all__ = [
-    "sine",
-    "noise",
-    "chirp",
-    "impulse",
-    "from_array",
-    "ticker",
-    "chunk",
-    "overlap",
     "buffer",
-    "decimate",
-    "window",
-    "fft",
-    "rfft",
-    "ifft",
-    "magnitude",
-    "power_db",
-    "phase",
-    "real",
-    "imag",
-    "to_complex",
-    "scale",
-    "offset",
-    "mix",
-    "lfilter",
-    "fir",
-    "hilbert",
-    "resample",
-    "energy",
-    "rms",
-    "peak",
-    "running_mean",
+    "chirp",
+    "chunk",
     "clip",
-    "detect_clipping",
-    "printer",
     "collect",
+    "decimate",
+    "detect_clipping",
+    "energy",
+    "fft",
+    "fir",
+    "from_array",
+    "hilbert",
+    "ifft",
+    "imag",
+    "impulse",
+    "lfilter",
+    "magnitude",
+    "mix",
+    "noise",
+    "offset",
+    "overlap",
+    "peak",
+    "phase",
+    "power_db",
+    "printer",
+    "real",
+    "resample",
+    "rfft",
+    "rms",
+    "running_mean",
+    "scale",
+    "sine",
+    "ticker",
     "timestamp",
+    "to_complex",
     "to_units",
+    "window",
 ]
 
-Real = Sig[float, "N"]
-Complex = Sig[complex, "N"]
+Real = Sig[float, N]
+Complex = Sig[complex, N]
 
 
 # --------------------------------------------------------------------------- #
@@ -70,7 +77,7 @@ Complex = Sig[complex, "N"]
 # --------------------------------------------------------------------------- #
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
 def sine(
     freq: float = 1000.0,
     rate: float = 48_000.0,
@@ -78,7 +85,7 @@ def sine(
     frames: int = 10,
     amplitude: float = 1.0,
     phase: float = 0.0,
-) -> Sig[float, "N"]:
+) -> Iterator[Sig[float, N]]:
     """Continuous sine wave delivered in frames of ``n`` samples."""
     t0 = 0
     for i in range(frames):
@@ -92,7 +99,7 @@ def sine(
 
 
 @source(
-    refine=lambda n, complex, **_: Sig[complex_ if complex else float, (n,)],
+    refine=lambda n, complex, **_: SignalType(complex_ if complex else float, (n,)),
     total=lambda frames, **_: frames,
 )
 def noise(
@@ -102,7 +109,7 @@ def noise(
     seed: int | None = None,
     rate: float = 48_000.0,
     complex: bool = False,
-) -> Sig[float, "N"]:
+) -> Iterator[Sig[float, N]]:
     """White Gaussian noise frames."""
     rng = np.random.default_rng(seed)
     for i in range(frames):
@@ -112,14 +119,14 @@ def noise(
         yield Frame(x, meta={"seq": i}, stream={"rate": rate, "source": "noise"})
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
 def chirp(
     f0: float = 100.0,
     f1: float = 5000.0,
     rate: float = 48_000.0,
     n: int = 1024,
     frames: int = 10,
-) -> Sig[float, "N"]:
+) -> Iterator[Sig[float, N]]:
     """Linear chirp sweeping f0 -> f1 across all frames (computed lazily, frame by frame)."""
     t1 = n * frames / rate
     for i in range(frames):
@@ -131,8 +138,8 @@ def chirp(
         )
 
 
-@source(refine=lambda n, **_: Sig[float, (n,)], total=lambda frames, **_: frames)
-def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Sig[float, "N"]:
+@source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
+def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Iterator[Sig[float, N]]:
     for i in range(frames):
         x = np.zeros(n)
         if i == 0:
@@ -143,7 +150,7 @@ def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Sig[float, "N"]:
 @source
 def from_array(
     x: Any, n: int | None = None, rate: float | None = None
-) -> Sig["T", "N"]:
+) -> Iterator[Sig[T, N]]:
     """Emit an array as one frame, or sliced into frames of ``n`` samples."""
     x = np.asarray(x)
     stream = {"rate": rate} if rate else {}
@@ -155,7 +162,7 @@ def from_array(
 
 
 @source(total=lambda count, **_: count)
-async def ticker(period: float = 0.1, count: int = 10) -> Sig[dict]:
+async def ticker(period: float = 0.1, count: int = 10) -> AsyncIterator[Sig[dict]]:
     """Asynchronous source: a dict event every ``period`` seconds (e.g. telemetry)."""
     for i in range(count):
         await asyncio.sleep(period)
@@ -169,13 +176,18 @@ async def ticker(period: float = 0.1, count: int = 10) -> Sig[dict]:
 
 class _Reframer:
     """Shared bookkeeping for re-framing stream blocks: absolute sample position and the
-    time origin of the stream, so every output frame gets an exact ``t0``."""
+    time origin of the stream, so every output frame gets an exact ``t0``, and the
+    tags of every input, as the sample intervals they cover, so an output carries
+    what applies to its samples whichever inputs they came from."""
 
     def __init__(self) -> None:
         self.buf: np.ndarray = np.empty(0)
         self.pos = 0  # absolute index of buf[0] in the stream
+        self.end = 0  # absolute index just past the last sample pushed
         self.origin: float | None = None  # t0 of the first frame seen (its sample 0)
         self.rate: float | None = None
+        # (tag, first sample, one past the last sample, whole-frame on its input?)
+        self.tags: list[tuple[Tag, int, int, bool]] = []
 
     def push(self, f: Frame) -> None:
         x = np.asarray(f.data)
@@ -183,19 +195,83 @@ class _Reframer:
             self.origin = f.meta.get("t0", 0.0) or 0.0
             self.rate = f.stream.get("rate")
         self.buf = x if self.buf.size == 0 else np.concatenate([self.buf, x])
+        first, self.end = self.end, self.end + len(x)
+        if f.tags:
+            window = f.time
+            for t in f.tags:
+                whole = t.span is None
+                i0, i1 = first, self.end
+                if not whole and window is not None and window.rate:
+                    s0, s1 = t.span  # type: ignore[misc]
+                    i0 = first + max(
+                        0, math.ceil(round((s0 - window.t0) * window.rate, 9))
+                    )
+                    i1 = first + min(
+                        len(x), math.ceil(round((s1 - window.t0) * window.rate, 9))
+                    )
+                    if s1 <= s0:  # a point
+                        i1 = i0 + 1
+                if i1 > i0:
+                    self.tags.append((t, i0, i1, whole))
 
     def take(self, f: Frame, n: int, hop: int) -> Frame:
         """The next window of ``n`` samples as a frame stamped with its exact start time,
-        then advance by ``hop``."""
+        then advance by ``hop``. It carries the tags of every input that contributed:
+        spans clipped to the window; a whole-frame tag of an input is whole again on
+        an output its samples cover entirely (adjacent inputs with the same tag and
+        value count together), a span over the covered part otherwise, and nothing
+        when the stream has no time axis to express that part."""
         t0 = (self.origin or 0.0) + (self.pos / self.rate if self.rate else 0.0)
         out = f.evolve(data=self.buf[:n].copy(), meta={"t0": t0, "offset": self.pos})
+        if self.tags:
+            out = replace(out, tags=Tags(self._tags_for(self.pos, self.pos + n, t0)))
         self.buf = self.buf[hop:]
         self.pos += hop
+        self.tags = [r for r in self.tags if r[2] > self.pos]  # consumed: forgotten
+        return out
+
+    def _tags_for(self, lo: int, hi: int, t0: float) -> list[Tag]:
+        out: list[Tag] = []
+        coverage: dict[tuple[str, Any], list[tuple[int, int, Tag]]] = {}
+        for t, i0, i1, whole in self.tags:
+            if i1 <= lo or i0 >= hi:
+                continue
+            if not whole:
+                out.append(t)  # a span: clipped to the window when the frame is made
+                continue
+            coverage.setdefault((t.name, t.value), []).append(
+                (max(i0, lo), min(i1, hi), t)
+            )
+        for runs in coverage.values():
+            runs.sort(key=lambda r: r[0])
+            merged: list[tuple[int, int, Tag]] = []
+            for a, b, t in runs:
+                if merged and a <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], b), t)
+                else:
+                    merged.append((a, b, t))
+            for a, b, t in merged:
+                if a <= lo and b >= hi:
+                    out.append(replace(t, span=None))
+                elif self.rate:
+                    out.append(
+                        replace(
+                            t,
+                            span=(t0 + (a - lo) / self.rate, t0 + (b - lo) / self.rate),
+                        )
+                    )
         return out
 
 
-@block(refine=lambda n, **_: Sig["T", (n,)])
-def chunk(xs: Stream[Framed[Sig["T", None]]], n: int = 256) -> Sig["T", "N"]:
+def _reframe_ratio(
+    n: int, hop: int | None = None, n_in: int | None = None, **_: Any
+) -> Ratio:
+    """Outputs per input of a re-framer, once the input frame length is known."""
+    return Ratio.of(1, Fraction(n_in, hop or n)) if n_in else Ratio.ANY
+
+
+@block(refine=lambda n, **_: SignalType(T, (n,)), ratio=_reframe_ratio)
+def chunk(xs: Stream[Framed[Sig[T, None]]], n: int = 256) -> Iterator[Sig[T, N]]:
     """Re-frame a stream of 1-D arrays into fixed-length frames of ``n`` samples (time kept)."""
     r = _Reframer()
     for f in xs:
@@ -204,10 +280,10 @@ def chunk(xs: Stream[Framed[Sig["T", None]]], n: int = 256) -> Sig["T", "N"]:
             yield r.take(f, n, n)
 
 
-@block(refine=lambda n, **_: Sig["T", (n,)])
+@block(refine=lambda n, **_: SignalType(T, (n,)), ratio=_reframe_ratio)
 def overlap(
-    xs: Stream[Framed[Sig["T", "N"]]], n: int = 256, hop: int = 128
-) -> Sig["T", "M"]:
+    xs: Stream[Framed[Sig[T, N]]], n: int = 256, hop: int = 128
+) -> Iterator[Sig[T, M]]:
     """Sliding windows of length ``n`` advanced by ``hop`` samples; each window's ``t0``
     is exact (computed from the sample position), not inherited from the input chunk."""
     r = _Reframer()
@@ -217,22 +293,29 @@ def overlap(
             yield r.take(f, n, hop)
 
 
-@block(refine=lambda count, **_: Sig["T", (count, "N")])
-def buffer(xs: Stream[Framed[Sig["T", "N"]]], count: int = 8) -> Sig["T", ("K", "N")]:
+@block(
+    refine=lambda count, **_: SignalType(T, (count, N)),
+    ratio=lambda count, **_: Ratio.of(count, 1),
+)
+def buffer(
+    xs: Stream[Framed[Sig[T, N]]], count: int = 8
+) -> Iterator[Sig[T, tuple[K, N]]]:
     """Stack ``count`` consecutive frames into a matrix (K x N); ``t0`` of the first row."""
     buf: list[Frame] = []
     for f in xs:
         buf.append(f)
         if len(buf) == count:
-            yield f.evolve(
+            stacked = f.evolve(
                 data=np.stack([b.data for b in buf]),
                 meta={"t0": buf[0].meta.get("t0")} if "t0" in buf[0].meta else {},
             )
+            # rows are whole frames: their whole-frame tags apply, spans do not
+            yield replace(stacked, tags=Tags.merge(*(b.tags.whole() for b in buf)))
             buf = []
 
 
-@block
-def decimate(xs: Stream[Sig["T", "N"]], every: int = 2) -> Sig["T", "N"]:
+@block(ratio=lambda every, **_: Ratio.of(every, 1))
+def decimate(xs: Stream[Sig[T, N]], every: int = 2) -> Iterator[Sig[T, N]]:
     """Keep one frame in ``every`` (frames keep their own time)."""
     x: Any
     for i, x in enumerate(xs):
@@ -240,8 +323,10 @@ def decimate(xs: Stream[Sig["T", "N"]], every: int = 2) -> Sig["T", "N"]:
             yield x
 
 
-@block
-def running_mean(xs: Stream[Sig[float, "N"]], alpha: float = 0.1) -> Sig[float, "N"]:
+@block(ratio="1:1")
+def running_mean(
+    xs: Stream[Sig[float, N]], alpha: float = 0.1
+) -> Iterator[Sig[float, N]]:
     """Exponential moving average across frames (stateful stream block)."""
     acc = None
     for x in xs:
@@ -251,8 +336,8 @@ def running_mean(xs: Stream[Sig[float, "N"]], alpha: float = 0.1) -> Sig[float, 
         yield acc
 
 
-@block
-def timestamp(xs: Stream[Frame]) -> Frame:
+@block(ratio="1:1")
+def timestamp(xs: Stream[Frame]) -> Iterator[Frame]:
     """Annotate frames with a running sequence number, wall-clock arrival time and — when
     the stream has a rate and the frame no ``t0`` yet — a ``t0`` from the sample count."""
     pos = 0
@@ -272,48 +357,46 @@ def timestamp(xs: Stream[Frame]) -> Frame:
 
 
 @block
-def window(x: Sig["T", "N"], kind: str = "hann") -> Sig["T", "N"]:
+def window(x: Sig[T, N], kind: str = "hann") -> Sig[T, N]:
     """Multiply by a window (any name scipy.signal.get_window accepts)."""
     return x * ss.get_window(kind, len(x))
 
 
-fft = block(np.fft.fft, name="fft", inputs=Sig[complex, "N"], outputs=Sig[complex, "N"])
-ifft = block(
-    np.fft.ifft, name="ifft", inputs=Sig[complex, "N"], outputs=Sig[complex, "N"]
-)
-rfft = block(
-    np.fft.rfft, name="rfft", inputs=Sig[float, "N"], outputs=Sig[complex, "M"]
-)
+fft = block(np.fft.fft, name="fft", inputs=Sig[complex, N], outputs=Sig[complex, N])
+ifft = block(np.fft.ifft, name="ifft", inputs=Sig[complex, N], outputs=Sig[complex, N])
+rfft = block(np.fft.rfft, name="rfft", inputs=Sig[float, N], outputs=Sig[complex, M])
 hilbert = block(
-    ss.hilbert, name="hilbert", inputs=Sig[float, "N"], outputs=Sig[complex, "N"]
+    ss.hilbert, name="hilbert", inputs=Sig[float, N], outputs=Sig[complex, N]
 )
 magnitude = block(
-    np.abs, name="magnitude", inputs=Sig[complex, "N"], outputs=Sig[float, "N"]
+    np.abs, name="magnitude", inputs=Sig[complex, N], outputs=Sig[float, N]
 )
-phase = block(np.angle, name="phase", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
-real = block(np.real, name="real", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
-imag = block(np.imag, name="imag", inputs=Sig[complex, "N"], outputs=Sig[float, "N"])
+phase = block(np.angle, name="phase", inputs=Sig[complex, N], outputs=Sig[float, N])
+real = block(np.real, name="real", inputs=Sig[complex, N], outputs=Sig[float, N])
+imag = block(np.imag, name="imag", inputs=Sig[complex, N], outputs=Sig[float, N])
 
 
 @block
-def to_complex(x: Sig[float, "N"]) -> Sig[complex, "N"]:
+def to_complex(x: Sig[float, N]) -> Sig[complex, N]:
     return x.astype(np.complex128)
 
 
 @block
-def power_db(x: Sig[complex, "N"], floor: float = 1e-12) -> Sig[float, "N", None, "dB"]:
+def power_db(
+    x: Sig[complex, N], floor: float = 1e-12
+) -> Sig[float, N, None, Literal["dB"]]:
     return 10 * np.log10(np.abs(x) ** 2 + floor)
 
 
 @block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 
-@block(refine=lambda to, **_: Sig["T", "N", None, to])
+@block(refine=lambda to, **_: SignalType(T, (N,), None, to))
 def to_units(
-    f: Framed[Sig["T", "N"]], to: str = "V", assume: str | None = None
-) -> Sig["T", "N", None, None]:
+    f: Framed[Sig[T, N]], to: str = "V", assume: str | None = None
+) -> Sig[T, N, None, None]:
     """Convert a stream to other units. The source units come from the frame's stream
     annotation ``units`` (or ``assume``); the output type and annotation carry ``to``."""
     from .units import factor
@@ -327,27 +410,27 @@ def to_units(
 
 
 @block
-def offset(x: Sig[float, "N"], value: float = 0.0) -> Sig[float, "N"]:
+def offset(x: Sig[float, N], value: float = 0.0) -> Sig[float, N]:
     return x + value
 
 
 @block
 def mix(
-    x: Sig[complex, "N"], freq: float = 0.0, rate: float = 48_000.0
-) -> Sig[complex, "N"]:
+    x: Sig[complex, N], freq: float = 0.0, rate: float = 48_000.0
+) -> Sig[complex, N]:
     """Frequency-shift a complex frame by ``freq`` (stateless: phase restarts per frame)."""
     t = np.arange(len(x)) / rate
     return x * np.exp(2j * np.pi * freq * t)
 
 
 @block
-def lfilter(x: Sig[float, "N"], b: Any = (1.0,), a: Any = (1.0,)) -> Sig[float, "N"]:
+def lfilter(x: Sig[float, N], b: Any = (1.0,), a: Any = (1.0,)) -> Sig[float, N]:
     """Per-frame IIR/FIR filter (scipy.signal.lfilter; no state across frames)."""
     return ss.lfilter(np.asarray(b), np.asarray(a), x)
 
 
-@block
-def fir(xs: Stream[Sig[float, "N"]], taps: Any = (1.0,)) -> Sig[float, "N"]:
+@block(ratio="1:1")
+def fir(xs: Stream[Sig[float, N]], taps: Any = (1.0,)) -> Iterator[Sig[float, N]]:
     """Streaming FIR filter that carries filter state across frames."""
     b = np.asarray(taps, dtype=float)
     zi = np.zeros(len(b) - 1)
@@ -357,7 +440,7 @@ def fir(xs: Stream[Sig[float, "N"]], taps: Any = (1.0,)) -> Sig[float, "N"]:
 
 
 @block
-def resample(f: Framed[Sig[float, "N"]], up: int = 1, down: int = 1) -> Sig[float, "M"]:
+def resample(f: Framed[Sig[float, N]], up: int = 1, down: int = 1) -> Sig[float, M]:
     """Rational resampling; the stream's ``rate`` annotation is scaled (time kept)."""
     rate = f.stream.get("rate")
     return f.evolve(
@@ -367,28 +450,28 @@ def resample(f: Framed[Sig[float, "N"]], up: int = 1, down: int = 1) -> Sig[floa
 
 
 @block
-def energy(x: Sig["T", "N"]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 
 @block
-def rms(x: Sig["T", "N"]) -> Sig[float, ()]:
+def rms(x: Sig[T, N]) -> Sig[float, tuple[()]]:
     return float(np.sqrt(np.mean(np.abs(x) ** 2)))
 
 
 @block
-def peak(x: Sig["T", "N"]) -> Sig[dict]:
+def peak(x: Sig[T, N]) -> Sig[dict]:
     i = int(np.argmax(np.abs(x)))
     return {"index": i, "value": x[i]}
 
 
 @block
-def clip(x: Sig[float, "N"], limit: float = 1.0) -> Sig[float, "N"]:
+def clip(x: Sig[float, N], limit: float = 1.0) -> Sig[float, N]:
     return np.clip(x, -limit, limit)
 
 
 @block
-def detect_clipping(f: Framed[Sig[float, "N"]], limit: float = 1.0) -> Sig[float, "N"]:
+def detect_clipping(f: Framed[Sig[float, N]], limit: float = 1.0) -> Sig[float, N]:
     """Frame-aware block: adds a sample-level mask and a warning issue when clipping occurs."""
     mask = np.abs(f.data) >= limit
     out = f.annotate_samples(clipped=mask)

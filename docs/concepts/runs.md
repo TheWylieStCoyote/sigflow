@@ -3,11 +3,13 @@
 Graphs are values; running one is explicit:
 
 ```python
-frames = run(g)                   # synchronously, returns the output frames
-frames = await g.arun()           # from async code (a Jupyter cell)
-for f in g: ...                   # stream the outputs lazily
-async for f in g: ...
-r = g.start()                     # in the background: a Run handle
+frames = run(g)  # synchronously, returns the output frames
+frames = await g.arun()  # from async code (a Jupyter cell)
+for f in g:
+    ...  # stream the outputs lazily
+async for f in g:
+    ...
+r = g.start()  # in the background: a Run handle
 ```
 
 `run()` and `start()` take the same options: `on_error=` (override every
@@ -20,7 +22,7 @@ for endless streams), `resume=` (a checkpoint).
 
 Every composition — operators, `feedback`, `when`, `align`, the `Graph`
 builder — is lowered to one scheduler: members connected by queues. Linear runs
-between joins execute as a single *chain* without queues, and consecutive map
+between joins execute as a single _chain_ without queues, and consecutive map
 blocks inside a chain are fused into one frame wrap. Edges are bounded (back-
 pressure); edges into joins are unbounded so a branch that changes cardinality
 cannot deadlock the pump. A failure in any member is recorded once and

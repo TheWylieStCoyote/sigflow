@@ -20,24 +20,26 @@ from __future__ import annotations
 import json
 import pickle
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
-from .frame import Frame, Issue, Provenance, frozen
+from ._arrays import is_array, is_data_array
+from .frame import NO_PROV, Frame, Issue, Provenance, Tag, Tags, frozen
 
 __all__ = [
-    "prov_to_dict",
-    "prov_from_dict",
-    "save_frame",
-    "load_frame",
-    "replay",
+    "Checkpoint",
     "ReplayMismatch",
     "Stateful",
-    "Checkpoint",
     "checkpoint",
     "load_checkpoint",
+    "load_frame",
+    "prov_from_dict",
+    "prov_to_dict",
+    "replay",
+    "save_frame",
 ]
 
 
@@ -64,6 +66,41 @@ def _jsonable(v: Any) -> Any:
     if isinstance(v, (str, int, float, bool)) or v is None:
         return v
     return repr(v)
+
+
+def _host(x: Any) -> np.ndarray:
+    """A NumPy copy of any array-like, fetching device (CuPy) arrays to the host."""
+    try:
+        return np.asarray(x)
+    except (TypeError, ValueError):
+        if hasattr(x, "get"):  # CuPy
+            return np.asarray(x.get())
+        raise
+
+
+def _load_dataarray(z: Any, labels: dict[str, Any]) -> Any:
+    """Rebuild a DataArray from a saved record; without xarray the bare array is returned."""
+    data = z["data"]
+    try:
+        import xarray as xr
+    except ImportError:
+        warnings.warn(
+            "frame was saved with xarray labels; xarray is not installed, returning the "
+            "bare array",
+            stacklevel=3,
+        )
+        return data
+    coords = {
+        k: (c["dims"], z[f"coord__{k}"], c["attrs"])
+        for k, c in labels["coords"].items()
+    }
+    return xr.DataArray(
+        data,
+        dims=labels["dims"],
+        coords=coords,
+        attrs=labels["attrs"],
+        name=labels["name"],
+    )
 
 
 def prov_to_dict(p: Provenance) -> dict:
@@ -103,16 +140,6 @@ def prov_from_dict(d: dict) -> Provenance:
     return build(d["root"])
 
 
-def _prov_to_json(self: Provenance, **kw: Any) -> str:
-    return json.dumps(prov_to_dict(self), **kw)
-
-
-Provenance.to_dict = prov_to_dict  # type: ignore[attr-defined]
-Provenance.to_json = _prov_to_json  # type: ignore[attr-defined]
-Provenance.from_dict = staticmethod(prov_from_dict)  # type: ignore[attr-defined]
-Provenance.from_json = staticmethod(lambda s: prov_from_dict(json.loads(s)))  # type: ignore[attr-defined]
-
-
 # --------------------------------------------------------------------------- #
 # Frames on disk
 # --------------------------------------------------------------------------- #
@@ -122,26 +149,53 @@ def save_frame(f: Frame, path: str) -> str:
     """``.npz`` with the data, sample annotations and a JSON record of everything else."""
     arrays: dict[str, Any] = {}
     data = f.data
+    labels: dict[str, Any] | None = None
     if isinstance(data, tuple):
         for i, x in enumerate(data):
-            arrays[f"data_{i}"] = np.asarray(x)
+            arrays[f"data_{i}"] = _host(x)
         kind = "tuple"
-    elif isinstance(data, (np.ndarray, int, float, complex, np.generic)):
-        arrays["data"] = np.asarray(data)
+    elif is_data_array(data):
+        # the payload as an array plus a record of dims, coords, attrs and name
+        arrays["data"] = _host(data.data)
+        labels = {
+            "dims": list(data.dims),
+            "name": data.name,
+            "attrs": _jsonable(dict(data.attrs)),
+            "coords": {},
+        }
+        for k, c in data.coords.items():
+            arrays[f"coord__{k}"] = _host(c.data)
+            labels["coords"][k] = {
+                "dims": list(c.dims),
+                "attrs": _jsonable(dict(c.attrs)),
+            }
+        kind = "xarray"
+    elif isinstance(data, (int, float, complex, np.generic)) or is_array(data):
+        arrays["data"] = _host(data)
         kind = "array"
     else:
         kind = "object"
     for k, v in f.samples.items():
-        arrays[f"sample__{k}"] = np.asarray(v)
+        arrays[f"sample__{k}"] = _host(v)
     record = {
         "kind": kind,
+        "labels": labels,
         "meta": _jsonable(dict(f.meta)),
         "stream": _jsonable(dict(f.stream)),
         "issues": [
             {"message": i.message, "level": i.level, "origin": i.origin}
             for i in f.issues
         ],
-        "prov": prov_to_dict(f.prov) if f.prov is not None else None,
+        "tags": [
+            {
+                "name": t.name,
+                "value": _jsonable(t.value),
+                "span": list(t.span) if t.span is not None else None,
+                "origin": t.origin,
+            }
+            for t in sorted(f.tags, key=repr)
+        ],
+        "prov": prov_to_dict(f.prov) if f.prov else None,
         "object": _jsonable(data) if kind == "object" else None,
     }
     arrays["__record__"] = np.array(json.dumps(record))
@@ -161,18 +215,22 @@ def load_frame(path: str) -> Frame:
         data = z["data"]
         if data.ndim == 0:
             data = data.item()
+    elif record["kind"] == "xarray":
+        data = _load_dataarray(z, record["labels"])
     else:
         data = record["object"]
     samples = {k[len("sample__") :]: z[k] for k in z.files if k.startswith("sample__")}
     issues = tuple(
         Issue(i["message"], i["level"], i["origin"]) for i in record["issues"]
     )
-    prov = prov_from_dict(record["prov"]) if record["prov"] else None
-    return Frame(data, record["meta"], record["stream"], samples, issues, prov)
-
-
-Frame.save = save_frame  # type: ignore[attr-defined]
-Frame.load = staticmethod(load_frame)  # type: ignore[attr-defined]
+    prov = prov_from_dict(record["prov"]) if record["prov"] else NO_PROV
+    tags = Tags(
+        Tag(t["name"], t["value"], tuple(t["span"]) if t["span"] else None, t["origin"])
+        for t in record.get("tags", ())
+    )
+    return Frame(
+        data, record["meta"], record["stream"], samples, issues, prov, tags=tags
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -189,13 +247,11 @@ def replay(graph: Any, target: Any, strict: bool = True, **options: Any) -> Fram
     ``target`` (a Frame or Provenance). Deterministic graphs give the same data back;
     ``strict`` checks that the graph's source configuration equals the recorded one."""
     prov = target.prov if isinstance(target, Frame) else target
-    if prov is None:
+    if not prov:
         raise ReplayMismatch("target has no provenance")
     wanted = {(r.op, r.seq) for r in prov.roots()}
     recorded = {r.op: dict(r.params) for r in prov.roots()}
     if strict:
-        from .graph import Block, Source
-
         for n in graph.nodes():
             if n.in_type is None and n.name in recorded:
                 have = _jsonable(dict(getattr(n, "config", {})))
@@ -226,7 +282,7 @@ class Stateful:
 
         class Smoother(Stateful):
             def __init__(self, alpha=0.1): self.alpha, self.acc = alpha, None
-            def __call__(self, x: Sig[float, "N"]) -> Sig[float, "N"]:
+            def __call__(self, x: Sig[float, N]) -> Sig[float, N]:
                 self.acc = x if self.acc is None else (1 - self.alpha) * self.acc + self.alpha * x
                 return self.acc
 
@@ -268,7 +324,7 @@ def load_checkpoint(path: str) -> Checkpoint:
 
 def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
     """Capture source positions (from the monitor) and the state of Stateful blocks."""
-    from .graph import Block, Source
+    from .graph import Block
 
     ck = Checkpoint(graph=graph.name, produced=monitor.produced)
     for n in graph.nodes():
@@ -278,8 +334,9 @@ def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
             ck.positions[key] = st.out
         if isinstance(n, Block):
             fn = n.defn.fn
-            if hasattr(fn, "state") and hasattr(fn, "restore"):
-                ck.states[key] = fn.state()
+            state, restore_ = getattr(fn, "state", None), getattr(fn, "restore", None)
+            if callable(state) and callable(restore_):
+                ck.states[key] = state()
             elif n.kind == "stream":
                 ck.skipped.append(key)
     if path:

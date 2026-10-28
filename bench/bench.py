@@ -9,12 +9,11 @@ import numpy as np
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
 )
-from sigflow import (  # noqa: E402
+from sigflow import (
     Sig,
     Stream,
     block,
-    dsp,  # noqa: E402
-    from_iterable,
+    dsp,
     run,
     source,
 )
@@ -37,8 +36,7 @@ def ident(x: Sig[float, "N"]) -> Sig[float, "N"]:
 
 @block
 def passthrough(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
-    for x in xs:
-        yield x
+    yield from xs
 
 
 @block
@@ -49,7 +47,7 @@ async def apassthrough(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
 
 def timed(label, graph, frames=FRAMES, **kw):
     t0 = time.perf_counter()
-    out = run(graph, collect=False, **kw)
+    run(graph, collect=False, **kw)
     dt = time.perf_counter() - t0
     per = dt / frames * 1e6
     print(f"{label:46s} {dt:6.3f}s  {per:7.1f} us/frame  {frames / dt:9.0f} frames/s")
@@ -97,8 +95,7 @@ def main():
             f"(Python {platform.python_version()}, NumPy {np.__version__}, {FRAMES} frames of {N} float64).\n\n"
             "| configuration | us / frame |\n|---|---|\n"
         )
-        for label, per in rows:
-            fh.write(f"| {label} | {per:.1f} |\n")
+        fh.writelines(f"| {label} | {per:.1f} |\n" for label, per in rows)
         fh.write(
             f"| plain `np.fft.fft` on the same frames, for scale | {base:.1f} |\n\n"
         )

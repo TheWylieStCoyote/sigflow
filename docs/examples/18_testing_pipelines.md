@@ -14,14 +14,6 @@ What this exercises
   * property-style checks across a parameter grid, error-policy behaviour, and
     a regression test pinned to a recorded golden output
 
-## Output
-
-Files the script writes when run:
-
-![chain_graph.svg](assets/18_testing_pipelines/chain_graph.svg)
-
-*`chain_graph.svg`*
-
 ## Source
 
 ```python
@@ -43,6 +35,8 @@ What this exercises
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -52,18 +46,19 @@ sys.path.insert(
 )
 
 from sigflow import (
+    MISSING,
     Frame,
     Framed,
-    MISSING,
     Sig,
     Stream,
     TypeMismatch,
     block,
+    dsp,
     from_iterable,
     run,
     source,
-)  # noqa: E402
-from sigflow import dsp  # noqa: E402
+)
+from sigflow.dims import M, N
 
 RATE = 1000.0
 
@@ -72,19 +67,19 @@ RATE = 1000.0
 
 
 @block
-def remove_dc(x: Sig[float, "N"]) -> Sig[float, "N"]:
+def remove_dc(x: Sig[float, N]) -> Sig[float, N]:
     return x - x.mean()
 
 
 @block
-def peak_frequency(f: Framed[Sig[float, "N"]]) -> Sig[dict]:
+def peak_frequency(f: Framed[Sig[float, N]]) -> Sig[dict]:
     X = np.abs(np.fft.rfft(f.data * np.hanning(len(f.data))))
     k = int(np.argmax(X[1:])) + 1
     return {"freq_hz": float(k * f["rate"] / len(f.data)), "frame": f.get("seq", None)}
 
 
 @block
-def smooth(xs: Stream[Sig[float, "N"]], alpha: float = 0.5) -> Sig[float, "N"]:
+def smooth(xs: Stream[Sig[float, N]], alpha: float = 0.5) -> Iterator[Sig[float, N]]:
     acc = None
     for x in xs:
         acc = x if acc is None else (1 - alpha) * acc + alpha * x
@@ -92,7 +87,9 @@ def smooth(xs: Stream[Sig[float, "N"]], alpha: float = 0.5) -> Sig[float, "N"]:
 
 
 @block
-def rate_limiter(events: Stream[Framed[Sig[dict]]], min_gap: float = 1.0) -> Sig[dict]:
+def rate_limiter(
+    events: Stream[Framed[Sig[dict]]], min_gap: float = 1.0
+) -> Iterator[Sig[dict]]:
     """Drop events that arrive within `min_gap` seconds of the last accepted one."""
     last = -np.inf
     for f in events:
@@ -158,22 +155,22 @@ def test_types_are_enforced_at_build_time():
     with pytest.raises(TypeMismatch):
         dsp.sine() >> peak_frequency >> remove_dc  # dict cannot feed a float vector
     with pytest.raises(TypeMismatch):
-        from_iterable([np.zeros((2, 2))], Sig[float, ("M", "N")]) >> remove_dc
+        from_iterable([np.zeros((2, 2))], Sig[float, tuple[M, N]]) >> remove_dc
 
 
 def test_every_frame_is_checked_against_the_contract():
     @block
-    def lies(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def lies(x: Sig[float, N]) -> Sig[float, N]:
         lies.n += 1
         return np.zeros(len(x) + (lies.n > 1))
 
     lies.n = 0
     assert (
-        len(run(from_iterable([np.ones(4)] * 3, Sig[float, "N"]) >> lies)) == 3
+        len(run(from_iterable([np.ones(4)] * 3, Sig[float, N]) >> lies)) == 3
     )  # default: first frame only
     lies.n = 0
     with pytest.raises(TypeMismatch, match="runtime check"):
-        run(from_iterable([np.ones(4)] * 3, Sig[float, "N"]) >> lies, check="all")
+        run(from_iterable([np.ones(4)] * 3, Sig[float, N]) >> lies, check="all")
 
 
 # ------------------------------------------------------------- 3. a fake clock
@@ -190,7 +187,7 @@ class FakeClock:
 
 
 @source
-async def events(clock: FakeClock, schedule: tuple = ()) -> Sig[dict]:
+async def events(clock: FakeClock, schedule: tuple = ()) -> AsyncIterator[Sig[dict]]:
     """Emit one event per scheduled time, advancing the fake clock to it."""
     for t in schedule:
         clock.tick(t - clock.now)
@@ -219,10 +216,10 @@ def test_peak_frequency_within_one_bin_for_any_tone(freq):
 
 def test_error_policies_are_what_the_docs_say():
     @block
-    def boom(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def boom(x: Sig[float, N]) -> Sig[float, N]:
         raise RuntimeError("no")
 
-    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, "N"])  # noqa: E731
+    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, N])
     out = run(src() >> boom >> remove_dc)
     assert (
         all(f.failed and f.data is MISSING for f in out)
@@ -235,7 +232,7 @@ def test_error_policies_are_what_the_docs_say():
 
 def test_graph_draws_to_svg(tmp_path):
     path = chain.draw().save(str(tmp_path / "chain_graph.svg"))
-    assert "<svg" in open(path, encoding="utf-8").read()
+    assert "<svg" in Path(path).read_text(encoding="utf-8")
 
 
 GOLDEN = [51.0, 125.0, 250.0]  # recorded once from a known-good version

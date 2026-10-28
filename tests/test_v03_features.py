@@ -3,6 +3,7 @@
 import asyncio
 import pickle
 import threading
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -11,20 +12,23 @@ from sigflow import (
     Frame,
     Lineage,
     Sig,
+    SignalType,
     Stream,
     TypeMismatch,
     block,
+    dsp,
+    io,
     parallel,
     run,
     source,
 )
-from sigflow import dsp, io
-from sigflow.builder import lower, Chain
+from sigflow.builder import Chain, lower
+from sigflow.dims import N
 from sigflow.frame import PROVENANCE_MODE
 
 
 @source
-def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
+def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Iterator[Sig[float, N]]:
     for i in range(count):
         yield Frame(
             np.full(n, float(i)),
@@ -34,12 +38,12 @@ def ramp(count: int = 6, n: int = 4, rate: float = 100.0) -> Sig[float, "N"]:
 
 
 @block
-def scale(x: Sig[float, "N"], gain: float = 2.0) -> Sig[float, "N"]:
+def scale(x: Sig[float, N], gain: float = 2.0) -> Sig[float, N]:
     return x * gain
 
 
 @block
-def boom(x: Sig[float, "N"], at: int = 2) -> Sig[float, "N"]:
+def boom(x: Sig[float, N], at: int = 2) -> Sig[float, N]:
     if int(x[0]) == at:
         raise ValueError("boom")
     return x
@@ -79,7 +83,7 @@ def test_failures_and_strict_propagate_through_scheduler():
     with pytest.raises(ValueError, match="boom"):
         run(ramp() >> boom >> scale, on_error="raise")
     short = ramp(count=6).take(3)
-    with pytest.raises(Exception):
+    with pytest.raises(TypeMismatch, match="different numbers of frames"):
         run((ramp(count=6) >> scale) & short, strict=True)
     assert len(run((ramp(count=6) >> scale) & short)) == 3
 
@@ -115,7 +119,7 @@ def test_provenance_modes():
 
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
     prev = None
     for x in xs:
         if prev is not None:
@@ -128,7 +132,7 @@ def test_sync_generator_stream_block_runs_inline_or_threaded():
     seen = []
 
     @block
-    def where(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+    def where(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         for x in xs:
             seen.append(threading.get_ident())
             yield x
@@ -221,12 +225,10 @@ def test_lineage_queries():
 
 
 def test_sig_dsl_still_builds_signal_types():
-    t = Sig[np.complex64, ("N", 2), 1e6, "V"]
+    t = SignalType(np.complex64, (N, 2), 1e6, "V")
     assert t.dtype == np.dtype(np.complex64) and t.rate == 1e6 and t.units == "V"
-    assert t.shape[1] == 2
-    c = block(
-        lambda x: x, inputs=Sig[complex, "N"], outputs=Sig[complex, "N"], name="c"
-    )
+    assert t.shape is not None and t.shape[1] == 2
+    c = block(lambda x: x, inputs=Sig[complex, N], outputs=Sig[complex, N], name="c")
     ramp() >> c  # float -> complex is a safe cast
     with pytest.raises(TypeMismatch, match="dtype"):
         ramp() >> c >> scale  # complex -> float is not
@@ -236,7 +238,7 @@ def test_fused_framed_block_sees_upstream_result():
     from sigflow import Framed
 
     @block
-    def mean_of(f: Framed[Sig[float, "N"]]) -> Sig[float, ()]:
+    def mean_of(f: Framed[Sig[float, N]]) -> Sig[float, tuple[()]]:
         return float(f.data.mean()) + (0.0 if f.prov.op == "scale" else 1000.0)
 
     out = run(ramp() >> scale(gain=3.0) >> mean_of)

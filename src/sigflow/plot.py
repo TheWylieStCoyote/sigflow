@@ -19,31 +19,32 @@ Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one fr
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
 from .block import tap
+from .dims import N, T
 from .frame import Frame
 from .graph import Block
 from .types import Sig
 
 __all__ = [
+    "Multi",
     "PlotBlock",
-    "line",
-    "spectrum",
-    "waterfall",
+    "animate",
     "constellation",
     "custom",
-    "animate",
     "history",
+    "line",
     "multi",
-    "Multi",
+    "spectrum",
+    "waterfall",
 ]
 
 
 def _matplotlib() -> Any:
-    import matplotlib
     import matplotlib.pyplot as plt
 
     return plt
@@ -54,7 +55,7 @@ class PlotBlock(Block):
 
     def __init__(
         self,
-        draw: Callable[[Any, Any, Frame], None],
+        draw: Callable[[Any, Any, Frame], Any],
         *,
         name: str = "plot",
         in_type: Any = None,
@@ -105,7 +106,7 @@ class PlotBlock(Block):
 
     @property
     def ax(self) -> Any:
-        self.figure
+        _ = self.figure  # created on first access
         return self._ax
 
     def _on_frame(self, f: Frame) -> None:
@@ -254,7 +255,7 @@ def line(
             ax.set_ylim(*_v(ylim))
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="line", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="line", in_type=Sig[T, N], title=title, **kw)
 
 
 def spectrum(
@@ -284,7 +285,7 @@ def spectrum(
             ax.set_ylim(*_v(ylim))
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="spectrum", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="spectrum", in_type=Sig[T, N], title=title, **kw)
 
 
 def waterfall(
@@ -307,7 +308,7 @@ def waterfall(
         ax.set_ylabel("frame")
         _annotate(ax, f)
 
-    return PlotBlock(draw, name="waterfall", in_type=Sig["T", "N"], title=title, **kw)
+    return PlotBlock(draw, name="waterfall", in_type=Sig[T, N], title=title, **kw)
 
 
 def constellation(
@@ -329,7 +330,7 @@ def constellation(
     return PlotBlock(
         draw,
         name="constellation",
-        in_type=Sig[complex, "N"],
+        in_type=Sig[complex, N],
         title=title,
         figsize=kw.pop("figsize", (4, 4)),
         **kw,
@@ -337,7 +338,7 @@ def constellation(
 
 
 def custom(
-    draw: Callable[[Any, Any, Frame], None],
+    draw: Callable[[Any, Any, Frame], Any],
     name: str = "plot",
     in_type: Any = None,
     **kw: Any,
@@ -348,7 +349,7 @@ def custom(
 
 def animate(
     frames: list[Frame] | list[Any],
-    draw: Callable[[Any, Any, Frame], None] | None = None,
+    draw: Callable[[Any, Any, Frame], Any] | None = None,
     interval: int = 100,
     figsize: tuple[float, float] = (7, 3.2),
 ) -> Any:
@@ -376,7 +377,8 @@ def history(
 
     def pick(f: Frame) -> float:
         if callable(key):
-            return float(key(f))
+            fn: Callable[[Frame], Any] = key
+            return float(fn(f))
         if isinstance(key, str):
             return float(f[key])
         return float(np.asarray(f.data).reshape(-1)[0])

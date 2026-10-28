@@ -115,12 +115,17 @@ def frame_html(frame: Any) -> str:
             rows.append(
                 f"<tr><td style='{_TD}'><b>{level}</b></td><td style='{_TD}'>{body}</td></tr>"
             )
+    if frame.tags:
+        body = ", ".join(html.escape(repr(t)) for t in sorted(frame.tags, key=repr))
+        rows.append(
+            f"<tr><td style='{_TD}'><b>tags</b></td><td style='{_TD}'>{body}</td></tr>"
+        )
     if frame.issues:
         body = "<br>".join(html.escape(str(i)) for i in frame.issues)
         rows.append(
             f"<tr><td style='{_TD}'><b>issues</b></td><td style='{_TD};color:#c33'>{body}</td></tr>"
         )
-    if frame.prov is not None:
+    if frame.prov:
         body = (
             html.escape(frame.trace())
             .replace("\n", "<br>")
@@ -146,7 +151,7 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
     ``fmt`` is ``"html"`` (with the SVG inline) or ``"md"`` (Markdown)."""
     import inspect as _inspect
 
-    from .graph import Block, Source
+    from .graph import Block
 
     title = title or node.name
     env = node.validate()
@@ -204,7 +209,7 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
         for name, kind, ins, out, cfg, doc in entries
     )
     return (
-        f"<div style='font-family:system-ui,sans-serif'><h2>{html.escape(title)}</h2>"
+        f"<div style='font-family:system-ui,sans-serif'><h2>{html.escape(title or node.name)}</h2>"
         f"<div style='overflow:auto;background:white;padding:4px'>{Diagram(node).svg}</div>"
         f"<table style='{_CSS};margin-top:10px'><tr><th style='{_TD}'>block</th><th style='{_TD}'>kind</th>"
         f"<th style='{_TD}'>inputs</th><th style='{_TD}'>output</th><th style='{_TD}'>configuration</th>"

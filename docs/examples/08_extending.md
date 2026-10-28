@@ -11,14 +11,6 @@ What this exercises
   * runtime checking modes: check="first" (default) vs "all"
   * blocks are functions: unit-test them with plain asserts, no graph needed
 
-## Output
-
-Files the script writes when run:
-
-![extending_graph.svg](assets/08_extending/extending_graph.svg)
-
-*`extending_graph.svg`*
-
 ## Source
 
 ```python
@@ -34,26 +26,41 @@ What this exercises
   * blocks are functions: unit-test them with plain asserts, no graph needed
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, lift, run, source
-from sigflow import dsp
+from sigflow import (
+    Frame,
+    Framed,
+    Sig,
+    SignalType,
+    Stream,
+    TypeMismatch,
+    block,
+    lift,
+    run,
+    source,
+)
+from sigflow.dims import N
 
 # ------------------------------------------------------------- rate and units
 
-Audio48k = Sig[float, "N", 48_000, "V"]  # type aliases read well in signatures
+Audio48k = Sig[
+    float, N, Literal[48_000], Literal["V"]
+]  # type aliases read well in signatures
 
 
 @source(
     total=lambda frames, **_: frames,
-    refine=lambda n, rate, **_: Sig[float, (n,), rate, "V"],
+    refine=lambda n, rate, **_: SignalType(float, (n,), rate, "V"),
 )
 def adc(
     rate: float = 48_000, n: int = 480, frames: int = 20, seed: int = 0
-) -> Sig[float, "N", None, "V"]:
+) -> Iterator[Sig[float, N, None, Literal["V"]]]:
     """An ADC whose declared output rate comes from its configuration (via refine)."""
     rng = np.random.default_rng(seed)
     for i in range(frames):
@@ -73,8 +80,8 @@ def de_emphasis(x: Audio48k, tau_us: float = 50.0) -> Audio48k:
 
 @block
 def to_dbfs(
-    x: Sig[float, "N", None, "V"], full_scale: float = 1.0
-) -> Sig[float, (), None, "dBFS"]:
+    x: Sig[float, N, None, Literal["V"]], full_scale: float = 1.0
+) -> Sig[float, tuple[()], None, Literal["dBFS"]]:
     return float(20 * np.log10(np.sqrt(np.mean(x**2)) / full_scale + 1e-12))
 
 
@@ -84,7 +91,7 @@ def to_dbfs(
 def sos_filter(sos: np.ndarray, name: str = "sos_filter"):
     """Factory: a streaming IIR block around scipy.signal.sosfilt with carried state."""
 
-    def fn(xs: Stream[Sig[float, "N"]]) -> Sig[float, "N"]:
+    def fn(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
         zi = np.zeros((sos.shape[0], 2))
         for x in xs:
             y, zi = ss.sosfilt(sos, x, zi=zi)
@@ -93,7 +100,9 @@ def sos_filter(sos: np.ndarray, name: str = "sos_filter"):
     return block(fn, name=name)
 
 
-lowpass_2k = sos_filter(ss.butter(6, 2000, fs=48_000, output="sos"), name="lowpass_2k")
+lowpass_2k = sos_filter(
+    np.asarray(ss.butter(6, 2000, fs=48_000, output="sos")), name="lowpass_2k"
+)
 
 # ------------------------------------------------- a custom payload dataclass
 
@@ -106,10 +115,11 @@ class Measurement:
 
 
 @block
-def measure(f: Framed[Sig[float, "N"]], rate: float = 48_000) -> Sig[Measurement]:
+def measure(f: Framed[Sig[float, N]], rate: float = 48_000) -> Sig[Measurement]:
     X = np.abs(np.fft.rfft(f.data * np.hanning(len(f.data))))
     tone = float(np.fft.rfftfreq(len(f.data), 1 / rate)[int(np.argmax(X[1:])) + 1])
-    return Measurement(to_dbfs(f.data), tone, f.prov.seq if f.prov else -1)
+    seq = f.prov.seq if f.prov.seq is not None else -1
+    return Measurement(to_dbfs(f.data), tone, seq)
 
 
 @block
@@ -121,10 +131,10 @@ def report(m: Sig[Measurement]) -> Sig[str]:
 
 
 @block
-def flaky(x: Sig[float, "N"], every: int = 4) -> Sig[float, "N"]:
+def flaky(x: Sig[float, N], every: int = 4) -> Sig[float, N]:
     flaky.calls += 1
     if flaky.calls % every == 0:
-        raise IOError("DMA underrun")
+        raise OSError("DMA underrun")
     return x
 
 
@@ -151,12 +161,12 @@ if __name__ == "__main__":
             print(
                 f"{policy:9s}: {len(out)} frames, {sum(f.failed for f in out)} failed"
             )
-        except IOError as e:
+        except OSError as e:
             print(f"{policy:9s}: run aborted with {e!r}")
 
     # 3. runtime checking: "first" only checks the first frame of each edge, "all" checks every frame
     @block
-    def grows(x: Sig[float, "N"]) -> Sig[float, "N"]:
+    def grows(x: Sig[float, N]) -> Sig[float, N]:
         grows.n += 1
         return np.zeros(
             len(x) + (grows.n > 2)

@@ -13,30 +13,31 @@ Typed, functional, generator-based signal-processing graphs. This notebook walks
 blocks, composition, compile-time type checking, annotations, error propagation,
 provenance, mixed sync/async streams, live progress and plotting.""")
 
-code("""# If `sigflow` was installed into a different Python than this kernel uses,
-# fall back to the package source that sits next to this notebook (../src).
+code("""# Whatever Python this kernel uses,
+# prefer the package source that sits next to this notebook (../src) over an installed copy.
 import sys, pathlib
-try:
-    import sigflow
-except ModuleNotFoundError:
-    sys.path.insert(0, str(pathlib.Path.cwd().resolve().parent / "src"))
-    import sigflow
+_src = pathlib.Path.cwd().resolve().parent / "src"
+if (_src / "sigflow").is_dir():  # first, ahead of any installed or PYTHONPATH copy
+    sys.path[:] = [str(_src)] + [p for p in sys.path if p != str(_src)]
+import sigflow
 print("sigflow", sigflow.__version__, "from", pathlib.Path(sigflow.__file__).parent, "| kernel:", sys.executable)""")
 code("""import numpy as np
 import matplotlib
 %matplotlib inline
-from sigflow import Sig, Stream, Framed, Frame, TypeMismatch, block, source, run
+from sigflow import Sig, Stream, Framed, Frame, TypeMismatch, RatioMismatch, block, source, run
+from typing import AsyncIterator, Iterator, Literal
+from sigflow.dims import M, N, T
 from sigflow import dsp, linalg, plot""")
 
 md("""## 1. Blocks are plain functions with typed signatures
 Parameters annotated with `Sig[...]` are inputs; everything else is configuration fixed when the block
 is placed in a graph. `"T"` is a dtype variable, `"N"` a symbolic dimension.""")
 code("""@block
-def scale(x: Sig["T", "N"], gain: float = 1.0) -> Sig["T", "N"]:
+def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
     return x * gain
 
 @block
-def energy(x: Sig["T", "N"]) -> Sig[float, ()]:
+def energy(x: Sig[T, N]) -> Sig[float,tuple[()]]:
     return float(np.sum(np.abs(x) ** 2))
 
 scale(np.arange(4.0), gain=2)   # still an ordinary function""")
@@ -49,12 +50,15 @@ md(
     """`g.draw()` renders the topology as an SVG (hover a box for its full signature); `g.to_dot()` exports Graphviz."""
 )
 code("""@block
-def add(a: Sig["T", "N"], b: Sig["T", "N"]) -> Sig["T", "N"]:
+def add(a: Sig[T, N], b: Sig[T, N]) -> Sig[T, N]:
     return a + b
 
-big = (((dsp.sine(n=256, frames=4) >> dsp.window) & dsp.noise(n=256, frames=4))
-       >> add >> dsp.to_complex
-       >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=4) >> linalg.norm))
+front = ((dsp.sine(n=256, frames=8) >> dsp.window) & dsp.noise(n=256, frames=8)) >> add >> dsp.to_complex
+try:                       # branches must run at compatible rates: buffer(4) is 4:1, the others 1:1
+    front >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=4) >> linalg.norm)
+except RatioMismatch as e:
+    print("rejected:", e)
+big = front >> (dsp.fft >> dsp.power_db | dsp.rms | dsp.buffer(count=1) >> linalg.norm)
 big.draw()""")
 code("""try:
     dsp.sine() >> energy >> scale      # scalar cannot feed a vector
@@ -78,7 +82,7 @@ md("""## 4. Annotations at three levels, and errors that travel like annotations
 A frame-aware block (`Framed[...]`) can add frame-level metadata, per-sample masks and warnings.
 A block that raises produces a *failed* frame which flows downstream untouched, keeping its lineage.""")
 code("""@block
-def flaky(f: Framed[Sig[float, "N"]], every: int = 3) -> Sig[float, "N"]:
+def flaky(f: Framed[Sig[float, N]], every: int = 3) -> Sig[float, N]:
     if f.meta["seq"] % every == 0:
         raise RuntimeError("sensor glitch")
     return f.data
@@ -95,7 +99,7 @@ md("""## 5. Stream blocks are generators; async sources mix freely with sync one
 code("""import asyncio
 
 @block
-def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:
+def pairs(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, tuple[Literal[2], N]]]:
     buf = []
     for x in xs:
         buf.append(x)
@@ -103,13 +107,13 @@ def pairs(xs: Stream[Sig[float, "N"]]) -> Sig[float, (2, "N")]:
             yield np.stack(buf); buf = []
 
 @source(total=lambda count, **_: count)
-async def commands(count: int = 4) -> Sig[dict]:
+async def commands(count: int = 4) -> AsyncIterator[Sig[dict]]:
     for i in range(count):
         await asyncio.sleep(0.01)
         yield {"gain": i + 1}
 
 @block
-def apply(x: Sig[float, (2, "N")], cmd: Sig[dict]) -> Sig[float, (2, "N")]:
+def apply(x: Sig[float, tuple[Literal[2], N]], cmd: Sig[dict]) -> Sig[float, tuple[Literal[2], N]]:
     return x * cmd["gain"]
 
 g3 = ((dsp.sine(n=8, frames=8) >> pairs) & commands()) >> apply >> linalg.norm
@@ -143,11 +147,11 @@ f = run(g)[-1]
 print(f.data, "| rate:", f["rate"], "| ancestors:", [n.op for n in f.prov.chain()], "| source seq:", f.prov["sine"].seq)
 g.draw()""")
 code("""@source
-def spd() -> Sig[float, (3, 3)]:
+def spd() -> Iterator[Sig[float, tuple[Literal[3], Literal[3]]]]:
     a = np.random.default_rng(0).normal(size=(3, 3)); yield a @ a.T
 
-eigh = block(np.linalg.eigh, inputs=Sig["T", ("N", "N")],
-             outputs={"vals": Sig[float, "N"], "vecs": Sig["T", ("N", "N")]})
+eigh = block(np.linalg.eigh, inputs=Sig[T, tuple[N, N]],
+             outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]})
 try:
     spd() >> eigh["vals"] >> linalg.transpose      # a vector is not a matrix: rejected at build time
 except TypeMismatch as e:
@@ -155,7 +159,7 @@ except TypeMismatch as e:
 run(spd() >> eigh["vals"])[0]""")
 md("""## 7. Linear algebra with explicit dimension contracts""")
 code("""@source
-def snapshots(channels: int = 4, samples: int = 128, frames: int = 2) -> Sig[complex, ("M", "N")]:
+def snapshots(channels: int = 4, samples: int = 128, frames: int = 2) -> Iterator[Sig[complex, tuple[M, N]]]:
     rng = np.random.default_rng(0)
     steer = np.exp(1j * np.pi * np.arange(channels) * np.sin(np.deg2rad(20)))
     for _ in range(frames):
