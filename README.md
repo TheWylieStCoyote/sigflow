@@ -680,10 +680,12 @@ them.
 
 ## Documentation site
 
-`docs/` is an MkDocs Material site: concepts (frames, blocks, contracts,
-lineage, runs), guides (composing, time/units/slicing, notebooks, I/O,
-persistence, performance, testing), one page per example (generated from the
-scripts' docstrings and source) and the changelog.
+The documentation is published at
+<https://thewyliestcoyote.github.io/sigflow/>, rebuilt by the `docs` workflow
+on every push to `main`. `docs/` is an MkDocs Material site: concepts (frames,
+blocks, contracts, lineage, runs), guides (composing, time/units/slicing,
+notebooks, I/O, persistence, performance, testing), one page per example
+(generated from the scripts' docstrings and source) and the changelog.
 
 ```
 python -m pip install -e ".[docs]"

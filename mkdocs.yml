@@ -1,6 +1,7 @@
 site_name: sigflow
 site_description: Typed, functional, generator-based signal-processing graphs for Python
-repo_url: https://github.com/example/sigflow
+site_url: https://thewyliestcoyote.github.io/sigflow/
+repo_url: https://github.com/TheWylieStCoyote/sigflow
 theme:
   name: material
   features:
