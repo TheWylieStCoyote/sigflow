@@ -214,13 +214,19 @@ def _stream(items: Any, t: Any, labels: _Labels, xr: Any) -> Any:
     each item replaces the references the previous one left (the other, non-stream
     inputs were unwrapped before the body started and stay), so a long stream
     does not pin every array it has seen."""
-    base: int | None = None
+    base: tuple[int, dict[str, str], tuple[str, ...]] | None = None
 
     def take(item: Any) -> Any:
         nonlocal base
         if base is None:
-            base = len(labels.refs)
-        del labels.refs[base:]
+            base = len(labels.refs), dict(labels.dims), labels.order
+        count, dims, order = base
+        del labels.refs[count:]
+        # Keep static inputs, but discard the preceding stream item's dimension
+        # bindings and layout as well as its array reference. A renamed axis must
+        # not inherit a stale symbol -> name association from the first item.
+        labels.dims = dict(dims)
+        labels.order = order
         return _unwrap(item, t, labels, xr)
 
     if hasattr(items, "__aiter__"):

@@ -8,7 +8,7 @@ import inspect
 import pickle
 import sys
 import weakref
-from typing import Iterator, Literal
+from typing import AsyncIterator, Iterator, Literal
 
 import numpy as np
 import pytest
@@ -312,6 +312,74 @@ def test_stream_blocks_keep_only_the_latest_item(xr):
         gc.collect()
         # the wrapper holds the item being processed, not the ones before it
         assert all(ref() is None for ref in alive[:i])
+
+
+def test_stream_labels_follow_changing_schema_and_plain_items(xr):
+    @block(labels=True)
+    def double(xs: Stream[Sig[float, N]]) -> Iterator[Sig[float, N]]:
+        for item in xs:
+            yield item * 2
+
+    first = xr.DataArray(
+        np.arange(4.0), dims="time", coords={"time": np.arange(4)},
+        attrs={"sensor": "first"}, name="voltage",
+    )
+    second = xr.DataArray(
+        np.arange(4.0), dims="sample", coords={"sample": np.arange(4) + 100},
+        attrs={"sensor": "second"}, name="current",
+    )
+    items = [first, np.arange(4.0), second]
+    output = run(from_iterable(items) >> double, check="all", on_error="raise")
+    xr.testing.assert_identical(output[0].data, (first * 2).assign_attrs(first.attrs))
+    assert isinstance(output[1].data, np.ndarray)
+    xr.testing.assert_identical(output[2].data, (second * 2).assign_attrs(second.attrs))
+
+
+def test_stream_schema_refresh_keeps_static_input_labels(xr):
+    @block(labels=True)
+    def add_offsets(
+        xs: Stream[Sig[float, N]], offsets: Sig[float, M],
+    ) -> Iterator[Sig[float, tuple[M, N]]]:
+        for item in xs:
+            yield offsets[:, None] + item[None, :]
+
+    offsets = xr.DataArray(
+        [10.0, 20.0], dims="channel", coords={"channel": ["a", "b"]}, name="offset"
+    )
+    frames = [
+        xr.DataArray(np.arange(4.0), dims=dim, coords={dim: np.arange(4) + i * 10})
+        for i, dim in enumerate(["time", "sample"])
+    ]
+    output = list(add_offsets.call(iter(frames), offsets))
+    for result, item in zip(output, frames):
+        assert result.dims == ("channel", *item.dims)
+        xr.testing.assert_equal(result.channel, offsets.channel)
+        xr.testing.assert_equal(result[item.dims[0]], item[item.dims[0]])
+        np.testing.assert_array_equal(result.data, offsets.data[:, None] + item.data)
+
+
+def test_async_stream_labels_follow_latest_schema(xr):
+    @block(labels=True)
+    async def double(
+        xs: Stream[Sig[float, N]],
+    ) -> AsyncIterator[Sig[float, N]]:
+        async for item in xs:
+            yield item * 2
+
+    frames = [
+        xr.DataArray(np.arange(4.0), dims=dim, coords={dim: np.arange(4) + i * 10})
+        for i, dim in enumerate(["time", "sample"])
+    ]
+
+    async def collect():
+        async def feed():
+            for frame in frames:
+                yield frame
+
+        return [item async for item in double.call(feed())]
+
+    for result, original in zip(asyncio.run(collect()), frames):
+        xr.testing.assert_identical(result, original * 2)
 
 
 def test_mismatched_return_shapes_reach_the_checker(xr):

@@ -60,9 +60,19 @@ devices does not weaken a graph's checks. Sample annotations are kept by
 default. The promise is checked at runtime like any other output contract, so
 a body that changes shape or dtype fails the inherited contract.
 
+Narrowing combines constraints axis by axis: a producer shape `(None,)` and a
+declared input shape `(4,)` carry `(4,)`, not `(None,)`. Symbolic dimensions keep
+the sizes and equality relationships established during unification, including
+relationships shared by tuple elements. Required metadata keys from both
+contracts are retained. Unknown shape information does not disable known rate
+or unit checks.
+
 Resolution happens in operator pipelines and in explicit `Graph` wiring,
 including reused subgraphs and edges connected in reverse order; a `Graph`
-`connect` that fails its type or rate checks leaves the graph as it was.
+`connect` that fails validation leaves the graph as it was. This includes invalid
+port names, indices and key types, as well as type/rate mismatches. Nodes added
+implicitly during the failed call and the builder's naming counter are restored
+too; the original exception is re-raised.
 
 ## Options worth knowing
 

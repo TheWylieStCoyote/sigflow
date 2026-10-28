@@ -53,6 +53,16 @@ New
 
 Changed
 
+- Pass-through contract narrowing fills partially known axes from declarations
+  and retains repeated-variable constraints across tuple elements. Known rates
+  and units are checked even when shape is unknown.
+- Builder connections roll back all validation exceptions, including invalid
+  port selections and failures after implicitly adding nodes.
+- Label-aware streams refresh dimension mappings as well as references for each
+  item, preserving changing coordinates and names without retaining stale labels.
+  Real CUDA-array-interface tests cover foreign views, copies, allocation
+  lifetime and non-default producer streams.
+
 - `Frame.prov` and `Issue.prov` are `Provenance`, never `None` (passing `None`
   still works and stores `NO_PROV`); test with `if f.prov:` rather than
   `is None`.

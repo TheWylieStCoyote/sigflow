@@ -1,6 +1,8 @@
 """Transfer contracts run on CPU; real CUDA round trips run when available."""
 
+import gc
 import sys
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,6 +18,7 @@ from sigflow import (
     block,
     dsp,
     from_iterable,
+    port,
     run,
     to_device,
     to_host,
@@ -39,6 +42,21 @@ class DeviceArray:
 
 class ForeignDeviceArray(DeviceArray):
     """Another library's CUDA array: speaks the interface, is not a CuPy array."""
+
+
+class CudaInterfaceView:
+    """A non-CuPy object exporting real device memory through the CUDA protocol."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.dtype, self.shape, self.ndim = owner.dtype, owner.shape, owner.ndim
+
+    @property
+    def __cuda_array_interface__(self):
+        return self.owner.__cuda_array_interface__
+
+    def __array__(self, *args, **kwargs):
+        raise AssertionError("foreign CUDA data must not be converted through NumPy")
 
 
 @pytest.fixture
@@ -340,6 +358,57 @@ def test_reusable_graph_keeps_its_declared_input_contract():
         _ = dsp.sine(n=8, frames=1) >> reusable
 
 
+@pytest.mark.parametrize("shape", [None, (None,), (N,)])
+@pytest.mark.parametrize("builder", [False, True])
+def test_declared_size_survives_gradual_producer(shape, builder):
+    contract = SignalType(float, (4,))
+    if builder:
+        stage = Graph("four")
+        inlet = stage.input(contract)
+        transfer = stage.add(to_host())
+        stage.connect(inlet, transfer).output(transfer)
+    else:
+        stage = block(lambda x: x, inputs=contract, outputs=contract, preserve_type=True)
+    good = from_iterable([np.zeros(4)], type=SignalType(float, shape)) >> stage
+    assert good.out_type.shape == (4,)
+    assert run(good, check="all", on_error="raise")[0].data.shape == (4,)
+    bad = from_iterable([np.zeros(8)], type=SignalType(float, shape)) >> stage
+    with pytest.raises(TypeMismatch):
+        run(bad, check="all", on_error="raise")
+    needs_eight = block(
+        lambda x: x, inputs=SignalType(float, (8,)), outputs=SignalType(float, (8,))
+    )
+    with pytest.raises(TypeMismatch):
+        _ = good >> needs_eight
+
+
+@pytest.mark.parametrize("key,error", [(9, IndexError), ("missing", KeyError), (1.5, TypeError)])
+def test_builder_port_errors_restore_complete_state(key, error):
+    graph = Graph()
+    src = graph.add(from_iterable([], type=(SignalType(float, (4,)),) * 2))
+    selection = graph.add(port(key))
+    graph.output(src)
+    members, edges = dict(graph.members), list(graph.edges)
+    env, output, count = graph._env, graph.out_type, graph._count
+    with pytest.raises(error):
+        graph.connect(src, selection)
+    assert graph.members == members and graph.edges == edges
+    assert graph._env is env and graph.out_type == output and graph._count == count
+
+
+def test_builder_early_validation_error_rolls_back_implicit_nodes():
+    graph = Graph()
+    src = graph.add(dsp.sine(n=4, frames=1))
+    graph.output(src)
+    members, count = dict(graph.members), graph._count
+    with pytest.raises(KeyError, match="input named"):
+        graph.connect(dsp.sine(n=8), to_host(), slot="missing")
+    assert graph.members == members and graph._count == count and not graph.edges
+    transfer = graph.add(to_host())
+    graph.connect(src, transfer).output(transfer)
+    assert run(graph, check="all", on_error="raise")[0].data.shape == (4,)
+
+
 def test_preserve_type_declaration_checked_at_runtime():
     @block(preserve_type=True)
     def bad(x: Sig[T]) -> Sig[T]:
@@ -405,10 +474,46 @@ def test_cuda_roundtrip_when_available(cuda, subclass):
     xr.testing.assert_identical(to_host(on_device), labeled)
 
 
+def test_real_foreign_cuda_interface_roundtrip_and_lifetime(cuda):
+    cp = cuda
+    expected = np.arange(12, dtype=np.float32).reshape(3, 4)
+    device_data = cp.asarray(expected)
+    foreign = CudaInterfaceView(device_data)
+    assert not isinstance(foreign, cp.ndarray)
+    previous_device = cp.cuda.Device().id
+    shared = to_device(foreign, device=device_data.device.id)
+    assert isinstance(shared, cp.ndarray) and shared.data.ptr == device_data.data.ptr
+    copied = to_device(foreign, device=device_data.device.id, copy=True)
+    assert copied.data.ptr != device_data.data.ptr
+    np.testing.assert_array_equal(cp.asnumpy(copied), expected)
+    np.testing.assert_array_equal(to_host(foreign), expected)
+    output = run(
+        from_iterable([foreign], type=SignalType(np.float32, (3, 4))) >> to_host(),
+        check="all", on_error="raise",
+    )
+    np.testing.assert_array_equal(output[0].data, expected)
+    if cp.cuda.runtime.getDeviceCount() > 1:
+        target = (device_data.device.id + 1) % cp.cuda.runtime.getDeviceCount()
+        moved = to_device(foreign, device=target)
+        assert moved.device.id == target
+        np.testing.assert_array_equal(to_host(moved), expected)
+    assert cp.cuda.Device().id == previous_device
+    owner = weakref.ref(foreign)
+    del foreign, device_data
+    gc.collect()
+    # The zero-copy view must keep its foreign allocation owner alive.
+    assert owner() is not None
+    np.testing.assert_array_equal(to_host(shared), expected)
+    del shared
+    gc.collect()
+    assert owner() is None
+
+
+@pytest.mark.parametrize("foreign", [False, True])
 @pytest.mark.parametrize(
     "transfer,copy", [(to_host, False), (to_device, False), (to_device, True)]
 )
-def test_nondefault_producer_stream_is_ready(cuda, transfer, copy):
+def test_nondefault_producer_stream_is_ready(cuda, transfer, copy, foreign):
     cp = cuda
     kernel = cp.RawKernel(
         r"""
@@ -427,7 +532,8 @@ def test_nondefault_producer_stream_is_ready(cuda, transfer, copy):
     with producer:
         kernel((1,), (1,), (value,))
     try:
-        result = transfer(value, copy=copy)
+        payload = CudaInterfaceView(value) if foreign else value
+        result = transfer(payload, copy=copy)
         assert producer.done
         result = cp.asnumpy(result) if isinstance(result, cp.ndarray) else result
         np.testing.assert_array_equal(result, [42.0])

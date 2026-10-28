@@ -177,7 +177,23 @@ class Graph(Node):
 
     def connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
         """Connect ``src`` (a Ref, optionally with a port) to ``dst`` (a Ref or a node to add).
-        ``slot`` names the consumer's input parameter (or index) for multi-input blocks."""
+        ``slot`` names the consumer's input parameter (or index) for multi-input blocks.
+        Any validation error restores the graph, including implicitly added nodes.
+        """
+        if self._deferred:
+            # Internal lowering wires an already validated tree. Avoid a full
+            # graph snapshot per edge on this private fast path.
+            return self._connect(src, dst, slot)
+        previous = (
+            dict(self.members), list(self.edges), self._env, self.out_type, self._count
+        )
+        try:
+            return self._connect(src, dst, slot)
+        except Exception:
+            self.members, self.edges, self._env, self.out_type, self._count = previous
+            raise
+
+    def _connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
         src = src if isinstance(src, Ref) else self.add(src)
         dst = dst if isinstance(dst, Ref) else self.add(dst)
         if dst.node is self._input:
@@ -217,15 +233,9 @@ class Graph(Node):
         if self._deferred:
             self._check_edge(src, dst, slot)
             return self
-        previous = dict(self.members), self._env, self.out_type
-        try:
-            self._reject_cycles()
-            self._resolve_types()
-            self.ratios()
-        except (TypeMismatch, RatioMismatch):
-            self.edges.pop()
-            self.members, self._env, self.out_type = previous
-            raise
+        self._reject_cycles()
+        self._resolve_types()
+        self.ratios()
         return self
 
     def output(self, *refs: Any) -> "Graph":

@@ -533,6 +533,8 @@ as_type = _as_type
 
 
 def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
+    if produced is Any or required is Any:
+        return  # gradual dtype information must not bind a variable to Any
     if isinstance(produced, DVar) and isinstance(required, DVar):
         env.union_dtype(produced.name, required.name, where)
         return
@@ -592,9 +594,7 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
 
     _unify_dtype(produced.dtype, required.dtype, env, where)
 
-    if required.shape is not None:
-        if produced.shape is None:
-            return env  # gradual: unknown shape is checked at runtime
+    if required.shape is not None and produced.shape is not None:
         if len(produced.shape) != len(required.shape):
             raise TypeMismatch(
                 f"{where}: rank {len(produced.shape)} produced, rank {len(required.shape)} required "
@@ -633,28 +633,45 @@ def narrow(produced: Any, required: Any, where: str = "") -> Any:
     """The contract carried by a node that passes its input through unchanged
     (``required`` is its declared input) once ``produced`` is connected to it:
     ``produced`` wherever it says something, ``required`` where ``produced`` is
-    gradual (``Any`` dtype, unknown shape, no rate or units). Raises
-    :class:`TypeMismatch` when ``produced`` does not satisfy ``required``."""
+    gradual (``Any`` dtype, unknown axes, no rate or units). Unification bindings
+    and repeated-variable relationships are retained across the entire contract.
+    Raises :class:`TypeMismatch` when ``produced`` does not satisfy ``required``.
+    """
     produced, required = _as_type(produced), _as_type(required)
-    unify(produced, required, Env(), where)
-    if isinstance(produced, TupleType) and isinstance(required, TupleType):
-        return TupleType(
-            tuple(narrow(p, r, where) for p, r in zip(produced.items, required.items))
+    env = unify(produced, required, Env(), where)
+
+    def dimension(d: Dim) -> Dim:
+        if not isinstance(d, str):
+            return d
+        bound = env.value(d)
+        return bound if bound is not None else env.find(d)
+
+    def merge(p: Any, r: Any) -> Any:
+        if isinstance(p, TupleType) and isinstance(r, TupleType):
+            return TupleType(tuple(merge(a, b) for a, b in zip(p.items, r.items)))
+        if not (isinstance(p, SignalType) and isinstance(r, SignalType)):
+            return p
+        dtype = r.dtype if p.dtype is Any else p.dtype
+        if isinstance(dtype, DVar):
+            bound = env.value(dtype.name)
+            dtype = bound if bound is not None else DVar(env.find(dtype.name))
+        if p.shape is None:
+            shape = r.shape
+        elif r.shape is None:
+            shape = p.shape
+        else:
+            shape = tuple(a if a is not None else b for a, b in zip(p.shape, r.shape))
+        if shape is not None:
+            shape = tuple(dimension(d) for d in shape)
+        return SignalType(
+            dtype,
+            shape,
+            p.rate if p.rate is not None else r.rate,
+            p.units if p.units is not None else r.units,
+            p.meta | r.meta,
         )
-    if not (isinstance(produced, SignalType) and isinstance(required, SignalType)):
-        return produced
-    dtype = produced.dtype
-    if (dtype is Any or isinstance(dtype, DVar)) and not (
-        required.dtype is Any or isinstance(required.dtype, DVar)
-    ):
-        dtype = required.dtype
-    return SignalType(
-        dtype,
-        produced.shape if produced.shape is not None else required.shape,
-        produced.rate if produced.rate is not None else required.rate,
-        produced.units if produced.units is not None else required.units,
-        produced.meta,
-    )
+
+    return merge(produced, required)
 
 
 def resolve(t: Any, env: Env) -> Any:

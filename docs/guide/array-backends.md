@@ -120,6 +120,13 @@ behaviour, DataArray subclasses, and a kernel launched on a non-blocking stream
 whose result a transfer must wait for. Cross-device cases run with two or more
 GPUs.
 
+CUDA-array-interface integration tests also use a non-CuPy proxy exporting a
+real GPU allocation. CuPy imports that allocation through the actual protocol,
+not a test double. Tests check shared views, explicit copies, ownership lifetime,
+typed graph inputs and non-default producer streams; cross-device copies are
+checked when another GPU is available. This verifies protocol interoperability,
+not every individual version of Torch or Numba.
+
 `.github/workflows/gpu.yml` is a manually triggered **GPU integration**
 workflow. Register a self-hosted Linux x64 runner with the `gpu` label, a CUDA
 device, a working driver and the runtime CuPy needs; then run the workflow and

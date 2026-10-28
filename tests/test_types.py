@@ -6,7 +6,7 @@ from sigflow import Any, Env, Sig, TupleType, TypeMismatch, unify
 from sigflow import SignalType
 from sigflow.dims import M, N, T
 from sigflow import SignalType
-from sigflow.types import DVar, scoped
+from sigflow.types import DVar, narrow, scoped
 
 
 def test_sig_construction_and_display():
@@ -67,6 +67,58 @@ def test_dtype_variables():
     assert env.value("T") == np.dtype(float)
     with pytest.raises(TypeMismatch):
         unify(SignalType[T, N], SignalType[int, N], env)  # T=float64 cannot feed int
+
+
+@pytest.mark.parametrize(
+    "produced,required,expected",
+    [
+        ((None,), (4,), (4,)),
+        ((N,), (4,), (4,)),
+        ((None, 4), (N, N), (4, 4)),
+        ((N, N), (4, None), (4, 4)),
+        ((None, 3), (4, None), (4, 3)),
+    ],
+)
+def test_narrow_preserves_axis_constraints(produced, required, expected):
+    carried = narrow(SignalType(float, produced), SignalType(float, required))
+    assert carried.shape == expected
+    carried.check(np.zeros(expected))
+    wrong = (*expected[:-1], expected[-1] + 1)
+    with pytest.raises(TypeMismatch):
+        carried.check(np.zeros(wrong))
+
+
+def test_narrow_retains_unbound_aliases_and_tuple_bindings():
+    carried = narrow(SignalType(float, (None, M)), SignalType(float, (N, N)))
+    assert carried.shape[0] == carried.shape[1]
+    with pytest.raises(TypeMismatch):
+        carried.check(np.zeros((2, 3)))
+
+    produced = TupleType((SignalType(Any, (None,)), SignalType(float, (4,))))
+    required = TupleType((SignalType(T, (N,)), SignalType(T, (N,))))
+    carried = narrow(produced, required)
+    assert carried.items == (SignalType(float, (4,)), SignalType(float, (4,)))
+
+
+def test_gradual_dtype_does_not_hide_later_bindings():
+    env = unify(SignalType(Any), SignalType(T))
+    assert env.value("T") is None
+    unify(SignalType(float), SignalType(T), env)
+    assert env.value("T") == np.dtype(float)
+
+
+def test_narrow_keeps_metadata_and_checks_known_rate_units():
+    carried = narrow(
+        SignalType(float, (None,), meta=frozenset({"source"})),
+        SignalType(float, (4,), 48000, "V", frozenset({"calibrated"})),
+    )
+    assert carried == SignalType(
+        float, (4,), 48000, "V", frozenset({"source", "calibrated"})
+    )
+    with pytest.raises(TypeMismatch, match="rate"):
+        narrow(SignalType(float, rate=48000), SignalType(float, (4,), 96000))
+    with pytest.raises(TypeMismatch, match="units"):
+        narrow(SignalType(float, units="V"), SignalType(float, (4,), units="A"))
 
 
 def test_tuple_types():

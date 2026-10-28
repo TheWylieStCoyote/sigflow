@@ -141,6 +141,13 @@ their coordinates differ.
 A generator block gets its items unwrapped one by one; the labels used for its
 outputs are those of the item consumed most recently, which is right for
 one-in-one-out generators and worth knowing for buffering ones.
+Dimension-variable mappings, layout, coordinates, name and attributes follow the
+latest labelled item, even if its dimension names differ from the preceding
+item. Plain-array items are not given stale labels from an earlier DataArray.
+Static non-stream inputs keep their own labels. The adapter keeps only current
+stream-item references; normal runtime shape/dtype checks still apply, so this
+does not permit violating a dimension size already bound for the run. The same
+rules apply to synchronous and asynchronous stream functions.
 
 A body that needs the labels takes the frame instead of the array:
 
