@@ -83,6 +83,10 @@ Changed
 - Declared rates and units are checked when a graph is built even when the
   produced shape is unknown; before, an unknown shape skipped those checks
   until run time.
+- `parallel(..., backend="process")` starts its workers from a fork server
+  (a fresh interpreter where there is none) instead of forking the running,
+  multi-threaded runtime, which Python 3.12+ warns about. Blocks sent to a
+  worker are re-imported there, as before.
 - `Frame.prov` and `Issue.prov` are `Provenance`, never `None` (passing `None`
   still works and stores `NO_PROV`); test with `if f.prov:` rather than
   `is None`.

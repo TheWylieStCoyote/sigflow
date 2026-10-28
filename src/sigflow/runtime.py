@@ -1259,7 +1259,7 @@ class Runner:
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
         pool = (
-            cf.ProcessPoolExecutor(node.workers)
+            cf.ProcessPoolExecutor(node.workers, mp_context=_worker_context())
             if node.backend == "process"
             else cf.ThreadPoolExecutor(node.workers)
         )
@@ -1579,6 +1579,19 @@ class _SubPipe:
             await self.task
         except (asyncio.CancelledError, Exception):
             pass
+
+
+def _worker_context() -> Any:
+    """How process-pool workers start. The runtime is multi-threaded (an event loop,
+    helper threads), so forking it is unsafe and Python 3.12+ warns; a fork server
+    (Linux) or a fresh interpreter starts workers cleanly. Blocks sent to a worker
+    are re-imported there, which ``backend="process"`` already requires."""
+    import multiprocessing
+
+    try:
+        return multiprocessing.get_context("forkserver")
+    except ValueError:  # no fork server on this platform
+        return multiprocessing.get_context("spawn")
 
 
 def _call_block(target: Any, data: Any, cfg: dict, labels: bool = False) -> Any:

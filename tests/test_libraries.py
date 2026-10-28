@@ -74,8 +74,7 @@ def test_plot_blocks_record_frames_and_animate(tmp_path):
     s = plot.spectrum()
     run(dsp.chirp(frames=4, n=128) >> p >> dsp.to_complex >> s)
     assert len(p.frames) == 4 and len(s.frames) == 4
-    anim = p.animate(interval=50)
-    assert anim is not None
+    assert p.animate(interval=50).to_jshtml()  # rendered, not just built
     path = p.save(str(tmp_path / "a.gif"), interval=50)
     assert os.path.getsize(path) > 0
     assert "<img" in p._repr_html_()
