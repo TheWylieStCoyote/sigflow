@@ -1,5 +1,6 @@
-from typing import AsyncIterator, Iterator, Literal
 import asyncio
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal
 
 import numpy as np
 import pytest

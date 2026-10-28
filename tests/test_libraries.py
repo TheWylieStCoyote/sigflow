@@ -1,5 +1,6 @@
-from typing import Iterator, Literal
 import os
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 import pytest

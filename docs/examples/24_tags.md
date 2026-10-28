@@ -110,7 +110,7 @@ def transcribe(
 ) -> Annotated[Sig[float, N], clears("speech")]:
     """A stand-in recogniser: it may only run on speech, and what it hands on is
     no longer "speech to be recognised". A clipped stretch is worth a word."""
-    text = "la" * int(round(f["level"] * 10))
+    text = "la" * round(f["level"] * 10)
     if "clipped" in f:
         text += " (distorted)"
     return f.tag(text=text)

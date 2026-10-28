@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["parse", "compatible", "factor", "convert", "describe", "UnitError"]
+__all__ = ["UnitError", "compatible", "convert", "describe", "factor", "parse"]
 
 
 class UnitError(ValueError):

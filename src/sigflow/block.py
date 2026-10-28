@@ -34,13 +34,12 @@ from __future__ import annotations
 import collections.abc
 import functools
 import inspect
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
-    Callable,
-    Mapping,
-    TYPE_CHECKING,
     get_args,
     get_origin,
 )
@@ -57,7 +56,7 @@ from .types import (
     tag_names,
 )
 
-__all__ = ["block", "source", "tap", "BlockDef", "Framed", "InputSpec", "lift"]
+__all__ = ["BlockDef", "Framed", "InputSpec", "block", "lift", "source", "tap"]
 
 
 class _FramedMarker:
@@ -66,7 +65,7 @@ class _FramedMarker:
     def __init__(self, item: Any) -> None:
         self.item = as_type(item)
 
-    def __class_getitem__(cls, item: Any) -> "_FramedMarker":
+    def __class_getitem__(cls, item: Any) -> _FramedMarker:
         return cls(item)
 
     def __repr__(self) -> str:
@@ -440,12 +439,12 @@ class BlockDef:
         annotations and provenance)."""
         return self.node(**config)(items)
 
-    def node(self, **config: Any) -> "Block":
+    def node(self, **config: Any) -> Block:
         from .graph import Block
 
         return Block(self, config)
 
-    def bind(self, **config: Any) -> "BlockDef":
+    def bind(self, **config: Any) -> BlockDef:
         """Return a new definition with some configuration baked in."""
         new = BlockDef(
             functools.partial(self.fn, **config),

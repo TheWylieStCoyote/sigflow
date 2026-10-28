@@ -16,12 +16,13 @@ What this exercises
     built purely from lineage
 """
 
-from typing import Iterator, Literal
 from collections import Counter
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 
-from sigflow import MISSING, Frame, Framed, Sig, block, dsp, port, run, source
+from sigflow import Frame, Framed, Sig, block, port, run, source
 
 
 @source(total=lambda frames, **_: frames)

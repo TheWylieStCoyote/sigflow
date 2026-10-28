@@ -53,3 +53,12 @@ extraPaths = [
   "src",
 ] # resolve sigflow from this checkout, whatever interpreter is selected
 reportMissingModuleSource = false
+
+[tool.ruff]
+extend-exclude = ["*.ipynb"]  # notebooks are edited in Jupyter, not linted
+
+[tool.ruff.lint]
+# Errors are data in sigflow: the runtime catches everything a block raises and
+# attaches it to the frame, and best-effort cleanup (sockets, widgets, figures)
+# must not raise. Broad catches are the policy, not an oversight.
+ignore = ["BLE001", "S110"]

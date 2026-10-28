@@ -32,7 +32,7 @@ data = xr.DataArray(
 )
 
 centered = remove_dc(data, gain=2)
-assert centered.dims == ("time", "channel")       # the caller's layout
+assert centered.dims == ("time", "channel")  # the caller's layout
 xr.testing.assert_equal(centered.time, data.time)  # coordinates survive
 assert centered.attrs == {"units": "V"} and centered.name == "voltage"
 ```
@@ -64,7 +64,9 @@ goes straight to the body.
 ```python
 from sigflow import dsp, from_iterable, run
 
-frame = run(from_iterable([data.isel(channel=0)]) >> dsp.scale(gain=0.5), labels=True)[0]
+frame = run(from_iterable([data.isel(channel=0)]) >> dsp.scale(gain=0.5), labels=True)[
+    0
+]
 assert frame.data.dims == ("time",)
 ```
 
@@ -127,7 +129,7 @@ def add(
     return x + y
 
 
-weights = np.ones((2, 8))             # (channel, time), as the contract says
+weights = np.ones((2, 8))  # (channel, time), as the contract says
 out = run(from_iterable([(data, weights)], type=add.in_type) >> add)[0].data
 assert out.dims == ("time", "channel")
 ```

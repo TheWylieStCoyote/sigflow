@@ -1,6 +1,6 @@
 """Stream-rate contracts (ratio) and keyed routing (switch) — 0.4 features."""
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
 from fractions import Fraction
 
 import numpy as np
@@ -170,7 +170,6 @@ def test_strict_run_enforces_declared_ratio_and_expected_count():
 
 def test_switch_by_annotation_and_by_callable():
     g = ramp() >> switch("band", {"lo": neg, "hi": scale(gain=10.0)})
-    assert g.ratio == Ratio.ONE and g.out_type == neg.out_type or True
     out = run(g)
     assert sorted(f["seq"] for f in out) == list(range(8))
     for f in out:

@@ -10,9 +10,10 @@ What this exercises
   * blocks are functions: unit-test them with plain asserts, no graph needed
 """
 
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Literal
 
-from typing import Iterator, Literal
 import numpy as np
 import scipy.signal as ss
 
@@ -20,16 +21,15 @@ from sigflow import (
     Frame,
     Framed,
     Sig,
+    SignalType,
     Stream,
     TypeMismatch,
     block,
-    dsp,
     lift,
     run,
     source,
 )
 from sigflow.dims import N
-from sigflow import SignalType
 
 # ------------------------------------------------------------- rate and units
 
@@ -118,7 +118,7 @@ def report(m: Sig[Measurement]) -> Sig[str]:
 def flaky(x: Sig[float, N], every: int = 4) -> Sig[float, N]:
     flaky.calls += 1
     if flaky.calls % every == 0:
-        raise IOError("DMA underrun")
+        raise OSError("DMA underrun")
     return x
 
 
@@ -145,7 +145,7 @@ if __name__ == "__main__":
             print(
                 f"{policy:9s}: {len(out)} frames, {sum(f.failed for f in out)} failed"
             )
-        except IOError as e:
+        except OSError as e:
             print(f"{policy:9s}: run aborted with {e!r}")
 
     # 3. runtime checking: "first" only checks the first frame of each edge, "all" checks every frame

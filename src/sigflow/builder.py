@@ -30,13 +30,13 @@ from .graph import Node, Select, TupleType, as_node, describe
 from .ratio import Ratio, RatioMismatch
 from .types import Env, SignalType, TypeMismatch, narrow, resolve, unify
 
-__all__ = ["Graph", "Ref", "Join", "Chain", "lower"]
+__all__ = ["Chain", "Graph", "Join", "Ref", "lower"]
 
 
 class Ref:
     """A node placed in a :class:`Graph` (optionally with a port selected)."""
 
-    def __init__(self, graph: "Graph", node: Node, name: str, key: Any = None) -> None:
+    def __init__(self, graph: Graph, node: Node, name: str, key: Any = None) -> None:
         self.graph, self._node, self.name, self.key = graph, node, name, key
 
     @property
@@ -45,7 +45,7 @@ class Ref:
         # by a resolved copy when an upstream edge is connected
         return self.graph.members.get(self.name, self._node)
 
-    def __getitem__(self, key: Any) -> "Ref":
+    def __getitem__(self, key: Any) -> Ref:
         if not isinstance(self.node.out_type, TupleType):
             raise TypeError(
                 f"{self.name} has a single output; [] selects ports of tuple outputs"
@@ -60,7 +60,7 @@ class Ref:
             else self.node.out_type
         )
 
-    def __rshift__(self, other: Any) -> "Ref":
+    def __rshift__(self, other: Any) -> Ref:
         """``a >> b`` inside a graph: add ``b`` if needed and connect."""
         dst = other if isinstance(other, Ref) else self.graph.add(other)
         self.graph.connect(self, dst)
@@ -95,8 +95,9 @@ class Chain(Node):
         self.in_type = stages[0].in_type
         self.out_type = stages[-1].out_type
         self.port_names = tuple(getattr(stages[-1], "port_names", ()))
-        if hasattr(stages[0], "join_op"):
-            self.join_op = getattr(stages[0], "join_op")
+        join_op = getattr(stages[0], "join_op", None)
+        if join_op is not None:
+            self.join_op = join_op
         self.name = " >> ".join(s.name for s in stages)
 
     def validate(self, env: Any = None) -> Any:
@@ -175,7 +176,7 @@ class Graph(Node):
         self.members[key] = node
         return Ref(self, node, key)
 
-    def connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
+    def connect(self, src: Any, dst: Any, slot: Any = None) -> Graph:
         """Connect ``src`` (a Ref, optionally with a port) to ``dst`` (a Ref or a node to add).
         ``slot`` names the consumer's input parameter (or index) for multi-input blocks.
         Any validation error restores the graph, including implicitly added nodes.
@@ -185,7 +186,11 @@ class Graph(Node):
             # graph snapshot per edge on this private fast path.
             return self._connect(src, dst, slot)
         previous = (
-            dict(self.members), list(self.edges), self._env, self.out_type, self._count
+            dict(self.members),
+            list(self.edges),
+            self._env,
+            self.out_type,
+            self._count,
         )
         try:
             return self._connect(src, dst, slot)
@@ -193,7 +198,7 @@ class Graph(Node):
             self.members, self.edges, self._env, self.out_type, self._count = previous
             raise
 
-    def _connect(self, src: Any, dst: Any, slot: Any = None) -> "Graph":
+    def _connect(self, src: Any, dst: Any, slot: Any = None) -> Graph:
         src = src if isinstance(src, Ref) else self.add(src)
         dst = dst if isinstance(dst, Ref) else self.add(dst)
         if dst.node is self._input:
@@ -238,7 +243,7 @@ class Graph(Node):
         self.ratios()
         return self
 
-    def output(self, *refs: Any) -> "Graph":
+    def output(self, *refs: Any) -> Graph:
         """Declare the graph's output(s); several outputs become one tuple frame."""
         self.outputs = [r if isinstance(r, Ref) else self.add(r) for r in refs]
         types = [r.out_type for r in self.outputs]
@@ -464,10 +469,9 @@ class Graph(Node):
 # --------------------------------------------------------------------------- #
 
 
-def lower(node: Node) -> "Graph":
+def lower(node: Node) -> Graph:
     """Compile an operator-tree node (pipelines, fan-outs, zips, ...) into a Graph of
     simple members and edges, so there is one scheduler for every graph."""
-    from .graph import Fanout, Pipeline, Zip
 
     if isinstance(node, Graph):
         return node
@@ -483,7 +487,7 @@ def lower(node: Node) -> "Graph":
     return g
 
 
-def _lower_into(g: "Graph", node: Node, src: Ref | None) -> Ref:
+def _lower_into(g: Graph, node: Node, src: Ref | None) -> Ref:
     from .graph import Fanout, Pipeline, Zip
 
     if isinstance(node, Pipeline):
@@ -529,7 +533,7 @@ def _lower_into(g: "Graph", node: Node, src: Ref | None) -> Ref:
     return ref
 
 
-def _lower_join(g: "Graph", node: Node, src: Ref | None) -> tuple[list[Ref], "Join"]:
+def _lower_join(g: Graph, node: Node, src: Ref | None) -> tuple[list[Ref], Join]:
     """Lower the branches of a fan-out / zip; return their refs and the (unplaced) join."""
     from .graph import Fanout, Zip
 

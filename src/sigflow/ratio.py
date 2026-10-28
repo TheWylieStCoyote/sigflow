@@ -31,7 +31,7 @@ class Ratio:
     """Outputs per input frame: an exact fraction, or a bound (``N:1`` fewer-or-equal,
     ``1:N`` more-or-equal), or ``any``."""
 
-    __slots__ = ("value", "kind")
+    __slots__ = ("kind", "value")
 
     def __init__(self, value: Fraction | None = None, kind: str = "exact") -> None:
         if value is not None:
@@ -42,12 +42,12 @@ class Ratio:
         self.kind = kind
 
     @classmethod
-    def of(cls, n_in: int | float | Fraction, n_out: int | float | Fraction) -> "Ratio":
+    def of(cls, n_in: float | Fraction, n_out: float | Fraction) -> Ratio:
         """``n_out`` frames for every ``n_in`` frames (``Ratio.of(4, 1)`` is ``"4:1"``)."""
         return cls(Fraction(n_out) / Fraction(n_in))
 
     # -- algebra ------------------------------------------------------------ #
-    def __mul__(self, other: "Ratio") -> "Ratio":
+    def __mul__(self, other: Ratio) -> Ratio:
         a, b = self, other
         if a.kind == "any" or b.kind == "any":
             return Ratio.ANY
@@ -65,7 +65,7 @@ class Ratio:
             return Ratio.ANY
         return a if a.kind == b.kind else Ratio.ANY
 
-    def compatible(self, other: "Ratio") -> bool:
+    def compatible(self, other: Ratio) -> bool:
         """Could two branches with these ratios emit the same number of frames?"""
         a, b = self, other
         if a.kind == "any" or b.kind == "any":
@@ -80,7 +80,7 @@ class Ratio:
         assert v is not None
         return v <= 1 if b.kind == "down" else v >= 1
 
-    def meet(self, other: "Ratio") -> "Ratio":
+    def meet(self, other: Ratio) -> Ratio:
         """The more specific of two compatible ratios."""
         if self.kind == "exact":
             return self
@@ -115,10 +115,10 @@ class Ratio:
     def to_json(self) -> str:
         return str(self)
 
-    ONE: "Ratio"
-    ANY: "Ratio"
-    DOWN: "Ratio"
-    UP: "Ratio"
+    ONE: Ratio
+    ANY: Ratio
+    DOWN: Ratio
+    UP: Ratio
 
 
 Ratio.ONE = Ratio(Fraction(1))

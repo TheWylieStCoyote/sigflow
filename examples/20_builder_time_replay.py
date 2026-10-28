@@ -10,10 +10,11 @@ What this exercises
   * plot.multi and plot.history in one figure
 """
 
-from typing import AsyncIterator, Iterator, Literal
 import os
 import tempfile
 import time
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal
 
 import numpy as np
 

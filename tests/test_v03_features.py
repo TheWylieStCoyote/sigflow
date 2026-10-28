@@ -1,9 +1,9 @@
 """Unified scheduler, provenance modes, inline stream blocks, parallel(), zmq, Lineage (0.3 features)."""
 
-from typing import Iterator, Literal
 import asyncio
 import pickle
 import threading
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -12,6 +12,7 @@ from sigflow import (
     Frame,
     Lineage,
     Sig,
+    SignalType,
     Stream,
     TypeMismatch,
     block,
@@ -21,9 +22,8 @@ from sigflow import (
     run,
     source,
 )
-from sigflow.dims import N
-from sigflow import SignalType
 from sigflow.builder import Chain, lower
+from sigflow.dims import N
 from sigflow.frame import PROVENANCE_MODE
 
 
@@ -83,7 +83,7 @@ def test_failures_and_strict_propagate_through_scheduler():
     with pytest.raises(ValueError, match="boom"):
         run(ramp() >> boom >> scale, on_error="raise")
     short = ramp(count=6).take(3)
-    with pytest.raises(Exception):
+    with pytest.raises(TypeMismatch, match="different numbers of frames"):
         run((ramp(count=6) >> scale) & short, strict=True)
     assert len(run((ramp(count=6) >> scale) & short)) == 3
 

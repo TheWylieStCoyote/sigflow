@@ -71,9 +71,6 @@ from .ratio import Ratio, RatioMismatch
 from .runtime import arun, iterate, iterate_sync, run
 from .types import (
     Any,
-    clears,
-    provides,
-    requires,
     CMatrix,
     CVector,
     Env,
@@ -86,13 +83,16 @@ from .types import (
     TupleType,
     TypeMismatch,
     Vector,
+    clears,
+    provides,
+    requires,
     unify,
 )
 from .ui import dashboard, require_widgets
 from .xarray import default_labels
 
 __version__ = "0.4.0"
-__all__ = [
+__all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "Any",
     "Sig",
     "SignalType",

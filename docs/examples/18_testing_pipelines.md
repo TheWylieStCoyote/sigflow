@@ -32,10 +32,11 @@ What this exercises
     a regression test pinned to a recorded golden output
 """
 
-from typing import AsyncIterator, Iterator
 import asyncio
 import os
 import sys
+from collections.abc import AsyncIterator, Iterator
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -52,13 +53,12 @@ from sigflow import (
     Stream,
     TypeMismatch,
     block,
-    dsp,  # noqa: E402
+    dsp,
     from_iterable,
     run,
     source,
-)  # noqa: E402
-from sigflow.dims import M, N  # noqa: E402
-from sigflow import SignalType
+)
+from sigflow.dims import M, N
 
 RATE = 1000.0
 
@@ -219,7 +219,7 @@ def test_error_policies_are_what_the_docs_say():
     def boom(x: Sig[float, N]) -> Sig[float, N]:
         raise RuntimeError("no")
 
-    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, N])  # noqa: E731
+    src = lambda: from_iterable([np.ones(4)] * 3, Sig[float, N])
     out = run(src() >> boom >> remove_dc)
     assert (
         all(f.failed and f.data is MISSING for f in out)
@@ -232,7 +232,7 @@ def test_error_policies_are_what_the_docs_say():
 
 def test_graph_draws_to_svg(tmp_path):
     path = chain.draw().save(str(tmp_path / "chain_graph.svg"))
-    assert "<svg" in open(path, encoding="utf-8").read()
+    assert "<svg" in Path(path).read_text(encoding="utf-8")
 
 
 GOLDEN = [51.0, 125.0, 250.0]  # recorded once from a known-good version

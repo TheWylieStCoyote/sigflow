@@ -25,7 +25,8 @@ import inspect
 import queue
 import threading
 import time
-from typing import Any, AsyncIterator, Callable, Iterator, NoReturn, cast
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import Any, NoReturn, cast
 
 import numpy as np
 
@@ -52,12 +53,12 @@ from .graph import (
 from .progress import Monitor, Reporter
 from .types import Env, TypeMismatch, tag_names
 
-__all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
+__all__ = ["RunOptions", "Runner", "arun", "iterate", "iterate_sync", "run"]
 
 _DONE = object()
 
 
-def _reraise(failure: "asyncio.Future[Any]") -> NoReturn:
+def _reraise(failure: asyncio.Future[Any]) -> NoReturn:
     """Raise the error a member recorded in the shared failure future."""
     exc = failure.exception()
     assert exc is not None
@@ -342,8 +343,6 @@ class Runner:
             value: Any = f.data
             frame = f  # the current frame as a *framed* block would see it
             failed = f.failed
-            keep_samples = True
-            cfg_used: list = []
             for i, node in enumerate(nodes):
                 st = stats_[i]
                 st.inp += 1
@@ -493,7 +492,7 @@ class Runner:
                         await queues[(dst, slot)].put(item)
                     for q in outs:
                         await q.put(f)
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 # a failure (or cancellation) is recorded once for the whole graph; every
                 # consumer checks it, so the run re-raises instead of ending quietly
                 if not failure.done():
@@ -599,7 +598,7 @@ class Runner:
                     pass
 
     # -- per-frame sub-pipelines (feedback / when) ------------------------- #
-    def _subpipe(self, node: Node) -> "_SubPipe":
+    def _subpipe(self, node: Node) -> _SubPipe:
         return _SubPipe(self, node)
 
     async def _feedback(
@@ -723,7 +722,7 @@ class Runner:
             try:
                 async for f in self.compile(branch, feed(q)):
                     await outq.put((label, f))
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 await outq.put(("error", e))
                 raise
             finally:
@@ -739,7 +738,6 @@ class Runner:
             inqs[key], labels[key] = q, label
             tasks.append(asyncio.create_task(drive(label, branch, q)))
         live_ = len(tasks)
-        done_feeding = False
 
         async def router() -> None:
             try:
@@ -755,7 +753,7 @@ class Runner:
                             )
                         continue  # dropped
                     await inqs[key].put(f)
-            except BaseException as e:  # noqa: BLE001
+            except BaseException as e:
                 await outq.put(("error", e))
                 raise
             finally:
@@ -1501,13 +1499,15 @@ class Runner:
             )
         out = _drop_cleared(out, out_type)
         # runtime contract check
-        if self.opts.check == "all" or (self.opts.check == "first" and stats.out == 0):
-            if out.data is not MISSING:
-                try:
-                    out_type.check(out.data, self.opts.env, where=f"{op} output")
-                    _check_tags(out_type, out, where=f"{op} output")
-                except TypeMismatch as e:
-                    raise TypeMismatch(f"runtime check failed: {e}") from None
+        checked = self.opts.check == "all" or (
+            self.opts.check == "first" and stats.out == 0
+        )
+        if checked and out.data is not MISSING:
+            try:
+                out_type.check(out.data, self.opts.env, where=f"{op} output")
+                _check_tags(out_type, out, where=f"{op} output")
+            except TypeMismatch as e:
+                raise TypeMismatch(f"runtime check failed: {e}") from None
         return out
 
 
@@ -1538,7 +1538,7 @@ class _SubPipe:
         try:
             async for f in self.stream:
                 await self.outq.put(f)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             await self.outq.put(("error", e))
         finally:
             await self.outq.put(_DONE)
@@ -1750,7 +1750,7 @@ def _unique(items: Any) -> tuple:
 
 
 async def _drain(
-    q: asyncio.Queue, failure: "asyncio.Future | None" = None
+    q: asyncio.Queue, failure: asyncio.Future | None = None
 ) -> AsyncIterator[Frame]:
     while True:
         if failure is not None and failure.done():
@@ -1855,7 +1855,7 @@ async def _run_sync_stream(
                     parents, consumed[:] = tuple(consumed) or last, []
                     last = parents
                 loop.call_soon_threadsafe(outq.put_nowait, ("item", out, parents))
-        except BaseException as e:  # noqa: BLE001 - forwarded to the loop
+        except BaseException as e:
             loop.call_soon_threadsafe(outq.put_nowait, ("error", e, ()))
         finally:
             loop.call_soon_threadsafe(outq.put_nowait, ("done", None, ()))
@@ -1986,7 +1986,7 @@ def run(graph: Node, **kw: Any) -> list[Frame]:
     def target() -> None:
         try:
             result.append(asyncio.run(coro))
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             error.append(e)
 
     t = threading.Thread(target=target, name="sigflow-run")
@@ -2005,7 +2005,7 @@ def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
         try:
             async for f in iterate(graph, **options):
                 await asyncio.get_running_loop().run_in_executor(None, q.put, f)
-        except BaseException as e:  # noqa: BLE001
+        except BaseException as e:
             q.put(("error", e))
         finally:
             q.put(_DONE)

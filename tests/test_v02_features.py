@@ -1,7 +1,8 @@
 """Units, slicing, time axis, align, Graph builder, plotting, persistence (0.2 features)."""
 
-from typing import Iterator, Literal
 import time
+from collections.abc import Iterator
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -19,8 +20,6 @@ from sigflow import (
     align,
     block,
     dsp,
-    from_iterable,
-    linalg,
     plot,
     replay,
     run,

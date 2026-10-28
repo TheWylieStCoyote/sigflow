@@ -44,12 +44,13 @@ from __future__ import annotations
 
 import functools
 import inspect
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from ._arrays import xarray_module
 from .types import SignalType, TupleType
 
-__all__ = ["default_labels", "current_default", "adapt"]
+__all__ = ["adapt", "current_default", "default_labels"]
 
 _DEFAULT = False
 
@@ -74,7 +75,7 @@ def current_default() -> bool:
 class _Labels:
     """What a block's labelled inputs told us during one call."""
 
-    __slots__ = ("dims", "refs", "order")
+    __slots__ = ("dims", "order", "refs")
 
     def __init__(self) -> None:
         self.dims: dict[str, str] = {}  # dimension variable -> dimension name

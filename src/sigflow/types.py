@@ -23,40 +23,41 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args, get_origin
 
 import numpy as np
+
 from ._arrays import array_metadata as _array_metadata
-from .dims import M, N, T
+from .dims import M, N
 
 __all__ = [
     "Any",
-    "Sig",
-    "Stream",
-    "SignalType",
+    "CMatrix",
+    "CVector",
     "DVar",
-    "TupleType",
-    "StreamType",
-    "TypeMismatch",
-    "unify",
-    "narrow",
-    "resolve",
-    "tag_names",
-    "cleared_names",
-    "carry_tags",
-    "TagSpec",
-    "requires",
-    "provides",
-    "clears",
-    "Env",
     "Dim",
+    "Env",
+    "Matrix",
+    "Scalar",
+    "Sig",
+    "SignalType",
+    "Stream",
+    "StreamType",
+    "TagSpec",
+    "Tensor",
+    "TupleType",
+    "TypeMismatch",
+    "Vector",
+    "carry_tags",
+    "cleared_names",
+    "clears",
+    "describe",
+    "is_signal_type",
+    "narrow",
+    "provides",
+    "requires",
+    "resolve",
     "scoped",
     "slice_shape",
-    "Scalar",
-    "Vector",
-    "Matrix",
-    "Tensor",
-    "CVector",
-    "CMatrix",
-    "is_signal_type",
-    "describe",
+    "tag_names",
+    "unify",
 ]
 
 # A dimension is a fixed int, a symbolic name (str), or None (= any length).
@@ -298,7 +299,7 @@ class SignalType:
     cleared: frozenset[str] = field(default_factory=frozenset)
 
     # -- construction ------------------------------------------------------ #
-    def __class_getitem__(cls, params: Any) -> "SignalType":
+    def __class_getitem__(cls, params: Any) -> SignalType:
         if not isinstance(params, tuple):
             params = (params,)
         dtype = params[0] if len(params) > 0 else Any
@@ -338,27 +339,27 @@ class SignalType:
     def symbols(self) -> set[str]:
         return {d for d in (self.shape or ()) if isinstance(d, str)}
 
-    def with_(self, **changes: Any) -> "SignalType":
+    def with_(self, **changes: Any) -> SignalType:
         """Return a copy with some fields replaced (``shape`` is re-normalised)."""
         from dataclasses import replace
 
         return replace(self, **changes)
 
-    def requires(self, *names: str) -> "SignalType":
+    def requires(self, *names: str) -> SignalType:
         """As an input contract: frames must carry these tags (checked when the
         graph is built against what the producer guarantees, and at run time)."""
         return self.with_(meta=self.meta | frozenset(names))
 
-    def provides(self, *names: str) -> "SignalType":
+    def provides(self, *names: str) -> SignalType:
         """As an output contract: frames carry these tags (the block must attach
         them; checked at run time like the rest of the contract)."""
         return self.with_(meta=self.meta | frozenset(names))
 
-    def clears(self, *names: str) -> "SignalType":
+    def clears(self, *names: str) -> SignalType:
         """As an output contract: these input tags are not carried on."""
         return self.with_(cleared=self.cleared | frozenset(names))
 
-    def resolve(self, env: Env) -> "SignalType":
+    def resolve(self, env: Env) -> SignalType:
         """Substitute bound symbolic dimensions with their integers."""
         t = self
         if isinstance(self.dtype, DVar) and env.value(self.dtype.name) is not None:
@@ -450,13 +451,13 @@ if TYPE_CHECKING:
     # builds the contract. ``Stream[X]`` is an iterable of X to a checker.
     from typing import Generic
 
-    from typing_extensions import TypeAliasType, TypeVarTuple, Unpack
+    from typing_extensions import TypeAliasType, TypeVarTuple
 
     _Ts = TypeVarTuple("_Ts")
 
     Sig = TypeAliasType("Sig", Any, type_params=(_Ts,))
 
-    class Stream(Generic[Unpack[_Ts]]):
+    class Stream(Generic[*_Ts]):
         def __iter__(self) -> Any: ...
         def __aiter__(self) -> Any: ...
 else:
@@ -474,7 +475,7 @@ class TupleType:
 
     items: tuple[Any, ...]
 
-    def __class_getitem__(cls, params: Any) -> "TupleType":
+    def __class_getitem__(cls, params: Any) -> TupleType:
         if not isinstance(params, tuple):
             params = (params,)
         return cls(tuple(_as_type(p) for p in params))
@@ -485,7 +486,7 @@ class TupleType:
     def __iter__(self):
         return iter(self.items)
 
-    def resolve(self, env: Env) -> "TupleType":
+    def resolve(self, env: Env) -> TupleType:
         return TupleType(tuple(t.resolve(env) for t in self.items))
 
     def check(self, value: Any, env: Env | None = None, where: str = "") -> Env:
@@ -512,7 +513,7 @@ class StreamType:
 
     item: Any
 
-    def __class_getitem__(cls, item: Any) -> "StreamType":
+    def __class_getitem__(cls, item: Any) -> StreamType:
         # Stream[Framed[...]] and Stream[Frame] deliver whole frames; keep those markers as-is
         if (
             isinstance(item, type)

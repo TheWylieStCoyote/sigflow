@@ -44,7 +44,6 @@ What this exercises
 
 import importlib.util
 import os
-import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -125,7 +124,6 @@ if __name__ == "__main__":
     print(f"processes: {time.perf_counter() - t0:.1f}s for {len(grid)} points\n")
 
     # --- threads: several background runs, polled together -------------------
-    from sigflow import Monitor
 
     t0 = time.perf_counter()
     runs = {snr: link(snr).start() for snr in grid}

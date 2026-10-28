@@ -9,7 +9,8 @@
 ```python
 """Plot taps, animation export, and shape-checked linear algebra."""
 
-from typing import Iterator
+from collections.abc import Iterator
+
 import numpy as np
 
 from sigflow import Sig, dsp, linalg, plot, run, source

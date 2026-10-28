@@ -13,10 +13,11 @@ What this exercises
   * a loop inside a larger graph, zipped inputs (microphone + far-end reference)
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, block, dsp, feedback, plot, run, source
+from sigflow import Frame, Sig, block, dsp, feedback, plot, run, source
 from sigflow.dims import N, W
 
 RATE = 8_000

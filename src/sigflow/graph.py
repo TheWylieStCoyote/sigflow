@@ -15,7 +15,8 @@ offending nodes, before any data flows.
 from __future__ import annotations
 
 import itertools
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 from ._arrays import is_array
 from .block import BlockDef
@@ -41,33 +42,33 @@ from .types import (
 _ids = itertools.count(1)
 
 __all__ = [
-    "Node",
+    "Align",
     "Block",
-    "Source",
-    "Pipeline",
     "Fanout",
-    "Zip",
+    "Feedback",
     "Merge",
+    "Node",
+    "Parallel",
+    "Pipeline",
+    "PortRef",
     "Select",
     "Slice",
+    "Source",
     "StreamSlice",
-    "PortRef",
-    "port",
-    "Align",
-    "align",
-    "Parallel",
-    "parallel",
-    "Feedback",
-    "feedback",
-    "When",
-    "when",
     "Switch",
-    "switch",
-    "merge",
+    "When",
+    "Zip",
+    "align",
     "as_node",
-    "from_iterable",
-    "validate",
+    "feedback",
     "fresh",
+    "from_iterable",
+    "merge",
+    "parallel",
+    "port",
+    "switch",
+    "validate",
+    "when",
 ]
 
 
@@ -92,10 +93,10 @@ class Node:
 
     # -- operators --------------------------------------------------------- #
 
-    def __rshift__(self, other: Any) -> "Pipeline":
+    def __rshift__(self, other: Any) -> Pipeline:
         return Pipeline([self, as_node(other)])
 
-    def __getitem__(self, key: Any) -> "Pipeline":
+    def __getitem__(self, key: Any) -> Pipeline:
         """Tuple outputs: select port(s) — ``eig[0]``, ``eig["vals"]``, ``(a | b | c)[0, 2]``,
         ``(a | b | c)[1:]``. Array outputs: slice the data — ``fft[:512]``, ``cube[:, 20:200]``,
         ``iq[::4]`` — with the shape tracked statically and sample annotations sliced in step."""
@@ -112,43 +113,43 @@ class Node:
         )
 
     # -- stream slicing ----------------------------------------------------- #
-    def take(self, n: int) -> "Pipeline":
+    def take(self, n: int) -> Pipeline:
         """Only the first ``n`` output frames (then the run ends)."""
         return self >> _take(n=n)
 
-    def skip(self, n: int) -> "Pipeline":
+    def skip(self, n: int) -> Pipeline:
         """Drop the first ``n`` output frames."""
         return self >> _skip(n=n)
 
-    def every(self, k: int, offset: int = 0) -> "Pipeline":
+    def every(self, k: int, offset: int = 0) -> Pipeline:
         """Keep one frame in ``k`` (starting at ``offset``)."""
         return self >> _every(k=k, offset=offset)
 
-    def until(self, pred: Any, inclusive: bool = False) -> "Pipeline":
+    def until(self, pred: Any, inclusive: bool = False) -> Pipeline:
         """Stop at the first frame for which ``pred(frame)`` is true."""
         return self >> _until(pred=pred, inclusive=inclusive)
 
-    def while_(self, pred: Any) -> "Pipeline":
+    def while_(self, pred: Any) -> Pipeline:
         """Continue while ``pred(frame)`` holds."""
         return self >> _until(pred=lambda f: not pred(f), inclusive=False)
 
-    def __rrshift__(self, other: Any) -> "Pipeline":
+    def __rrshift__(self, other: Any) -> Pipeline:
         return Pipeline([as_node(other), self])
 
-    def __or__(self, other: Any) -> "Fanout":
+    def __or__(self, other: Any) -> Fanout:
         return Fanout([self, as_node(other)])
 
-    def __ror__(self, other: Any) -> "Fanout":
+    def __ror__(self, other: Any) -> Fanout:
         return Fanout([as_node(other), self])
 
-    def __and__(self, other: Any) -> "Zip":
+    def __and__(self, other: Any) -> Zip:
         return Zip([self, as_node(other)])
 
-    def __rand__(self, other: Any) -> "Zip":
+    def __rand__(self, other: Any) -> Zip:
         return Zip([as_node(other), self])
 
     # -- structure --------------------------------------------------------- #
-    def nodes(self) -> list["Node"]:
+    def nodes(self) -> list[Node]:
         """Flat list of leaf nodes (blocks and sources) in this graph."""
         return [self]
 
@@ -163,7 +164,7 @@ class Node:
         """Check that ``produced`` can feed this node's input (binds symbols in env)."""
         unify(produced, self.in_type, env, where=where)
 
-    def resolve_ports(self, upstream: "Node") -> "Node":
+    def resolve_ports(self, upstream: Node) -> Node:
         """Replace unresolved ``port(...)`` references at this node's input with typed
         selections now that the producer is known.  Default: nothing to resolve."""
         return self
@@ -305,7 +306,7 @@ class Block(Node):
             spec = spec(n_in=leading_dim(in_type), **_live(self.config))
         return as_ratio(spec)
 
-    def named(self, label: str) -> "Block":
+    def named(self, label: str) -> Block:
         return Block(self.defn, self.config, label)
 
     def resolve_ports(self, upstream: Node) -> Node:
@@ -329,7 +330,7 @@ class Block(Node):
         new.in_type, new.out_type = in_type, out_type
         return new
 
-    def clone(self) -> "Block":
+    def clone(self) -> Block:
         """A copy with a fresh identity (new symbol scope); stateful subclasses share state."""
         import copy
 
@@ -371,7 +372,7 @@ class Source(Node):
         )
         self.name = str(name or getattr(obj, "__name__", type_name(obj)))
 
-    def clone(self) -> "Source":
+    def clone(self) -> Source:
         return Source(self.obj, _unscope(self.out_type), self.name)
 
     def __iter_obj__(self) -> Any:
@@ -421,7 +422,7 @@ class Pipeline(Node):
         seen: set[int] = set()
         self._init([fresh(s, seen) for s in stages])
 
-    def _init(self, stages: Iterable[Node]) -> "Pipeline":
+    def _init(self, stages: Iterable[Node]) -> Pipeline:
         flat: list[Node] = []
         for s in stages:
             flat.extend(s.stages if isinstance(s, Pipeline) else [s])
@@ -773,7 +774,7 @@ def when(pred: Any, then: Any, otherwise: Any = None, name: str | None = None) -
     every frame."""
     tag = pred if isinstance(pred, str) else None
     if tag:
-        pred = lambda f, _t=tag: _t in f.tags.whole()  # noqa: E731
+        pred = lambda f, _t=tag: _t in f.tags.whole()
         name = name or f"when({tag})"
     return When(
         pred,

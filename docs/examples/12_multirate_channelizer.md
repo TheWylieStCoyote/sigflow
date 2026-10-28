@@ -31,13 +31,16 @@ What this exercises
     input frame — the right shape for multi-port, multi-rate outputs
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 import scipy.signal as ss
 
 from sigflow import (
     Frame,
     Sig,
+    SignalType,
     Stream,
     TypeMismatch,
     block,
@@ -48,7 +51,6 @@ from sigflow import (
     source,
 )
 from sigflow.dims import K, N
-from sigflow import SignalType
 
 FS = 48_000.0
 M = 4  # channels

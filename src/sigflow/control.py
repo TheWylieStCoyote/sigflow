@@ -17,11 +17,12 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from .frame import Frame
 
-__all__ = ["Control", "Run", "Knob", "live"]
+__all__ = ["Control", "Knob", "Run", "live"]
 
 
 class Knob:
@@ -70,7 +71,7 @@ class Knob:
         for fn in self._listeners:
             fn(v)
 
-    def on_change(self, fn: Callable[[Any], None]) -> "Knob":
+    def on_change(self, fn: Callable[[Any], None]) -> Knob:
         """Call ``fn(new_value)`` whenever the knob changes (from code or a widget)."""
         self._listeners.append(fn)
         return self
@@ -262,28 +263,28 @@ class Run:
             asyncio.run(body())
         except asyncio.CancelledError:
             self._cancelled = True
-        except BaseException as e:  # noqa: BLE001 - surfaced via .exception
+        except BaseException as e:
             self.exception = e
         finally:
             self._done.set()
 
     # -- control ----------------------------------------------------------- #
-    def pause(self) -> "Run":
+    def pause(self) -> Run:
         self.control.pause()
         self._refresh()
         return self
 
-    def resume(self) -> "Run":
+    def resume(self) -> Run:
         self.control.resume()
         self._refresh()
         return self
 
-    def step(self, n: int = 1) -> "Run":
+    def step(self, n: int = 1) -> Run:
         self.control.step(n)
         self._refresh()
         return self
 
-    def stop(self) -> "Run":
+    def stop(self) -> Run:
         self.control.stop()
         self._done.wait(timeout=5)
         self._refresh()
@@ -293,12 +294,12 @@ class Run:
     def rate(self) -> float | None:
         return self.control.rate
 
-    def set_rate(self, frames_per_second: float | None) -> "Run":
+    def set_rate(self, frames_per_second: float | None) -> Run:
         """Throttle the sources to at most this many frames per second (None = unlimited)."""
         self.control.rate = frames_per_second
         return self
 
-    def set_recording(self, on: bool) -> "Run":
+    def set_recording(self, on: bool) -> Run:
         self.recording_on = bool(on)
         return self
 

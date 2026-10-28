@@ -12,14 +12,13 @@ What this exercises
   * a tiny "docs site": one HTML page per graph plus an index, from a script
 """
 
-from typing import Literal
 import os
 import tempfile
 
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Framed, Sig, Stream, block, dsp, feedback, linalg, port, run, when
+from sigflow import Framed, Sig, block, dsp, feedback, linalg, run, when
 from sigflow.dims import N
 
 

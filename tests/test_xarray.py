@@ -8,7 +8,8 @@ import inspect
 import pickle
 import sys
 import weakref
-from typing import AsyncIterator, Iterator, Literal
+from collections.abc import AsyncIterator, Iterator
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -321,12 +322,18 @@ def test_stream_labels_follow_changing_schema_and_plain_items(xr):
             yield item * 2
 
     first = xr.DataArray(
-        np.arange(4.0), dims="time", coords={"time": np.arange(4)},
-        attrs={"sensor": "first"}, name="voltage",
+        np.arange(4.0),
+        dims="time",
+        coords={"time": np.arange(4)},
+        attrs={"sensor": "first"},
+        name="voltage",
     )
     second = xr.DataArray(
-        np.arange(4.0), dims="sample", coords={"sample": np.arange(4) + 100},
-        attrs={"sensor": "second"}, name="current",
+        np.arange(4.0),
+        dims="sample",
+        coords={"sample": np.arange(4) + 100},
+        attrs={"sensor": "second"},
+        name="current",
     )
     items = [first, np.arange(4.0), second]
     output = run(from_iterable(items) >> double, check="all", on_error="raise")
@@ -338,7 +345,8 @@ def test_stream_labels_follow_changing_schema_and_plain_items(xr):
 def test_stream_schema_refresh_keeps_static_input_labels(xr):
     @block(labels=True)
     def add_offsets(
-        xs: Stream[Sig[float, N]], offsets: Sig[float, M],
+        xs: Stream[Sig[float, N]],
+        offsets: Sig[float, M],
     ) -> Iterator[Sig[float, tuple[M, N]]]:
         for item in xs:
             yield offsets[:, None] + item[None, :]

@@ -68,18 +68,23 @@ def print_results(label: str, frames: list[Frame]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", type=int, default=0, help="CUDA device index")
-    parser.add_argument("--cpu-only", action="store_true", help="run only the CPU reference")
+    parser.add_argument(
+        "--cpu-only", action="store_true", help="run only the CPU reference"
+    )
     args = parser.parse_args()
     if args.device < 0:
         parser.error("--device must be nonnegative")
 
     # dsp.sine generates deterministic NumPy frames. Both runs regenerate the
     # same signal; they do not share a one-shot iterator or mutate shared data.
-    front = dsp.sine(
-        freq=FREQUENCY, rate=RATE, n=N_SAMPLES, frames=N_FRAMES
-    ) >> cpu_preprocess
+    front = (
+        dsp.sine(freq=FREQUENCY, rate=RATE, n=N_SAMPLES, frames=N_FRAMES)
+        >> cpu_preprocess
+    )
     reference = run(front >> cpu_spectrum >> cpu_peak, check="all", on_error="raise")
-    print("CPU reference: NumPy generation -> preprocessing -> spectrum -> peak detection")
+    print(
+        "CPU reference: NumPy generation -> preprocessing -> spectrum -> peak detection"
+    )
     print_results("CPU", reference)
     if args.cpu_only:
         return
@@ -101,11 +106,7 @@ def main() -> None:
         parser.error(f"--device must be less than {device_count}")
 
     graph = (
-        front
-        >> to_device(device=args.device)
-        >> gpu_spectrum
-        >> to_host()
-        >> cpu_peak
+        front >> to_device(device=args.device) >> gpu_spectrum >> to_host() >> cpu_peak
     )
     print(
         f"Hybrid pipeline: CPU preprocessing -> CUDA:{args.device} FFT/power "

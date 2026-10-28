@@ -26,26 +26,27 @@ import enum
 import itertools
 import math
 import types
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Iterator, Mapping
+from typing import Any, Self
 
 import numpy as np
 
 from ._arrays import is_positional
 
 __all__ = [
+    "MISSING",
+    "NO_PROV",
+    "PROVENANCE_MODE",
     "Frame",
     "Issue",
-    "Provenance",
-    "NO_PROV",
     "Missing",
-    "MISSING",
-    "frozen",
-    "as_frame",
-    "TimeSpan",
+    "Provenance",
     "Tag",
     "Tags",
-    "PROVENANCE_MODE",
+    "TimeSpan",
+    "as_frame",
+    "frozen",
 ]
 
 
@@ -80,7 +81,7 @@ class TimeSpan:
             return 0
         return int(np.clip(round((t - self.t0) * self.rate), 0, max(self.n - 1, 0)))
 
-    def overlaps(self, other: "TimeSpan", tolerance: float = 0.0) -> bool:
+    def overlaps(self, other: TimeSpan, tolerance: float = 0.0) -> bool:
         return self.t0 < other.t1 + tolerance and other.t0 < self.t1 + tolerance
 
     def __repr__(self) -> str:
@@ -91,7 +92,7 @@ _ids = itertools.count(1)
 
 import contextvars as _cv
 
-PROVENANCE_MODE: "_cv.ContextVar[str]" = _cv.ContextVar(
+PROVENANCE_MODE: _cv.ContextVar[str] = _cv.ContextVar(
     "sigflow_provenance", default="full"
 )
 """How much lineage new frames keep: ``"full"`` (every node), ``"roots"`` (each node
@@ -109,9 +110,9 @@ def frozen(m: Mapping[str, Any] | None = None, **kw: Any) -> Mapping[str, Any]:
 class Missing:
     """Sentinel payload of a frame whose computation failed upstream."""
 
-    _inst: "Missing | None" = None
+    _inst: Missing | None = None
 
-    def __new__(cls) -> "Missing":
+    def __new__(cls) -> Missing:  # noqa: PYI034  (a singleton: the stored instance)
         if cls._inst is None:
             cls._inst = super().__new__(cls)
         return cls._inst
@@ -137,7 +138,7 @@ class Provenance:
 
     op: str
     params: Mapping[str, Any] = field(default_factory=frozen)
-    parents: tuple["Provenance", ...] = ()
+    parents: tuple[Provenance, ...] = ()
     seq: int | None = None  # ordinal within the producing stream
     id: int = field(default_factory=lambda: next(_ids))
 
@@ -156,7 +157,7 @@ class Provenance:
             object.__setattr__(self, "parents", ())
             object.__setattr__(self, "params", frozen())
 
-    def walk(self) -> Iterator["Provenance"]:
+    def walk(self) -> Iterator[Provenance]:
         """Depth-first walk over the lineage, each node once."""
         seen: set[int] = set()
         stack: list[Provenance] = [self]
@@ -168,10 +169,10 @@ class Provenance:
             yield node
             stack.extend(reversed(node.parents))
 
-    def chain(self) -> list["Provenance"]:
+    def chain(self) -> list[Provenance]:
         """The main line of descent: this node, its first parent, and so on to a root."""
-        out: list["Provenance"] = []
-        node: "Provenance | None" = self
+        out: list[Provenance] = []
+        node: Provenance | None = self
         while node is not None:
             out.append(node)
             node = node.parents[0] if node.parents else None
@@ -206,7 +207,7 @@ class Provenance:
     def __contains__(self, op: object) -> bool:
         return any(n.op == op for n in self.walk())
 
-    def roots(self) -> list["Provenance"]:
+    def roots(self) -> list[Provenance]:
         """Source nodes (no parents) this value ultimately derives from."""
         return [n for n in self.walk() if not n.parents]
 
@@ -242,13 +243,13 @@ class Provenance:
         return json.dumps(self.to_dict(), **kw)
 
     @staticmethod
-    def from_dict(d: dict) -> "Provenance":
+    def from_dict(d: dict) -> Provenance:
         from .persist import prov_from_dict
 
         return prov_from_dict(d)
 
     @staticmethod
-    def from_json(s: str) -> "Provenance":
+    def from_json(s: str) -> Provenance:
         import json
 
         return Provenance.from_dict(json.loads(s))
@@ -373,7 +374,7 @@ class Tags(frozenset):
     ``t``. :meth:`merge` unites several frames' tags, later ones winning on value.
     """
 
-    def __new__(cls, items: Iterable[Any] = ()) -> "Tags":
+    def __new__(cls, items: Iterable[Any] = ()) -> Self:
         tags = [
             Tag(t) if isinstance(t, str) else t
             for t in (items if not isinstance(items, str) else [items])
@@ -405,14 +406,14 @@ class Tags(frozenset):
     def names(self) -> frozenset[str]:
         return frozenset(t.name for t in self)
 
-    def at(self, t: float) -> "Tags":
+    def at(self, t: float) -> Tags:
         return Tags(tag for tag in self if tag.covers(t))
 
-    def whole(self) -> "Tags":
+    def whole(self) -> Tags:
         """Only the tags that apply to the whole frame (no span)."""
         return Tags(tag for tag in self if tag.span is None)
 
-    def clip(self, t0: float, t1: float) -> "Tags":
+    def clip(self, t0: float, t1: float) -> Tags:
         """Spanned tags cut to the window ``[t0, t1)``, those outside it dropped."""
         out = []
         for tag in self:
@@ -432,7 +433,7 @@ class Tags(frozenset):
         return Tags(out)
 
     @staticmethod
-    def merge(*groups: Iterable[Any]) -> "Tags":
+    def merge(*groups: Iterable[Any]) -> Tags:
         """The union of several tag sets; on the same name and span the later wins."""
         by_key: dict[Tag, Tag] = {}
         for group in groups:
@@ -476,7 +477,7 @@ class Frame:
     samples: Mapping[str, Any] = field(default_factory=frozen)  # sample-level
     issues: tuple[Issue, ...] = ()
     prov: Provenance = NO_PROV
-    parts: tuple["Frame", ...] = ()  # sub-frames of a tuple frame (fan-out / zip)
+    parts: tuple[Frame, ...] = ()  # sub-frames of a tuple frame (fan-out / zip)
     tags: Tags = field(default_factory=Tags)  # labels on the frame or a span of it
 
     # -- construction / evolution ------------------------------------------ #
@@ -496,7 +497,7 @@ class Frame:
                 tags = tags.clip(span.t0, span.t1)
             object.__setattr__(self, "tags", tags)
 
-    def evolve(self, **changes: Any) -> "Frame":
+    def evolve(self, **changes: Any) -> Frame:
         """Copy with fields replaced. ``meta=``/``stream=``/``samples=``/``tags=`` are
         *merged* (tags: the later wins on the same name and span)."""
         for level in ("meta", "stream", "samples"):
@@ -510,14 +511,14 @@ class Frame:
 
     def tag(
         self, *names: str, span: tuple[float, float] | None = None, **values: Any
-    ) -> "Frame":
+    ) -> Frame:
         """Attach tags: bare labels (``f.tag("speech")``), labels with a value
         (``f.tag(segment=3)``), on the whole frame or on ``span=(t0, t1)`` seconds."""
         tags = [Tag(n, None, span) for n in names]
         tags += [Tag(k, v, span) for k, v in values.items()]
         return self.evolve(tags=tags)
 
-    def untag(self, *names: str) -> "Frame":
+    def untag(self, *names: str) -> Frame:
         """Drop every tag with these names, whatever their span."""
         return _replace(self, tags=Tags(t for t in self.tags if t.name not in names))
 
@@ -547,14 +548,14 @@ class Frame:
             out[max(i0, 0) : min(i1, n)] = True
         return out
 
-    def annotate(self, **meta: Any) -> "Frame":
+    def annotate(self, **meta: Any) -> Frame:
         """Add frame-level annotations."""
         return self.evolve(meta=meta)
 
-    def annotate_stream(self, **stream: Any) -> "Frame":
+    def annotate_stream(self, **stream: Any) -> Frame:
         return self.evolve(stream=stream)
 
-    def annotate_samples(self, **samples: Any) -> "Frame":
+    def annotate_samples(self, **samples: Any) -> Frame:
         n = self._leading()
         for k, v in samples.items():
             if n is not None and np.shape(v)[:1] != (n,):
@@ -569,11 +570,11 @@ class Frame:
         level: str = "warning",
         origin: str = "",
         exc: BaseException | None = None,
-    ) -> "Frame":
+    ) -> Frame:
         issue = Issue(message, level, origin, exc, self.prov)
         return self.evolve(issues=self.issues + (issue,))
 
-    def without(self, *keys: str) -> "Frame":
+    def without(self, *keys: str) -> Frame:
         """Drop frame-level annotation keys."""
         meta = {k: v for k, v in self.meta.items() if k not in keys}
         from dataclasses import replace
@@ -598,7 +599,7 @@ class Frame:
     def warnings(self) -> tuple[Issue, ...]:
         return tuple(i for i in self.issues if i.level == "warning")
 
-    def raise_if_failed(self) -> "Frame":
+    def raise_if_failed(self) -> Frame:
         for i in self.issues:
             if i.is_error:
                 if i.exc is not None:
@@ -637,7 +638,7 @@ class Frame:
             raise KeyError("frame has no time axis (no 't0' annotation)")
         return _index(self.data, span.index(t))
 
-    def between(self, t_start: float, t_end: float) -> "Frame":
+    def between(self, t_start: float, t_end: float) -> Frame:
         """The part of the frame within [t_start, t_end) as a new frame (time kept)."""
         span = self.time
         if span is None:
@@ -671,7 +672,7 @@ class Frame:
             "frame keys are annotation names (str), part indices (int) or data slices"
         )
 
-    def slice(self, key: Any) -> "Frame":
+    def slice(self, key: Any) -> Frame:
         """Slice the data; sample-level annotations are sliced along the leading axis in
         step (``frame[10:20]`` keeps ``samples`` aligned), and time (``t0``) is advanced."""
         data = _index(self.data, key)
@@ -732,7 +733,7 @@ class Frame:
         return save_frame(self, path)
 
     @staticmethod
-    def load(path: str) -> "Frame":
+    def load(path: str) -> Frame:
         from .persist import load_frame
 
         return load_frame(path)

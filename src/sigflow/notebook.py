@@ -151,7 +151,7 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
     ``fmt`` is ``"html"`` (with the SVG inline) or ``"md"`` (Markdown)."""
     import inspect as _inspect
 
-    from .graph import Block, Source
+    from .graph import Block
 
     title = title or node.name
     env = node.validate()

@@ -12,10 +12,10 @@ What this exercises
     the run from the recorded frames (plot.animate)
 """
 
-from typing import AsyncIterator, Iterator
 import asyncio
 import math
 import time
+from collections.abc import AsyncIterator, Iterator
 
 import numpy as np
 

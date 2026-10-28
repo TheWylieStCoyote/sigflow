@@ -46,13 +46,13 @@ A tag is a label with an optional value and an optional time span, plus the
 name of the block that attached it:
 
 ```python
-f = f.tag("speech", "calibrated")          # bare labels on the whole frame
-f = f.tag(segment=3)                        # a label with a value
-f = f.tag("burst", span=(1.20, 1.55))       # a label on part of the frame, in seconds
-"speech" in f.tags                          # or "speech" in f
-f.tags["segment"]                           # 3 (also f["segment"], after meta/stream/samples)
-f.tags.at(1.3)                              # the tags covering t = 1.3 s
-f.mask("burst")                             # boolean array along the leading axis
+f = f.tag("speech", "calibrated")  # bare labels on the whole frame
+f = f.tag(segment=3)  # a label with a value
+f = f.tag("burst", span=(1.20, 1.55))  # a label on part of the frame, in seconds
+"speech" in f.tags  # or "speech" in f
+f.tags["segment"]  # 3 (also f["segment"], after meta/stream/samples)
+f.tags.at(1.3)  # the tags covering t = 1.3 s
+f.mask("burst")  # boolean array along the leading axis
 f = f.untag("calibrated")
 ```
 

@@ -27,7 +27,8 @@ from __future__ import annotations
 import asyncio
 import csv
 import os
-from typing import Any, AsyncIterator, Iterator, TypeVar
+from collections.abc import AsyncIterator, Iterator
+from typing import Any, Self
 
 import numpy as np
 
@@ -38,16 +39,16 @@ from .graph import Block
 from .types import Sig, SignalType
 
 __all__ = [
-    "wav",
-    "raw",
-    "npy",
-    "csv_rows",
-    "udp",
-    "zmq",
-    "wav_sink",
-    "npy_sink",
     "csv_log",
+    "csv_rows",
+    "npy",
+    "npy_sink",
+    "raw",
+    "udp",
     "udp_sink",
+    "wav",
+    "wav_sink",
+    "zmq",
     "zmq_sink",
 ]
 
@@ -115,7 +116,7 @@ def _wav_frames(path: str, n: int) -> int | None:
     try:
         from scipy.io import wavfile
 
-        rate, data = wavfile.read(path, mmap=True)
+        _rate, data = wavfile.read(path, mmap=True)
         return len(data) // n
     except Exception:
         return None
@@ -189,7 +190,7 @@ async def udp(
         while count is None or k < count:
             try:
                 data, addr = await asyncio.wait_for(q.get(), timeout)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 return
             yield Frame(
                 np.frombuffer(data, dtype=np.dtype(dtype)).copy(),
@@ -225,9 +226,8 @@ async def zmq(
     try:
         k = 0
         while count is None or k < count:
-            if timeout is not None:
-                if not await sock.poll(int(timeout * 1000)):
-                    return
+            if timeout is not None and not await sock.poll(int(timeout * 1000)):
+                return
             msg = await sock.recv()
             if topic and msg.startswith(topic):
                 msg = msg[len(topic) :]
@@ -246,9 +246,6 @@ async def zmq(
 # --------------------------------------------------------------------------- #
 
 
-_SinkT = TypeVar("_SinkT", bound="_Sink")
-
-
 class _Sink(Block):
     def __init__(self, fn: Any, name: str) -> None:
         super().__init__(tap(fn, name=name, inputs=Frame))
@@ -256,10 +253,10 @@ class _Sink(Block):
     def close(self) -> Any:  # pragma: no cover - overridden
         pass
 
-    def __enter__(self: _SinkT) -> _SinkT:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc: Any) -> None:
+    def __exit__(self, *exc: object) -> None:
         self.close()
 
 
@@ -318,7 +315,7 @@ class csv_log(_Sink):
     def __init__(self, path: str, fields: Any = None) -> None:
         self.path = path
         self.fields = list(fields) if fields else None
-        self._fh = open(path, "w", newline="")
+        self._fh = open(path, "w", newline="")  # noqa: SIM115  (closed by the sink)
         self._writer: csv.DictWriter | None = None
         super().__init__(self._add, "csv_log")
 

@@ -1,11 +1,10 @@
 from typing import Literal
+
 import numpy as np
 import pytest
 
-from sigflow import Any, Env, Sig, TupleType, TypeMismatch, unify
-from sigflow import SignalType
+from sigflow import Any, Env, SignalType, TupleType, TypeMismatch, unify
 from sigflow.dims import M, N, T
-from sigflow import SignalType
 from sigflow.types import DVar, narrow, scoped
 
 

@@ -8,65 +8,64 @@ to write stateful stream blocks as plain generators.
 from __future__ import annotations
 
 import asyncio
-import time as _time
-from fractions import Fraction
-from typing import Any, AsyncIterator, Iterator, Literal
-
 import math
+import time as _time
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
+from fractions import Fraction
+from typing import Any, Literal
 
 import numpy as np
 import scipy.signal as ss
 
 from .block import Framed, block, source, tap
-from dataclasses import replace
-
+from .dims import K, M, N, T
 from .frame import Frame, Tag, Tags
 from .graph import Block
 from .ratio import Ratio
 from .types import Sig, SignalType, Stream
-from .dims import K, M, N, T
 
 complex_ = complex
 
 
 __all__ = [
-    "sine",
-    "noise",
-    "chirp",
-    "impulse",
-    "from_array",
-    "ticker",
-    "chunk",
-    "overlap",
     "buffer",
-    "decimate",
-    "window",
-    "fft",
-    "rfft",
-    "ifft",
-    "magnitude",
-    "power_db",
-    "phase",
-    "real",
-    "imag",
-    "to_complex",
-    "scale",
-    "offset",
-    "mix",
-    "lfilter",
-    "fir",
-    "hilbert",
-    "resample",
-    "energy",
-    "rms",
-    "peak",
-    "running_mean",
+    "chirp",
+    "chunk",
     "clip",
-    "detect_clipping",
-    "printer",
     "collect",
+    "decimate",
+    "detect_clipping",
+    "energy",
+    "fft",
+    "fir",
+    "from_array",
+    "hilbert",
+    "ifft",
+    "imag",
+    "impulse",
+    "lfilter",
+    "magnitude",
+    "mix",
+    "noise",
+    "offset",
+    "overlap",
+    "peak",
+    "phase",
+    "power_db",
+    "printer",
+    "real",
+    "resample",
+    "rfft",
+    "rms",
+    "running_mean",
+    "scale",
+    "sine",
+    "ticker",
     "timestamp",
+    "to_complex",
     "to_units",
+    "window",
 ]
 
 Real = Sig[float, N]

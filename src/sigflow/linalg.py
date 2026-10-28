@@ -11,35 +11,35 @@ so ``(a & b) >> matmul`` fails to build if the inner dimensions cannot agree.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
 from .block import block
-from .types import Sig
 from .dims import K, M, N, T
+from .types import Sig
 
 __all__ = [
-    "matmul",
-    "matvec",
-    "dot",
-    "outer",
-    "transpose",
-    "inv",
-    "solve",
-    "lstsq",
-    "eig",
-    "eigh",
-    "svd",
-    "norm",
-    "normalize",
-    "project",
-    "covariance",
-    "gram",
-    "hermitian",
-    "Vector",
     "Matrix",
     "Square",
+    "Vector",
+    "covariance",
+    "dot",
+    "eig",
+    "eigh",
+    "gram",
+    "hermitian",
+    "inv",
+    "lstsq",
+    "matmul",
+    "matvec",
+    "norm",
+    "normalize",
+    "outer",
+    "project",
+    "solve",
+    "svd",
+    "transpose",
 ]
 
 Vector = Sig[T, tuple[N]]

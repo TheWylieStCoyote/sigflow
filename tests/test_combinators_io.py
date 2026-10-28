@@ -1,5 +1,4 @@
-from typing import Iterator, Literal
-import os
+from collections.abc import Iterator
 
 import numpy as np
 import pytest
@@ -8,7 +7,6 @@ from sigflow import (
     Frame,
     Framed,
     Sig,
-    Stream,
     TypeMismatch,
     block,
     dsp,
@@ -150,7 +148,9 @@ def test_wav_channel_shapes(tmp_path, channels, float32):
         selected = io.wav(str(path), n=4, channel=1, float32=float32)
         assert selected.out_type.shape == (4,)
         out = run(selected, check="all")
-        np.testing.assert_allclose(np.concatenate([f.data for f in out]), expected[:, 1])
+        np.testing.assert_allclose(
+            np.concatenate([f.data for f in out]), expected[:, 1]
+        )
 
 
 def test_stereo_wav_without_mmap_support(tmp_path):
@@ -227,5 +227,5 @@ def test_report_and_string_annotation_guard():
     with pytest.raises(TypeError, match="could not be evaluated"):
 
         @block  # a string annotation naming something that does not exist is rejected
-        def bad(f: "Framedd[Sig[float, N]]") -> Sig[float, N]:  # type: ignore[name-defined]
+        def bad(f: "Framedd[Sig[float, N]]") -> Sig[float, N]:  # type: ignore[name-defined]  # noqa: F821
             return f

@@ -13,7 +13,8 @@ What this exercises
     provenance of a segment lists exactly the frames that made it up
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+
 import numpy as np
 import scipy.signal as ss
 

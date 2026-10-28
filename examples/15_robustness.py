@@ -14,10 +14,11 @@ What this exercises
   * a block that catches its own exception and emits a warning instead of failing
 """
 
-from typing import Iterator
+from collections.abc import Iterator
+
 import numpy as np
 
-from sigflow import MISSING, Frame, Framed, Sig, Stream, block, dsp, run, source, when
+from sigflow import Frame, Framed, Sig, block, dsp, run, source, when
 from sigflow.dims import N
 
 N_SAMPLES = 128
@@ -39,7 +40,7 @@ class Device:
 
     def read(self) -> np.ndarray:
         if self.k >= self.lifetime:
-            raise IOError("device reset")
+            raise OSError("device reset")
         self.k += 1
         snr = 20 if self.rng.random() > 0.3 else 0  # occasional low-SNR frames
         x = np.sin(2 * np.pi * 5 * np.arange(N_SAMPLES) / N_SAMPLES) + 10 ** (
@@ -61,7 +62,7 @@ def watchdog(
     while k < frames:
         try:
             x = dev.read()
-        except IOError as e:
+        except OSError as e:
             if restarts >= max_restarts:
                 raise  # give up: the stream ends with a failed frame
             restarts += 1

@@ -72,7 +72,7 @@ class _Cell:
     entries: list[int] = field(default_factory=list)  # box ids that receive input
     exits: list[int] = field(default_factory=list)  # box ids that emit output
 
-    def shift(self, dx: float, dy: float) -> "_Cell":
+    def shift(self, dx: float, dy: float) -> _Cell:
         for b in self.boxes:
             b.x += dx
             b.y += dy
@@ -338,12 +338,16 @@ class Diagram:
         W, H = c.w + 2 * m, c.h + 2 * m
         boxes = {bx.id: bx for bx in c.boxes}
         parts = [
-            f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
-            f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
-            f"font-size='12'>",
-            "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
-            "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
-            "</marker></defs>",
+            (
+                f"<svg xmlns='http://www.w3.org/2000/svg' width='{W:.0f}' height='{H:.0f}' "
+                f"viewBox='0 0 {W:.0f} {H:.0f}' font-family='ui-monospace,SFMono-Regular,Menlo,monospace' "
+                f"font-size='12'>"
+            ),
+            (
+                "<defs><marker id='sf-arrow' viewBox='0 0 10 10' refX='10' refY='5' markerWidth='7' "
+                "markerHeight='7' orient='auto-start-reverse'><path d='M0,0 L10,5 L0,10 z' fill='#6b7280'/>"
+                "</marker></defs>"
+            ),
         ]
         for a, b_id, label in c.edges:
             A, B = boxes[a], boxes[b_id]

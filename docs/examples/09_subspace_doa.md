@@ -26,7 +26,8 @@ What this exercises
   * provenance of a result that merges several ports: `f.prov["eigh"]`, `f[1]`
 """
 
-from typing import Iterator
+from collections.abc import Iterator
+
 import numpy as np
 
 from sigflow import Frame, Framed, Sig, block, linalg, plot, port, run, source

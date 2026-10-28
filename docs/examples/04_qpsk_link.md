@@ -26,13 +26,13 @@ What this exercises
   * provenance: which transmitted frame a BER figure came from
 """
 
-from typing import Iterator
+from collections.abc import Iterator
+
 import numpy as np
 import scipy.signal as ss
 
-from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow import Frame, Framed, Sig, SignalType, Stream, block, plot, run, source
 from sigflow.dims import B, M, N
-from sigflow import SignalType
 
 SPS = 8  # samples per symbol
 N_SYM = 256  # symbols per frame
@@ -257,8 +257,8 @@ if __name__ == "__main__":
     )
     print("first frames (loop acquiring):", [f.data["ber"] for f in results[:4]])
     print(
-        "CFO estimate carried in meta: %.5f cycles/symbol (true: %.5f)"
-        % (results[-1].meta["cfo_est"], 0.002 * SPS)
+        f"CFO estimate carried in meta: {results[-1].meta['cfo_est']:.5f} cycles/symbol "
+        f"(true: {0.002 * SPS:.5f})"
     )
 
     print("\nprovenance of the last BER figure:\n" + results[-1].trace())

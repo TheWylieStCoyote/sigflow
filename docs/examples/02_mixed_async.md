@@ -14,10 +14,8 @@ A sampled signal (synchronous generator) is zipped with an asynchronous
 telemetry ticker; a merged stream interleaves both as they arrive.
 """
 
-from typing import AsyncIterator
 import asyncio
-
-import numpy as np
+from collections.abc import AsyncIterator
 
 from sigflow import Sig, Stream, block, dsp, merge, run, source
 from sigflow.dims import N

@@ -43,7 +43,8 @@ def _parse_device(device: int | str) -> int:
             return int(device[5:])
         raise ValueError("device must be a nonnegative index or 'cuda:N'")
     if isinstance(device, bool) or not isinstance(device, (int, np.integer)):
-        raise ValueError("device must be a nonnegative index or 'cuda:N'")
+        # one error, one message, for every malformed device spec
+        raise ValueError("device must be a nonnegative index or 'cuda:N'")  # noqa: TRY004
     if device < 0:
         raise ValueError("device must be a nonnegative index or 'cuda:N'")
     return int(device)

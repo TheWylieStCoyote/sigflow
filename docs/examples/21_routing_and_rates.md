@@ -44,7 +44,8 @@ What this exercises
   * run(strict=True) checking declared ratios and expected frame counts
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+
 import numpy as np
 
 from sigflow import (
@@ -218,7 +219,7 @@ for g2 in (
     src >> dsp.decimate(every=4),
     (src >> dsp.rms).take(5),
 ):
-    print(f"{str(g2.ratio):>6}   {g2.name}")
+    print(f"{g2.ratio!s:>6}   {g2.name}")
 
 try:
     src >> (dsp.chunk(256) | dsp.rms)  # 1:4 next to 1:1: cannot be zipped
@@ -236,7 +237,7 @@ print(
 m = Monitor()
 run(src >> dsp.chunk(256), monitor=m, strict=True)
 print(
-    f"expected {m.expected} frames from 20 source frames at {str((src >> dsp.chunk(256)).ratio)}; strict run agreed"
+    f"expected {m.expected} frames from 20 source frames at {(src >> dsp.chunk(256)).ratio!s}; strict run agreed"
 )
 
 

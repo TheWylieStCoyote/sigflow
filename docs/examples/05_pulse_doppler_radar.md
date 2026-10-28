@@ -28,12 +28,13 @@ What this exercises
     `[1:]` selects the ports worth keeping
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow import Frame, Framed, Sig, SignalType, Stream, block, plot, run, source
 from sigflow.dims import P, R
-from sigflow import SignalType
 
 PULSES, CELLS = 64, 256  # pulses per coherent interval, range cells
 PRF = 5000.0  # Hz  (unambiguous velocity +-37.5 m/s)
@@ -51,8 +52,8 @@ def radar_returns(
     """Raw (pulse x range) data cubes with two moving targets and clutter at zero Doppler."""
     rng = np.random.default_rng(seed)
     targets = [
-        dict(r=60, v=18.0, a=1.0),
-        dict(r=140, v=-26.0, a=0.6),
+        {"r": 60, "v": 18.0, "a": 1.0},
+        {"r": 140, "v": -26.0, "a": 0.6},
     ]  # cell, m/s, amplitude
     noise = 10 ** (-snr_db / 20)
     t_cpi = PULSES / PRF
@@ -66,9 +67,7 @@ def radar_returns(
             1j * rng.uniform(0, 2 * np.pi, (1, 20))
         )  # stationary ground clutter
         for tg in targets:
-            cell = int(
-                round(tg["r"] + tg["v"] * k * t_cpi / RANGE_RES)
-            )  # target migrates
+            cell = round(tg["r"] + tg["v"] * k * t_cpi / RANGE_RES)  # target migrates
             fd = 2 * tg["v"] / WAVELENGTH
             cube[:, cell] += tg["a"] * np.exp(2j * np.pi * fd * np.arange(PULSES) / PRF)
         yield Frame(

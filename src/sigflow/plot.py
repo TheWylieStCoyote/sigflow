@@ -19,32 +19,32 @@ Custom plots: ``plot.custom(draw)`` where ``draw(ax, data, frame)`` draws one fr
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
 from .block import tap
+from .dims import N, T
 from .frame import Frame
 from .graph import Block
 from .types import Sig
-from .dims import N, T
 
 __all__ = [
+    "Multi",
     "PlotBlock",
-    "line",
-    "spectrum",
-    "waterfall",
+    "animate",
     "constellation",
     "custom",
-    "animate",
     "history",
+    "line",
     "multi",
-    "Multi",
+    "spectrum",
+    "waterfall",
 ]
 
 
 def _matplotlib() -> Any:
-    import matplotlib
     import matplotlib.pyplot as plt
 
     return plt
@@ -106,7 +106,7 @@ class PlotBlock(Block):
 
     @property
     def ax(self) -> Any:
-        self.figure
+        _ = self.figure  # created on first access
         return self._ax
 
     def _on_frame(self, f: Frame) -> None:

@@ -9,10 +9,12 @@
 ```python
 """Basics: declare typed blocks, compose with operators, run, inspect provenance."""
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, TypeMismatch, block, dsp, run, source
+from sigflow import Framed, Sig, Stream, TypeMismatch, block, dsp, run
 from sigflow.dims import N, T
 
 

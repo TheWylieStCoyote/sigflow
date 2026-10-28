@@ -14,7 +14,8 @@ L.table()                                # per-block counts over the indexed fra
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from .frame import Frame, Provenance
 

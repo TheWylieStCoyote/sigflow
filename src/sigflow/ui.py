@@ -15,11 +15,11 @@ import time
 from typing import Any
 
 __all__ = [
-    "have_widgets",
-    "require_widgets",
     "ControlPanel",
     "dashboard",
+    "have_widgets",
     "knob_widget",
+    "require_widgets",
 ]
 
 _COLOURS = {

@@ -18,9 +18,9 @@ checkpoint lists them under ``skipped``.
 from __future__ import annotations
 
 import json
-import warnings
 import pickle
 import time
+import warnings
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -30,16 +30,16 @@ from ._arrays import is_array, is_data_array
 from .frame import NO_PROV, Frame, Issue, Provenance, Tag, Tags, frozen
 
 __all__ = [
-    "prov_to_dict",
-    "prov_from_dict",
-    "save_frame",
-    "load_frame",
-    "replay",
+    "Checkpoint",
     "ReplayMismatch",
     "Stateful",
-    "Checkpoint",
     "checkpoint",
     "load_checkpoint",
+    "load_frame",
+    "prov_from_dict",
+    "prov_to_dict",
+    "replay",
+    "save_frame",
 ]
 
 
@@ -252,8 +252,6 @@ def replay(graph: Any, target: Any, strict: bool = True, **options: Any) -> Fram
     wanted = {(r.op, r.seq) for r in prov.roots()}
     recorded = {r.op: dict(r.params) for r in prov.roots()}
     if strict:
-        from .graph import Block, Source
-
         for n in graph.nodes():
             if n.in_type is None and n.name in recorded:
                 have = _jsonable(dict(getattr(n, "config", {})))
@@ -326,7 +324,7 @@ def load_checkpoint(path: str) -> Checkpoint:
 
 def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
     """Capture source positions (from the monitor) and the state of Stateful blocks."""
-    from .graph import Block, Source
+    from .graph import Block
 
     ck = Checkpoint(graph=graph.name, produced=monitor.produced)
     for n in graph.nodes():

@@ -36,9 +36,11 @@ What this exercises
   * a scrubber built from `Knob` + `on_change` driving a plot block
 """
 
+from itertools import pairwise
+
 import numpy as np
 
-from sigflow import Frame, Knob, Sig, block, dsp, from_iterable, plot, run, source
+from sigflow import Knob, Sig, block, dsp, plot, run
 from sigflow.dims import N
 
 RATE = 8_000.0
@@ -112,7 +114,7 @@ if __name__ == "__main__":
         )
         for i, (w, d) in enumerate(zip(windows, offline))
     ]
-    changes = [(t, f) for (t0, f0), (t, f) in zip(hops, hops[1:]) if abs(f - f0) > 50]
+    changes = [(t, f) for (t0, f0), (t, f) in pairwise(hops) if abs(f - f0) > 50]
     print("\nfrequency changes at (s, Hz):", changes[:6])
     dirty = [i for i, d in enumerate(offline) if not d.data["clean"]]
     print(
@@ -123,9 +125,7 @@ if __name__ == "__main__":
         "offline result provenance:",
         [n.op for n in offline[dirty[0]].prov.chain()],
         "offset",
-        offline[dirty[0]]["offset"]
-        if "offset" in offline[dirty[0]]
-        else "(from overlap)",
+        offline[dirty[0]].get("offset", "(from overlap)"),
     )
 
     # 4. a scrubber: a Knob selects the window, a plot block redraws on change.

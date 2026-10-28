@@ -4,6 +4,7 @@ import gc
 import sys
 import weakref
 from types import SimpleNamespace
+from typing import ClassVar
 
 import numpy as np
 import pytest
@@ -29,7 +30,7 @@ from sigflow.dims import N, T
 class DeviceArray:
     """Test payload which forbids implicit host conversion."""
 
-    __cuda_array_interface__: dict = {}
+    __cuda_array_interface__: ClassVar[dict] = {}
 
     def __init__(self, data, device=0):
         self.data = data
@@ -368,7 +369,9 @@ def test_declared_size_survives_gradual_producer(shape, builder):
         transfer = stage.add(to_host())
         stage.connect(inlet, transfer).output(transfer)
     else:
-        stage = block(lambda x: x, inputs=contract, outputs=contract, preserve_type=True)
+        stage = block(
+            lambda x: x, inputs=contract, outputs=contract, preserve_type=True
+        )
     good = from_iterable([np.zeros(4)], type=SignalType(float, shape)) >> stage
     assert good.out_type.shape == (4,)
     assert run(good, check="all", on_error="raise")[0].data.shape == (4,)
@@ -382,7 +385,9 @@ def test_declared_size_survives_gradual_producer(shape, builder):
         _ = good >> needs_eight
 
 
-@pytest.mark.parametrize("key,error", [(9, IndexError), ("missing", KeyError), (1.5, TypeError)])
+@pytest.mark.parametrize(
+    "key,error", [(9, IndexError), ("missing", KeyError), (1.5, TypeError)]
+)
 def test_builder_port_errors_restore_complete_state(key, error):
     graph = Graph()
     src = graph.add(from_iterable([], type=(SignalType(float, (4,)),) * 2))
@@ -489,7 +494,8 @@ def test_real_foreign_cuda_interface_roundtrip_and_lifetime(cuda):
     np.testing.assert_array_equal(to_host(foreign), expected)
     output = run(
         from_iterable([foreign], type=SignalType(np.float32, (3, 4))) >> to_host(),
-        check="all", on_error="raise",
+        check="all",
+        on_error="raise",
     )
     np.testing.assert_array_equal(output[0].data, expected)
     if cp.cuda.runtime.getDeviceCount() > 1:

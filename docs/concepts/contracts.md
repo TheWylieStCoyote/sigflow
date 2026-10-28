@@ -60,13 +60,16 @@ reading the signature:
 from typing import Annotated
 from sigflow import clears, provides, requires
 
+
 @block
 def vad(f: Framed[Sig[float, N]]) -> Annotated[Sig[float, N], provides("speech")]:
     return f.tag("speech") if active(f.data) else f
 
+
 @block
-def asr(x: Annotated[Sig[float, N], requires("speech")]) -> Annotated[Sig[str, ()], clears("speech")]:
-    ...
+def asr(
+    x: Annotated[Sig[float, N], requires("speech")],
+) -> Annotated[Sig[str, ()], clears("speech")]: ...
 ```
 
 - `requires(name)` on an input: frames must carry the tag. It is checked when

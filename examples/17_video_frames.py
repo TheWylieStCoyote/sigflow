@@ -11,12 +11,13 @@ What this exercises
   * fan-out to a 2-D spectrum, a centroid tracker and an image plot with the mask overlaid
 """
 
-from typing import Iterator, Literal
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 
-from sigflow import Frame, Framed, Sig, Stream, block, plot, run, source
+from sigflow import Frame, Framed, Sig, SignalType, Stream, block, plot, run, source
 from sigflow.dims import H, W
-from sigflow import SignalType
 
 HEIGHT, WIDTH = 64, 96
 

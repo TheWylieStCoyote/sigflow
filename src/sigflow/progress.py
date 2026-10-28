@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-__all__ = ["Monitor", "Stats", "Reporter"]
+__all__ = ["Monitor", "Reporter", "Stats"]
 
 
 @dataclass
