@@ -43,7 +43,7 @@ from .dims import (
     Y,
     Z,
 )
-from .frame import MISSING, NO_PROV, Frame, Issue, Provenance, TimeSpan
+from .frame import MISSING, NO_PROV, Frame, Issue, Provenance, Tag, Tags, TimeSpan
 from .graph import (
     Block,
     Fanout,
@@ -71,6 +71,9 @@ from .ratio import Ratio, RatioMismatch
 from .runtime import arun, iterate, iterate_sync, run
 from .types import (
     Any,
+    clears,
+    provides,
+    requires,
     CMatrix,
     CVector,
     Env,
@@ -108,6 +111,11 @@ __all__ = [
     "Issue",
     "Provenance",
     "NO_PROV",
+    "Tag",
+    "Tags",
+    "requires",
+    "provides",
+    "clears",
     "MISSING",
     "TimeSpan",
     "block",

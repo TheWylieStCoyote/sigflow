@@ -27,7 +27,7 @@ from typing import Any
 import numpy as np
 
 from ._arrays import is_array, is_data_array
-from .frame import NO_PROV, Frame, Issue, Provenance, frozen
+from .frame import NO_PROV, Frame, Issue, Provenance, Tag, Tags, frozen
 
 __all__ = [
     "prov_to_dict",
@@ -186,6 +186,15 @@ def save_frame(f: Frame, path: str) -> str:
             {"message": i.message, "level": i.level, "origin": i.origin}
             for i in f.issues
         ],
+        "tags": [
+            {
+                "name": t.name,
+                "value": _jsonable(t.value),
+                "span": list(t.span) if t.span is not None else None,
+                "origin": t.origin,
+            }
+            for t in sorted(f.tags, key=repr)
+        ],
         "prov": prov_to_dict(f.prov) if f.prov else None,
         "object": _jsonable(data) if kind == "object" else None,
     }
@@ -215,7 +224,13 @@ def load_frame(path: str) -> Frame:
         Issue(i["message"], i["level"], i["origin"]) for i in record["issues"]
     )
     prov = prov_from_dict(record["prov"]) if record["prov"] else NO_PROV
-    return Frame(data, record["meta"], record["stream"], samples, issues, prov)
+    tags = Tags(
+        Tag(t["name"], t["value"], tuple(t["span"]) if t["span"] else None, t["origin"])
+        for t in record.get("tags", ())
+    )
+    return Frame(
+        data, record["meta"], record["stream"], samples, issues, prov, tags=tags
+    )
 
 
 # --------------------------------------------------------------------------- #

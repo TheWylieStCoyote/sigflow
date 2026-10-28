@@ -166,16 +166,21 @@ frame count is right for re-framing chains. The `Graph` builder tracks the
 same thing per member (`g.ratios()`) and refuses an edge that would join
 streams running at different rates.
 
-### Frames carry annotations at three levels, and errors travel the same way
+### Frames carry annotations at four levels, and errors travel the same way
 
 A `Frame` is frozen; every transformation makes a new one. Alongside `data` it
 holds `stream` annotations (facts about the whole stream: `rate`, `units`,
-`source`), `meta` (facts about this frame: timestamp, sequence number, SNR) and
+`source`), `meta` (facts about this frame: timestamp, sequence number, SNR),
 `samples` (arrays aligned with the leading axis of `data`, such as a `clipped`
-mask). The runtime merges and forwards all three automatically; sample-level
-annotations are kept only through blocks whose declared output keeps the
-leading dimension (or that say `keep_samples=True`), because they would be
-meaningless otherwise.
+mask) and `tags` (labels such as `speech` or `segment=3`, on the whole frame or
+on a time span of it). The runtime merges and forwards all four automatically;
+sample-level annotations and spanned tags are kept only through blocks whose
+declared output keeps the leading dimension (or that say `keep_samples=True`),
+because they would be meaningless otherwise. Tags are united at joins, clipped
+to each frame's window when a stream is re-framed or sliced, and record the
+block that attached them. A contract can require, provide or clear a tag
+(`Annotated[Sig[float, N], requires("speech")]`); requirements are checked
+against the producer's guarantees when the graph is built.
 
 Errors are first-class data, not control flow. When a map block raises, the
 runtime attaches an error `Issue` (with the exception and the provenance node

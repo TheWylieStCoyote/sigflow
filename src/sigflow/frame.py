@@ -3,11 +3,14 @@
 A frame bundles four things:
 
 * ``data``        – the payload (an array, a scalar, a tuple, any Python object)
-* annotations     – at three levels:
+* annotations     – at four levels:
     - ``stream``  – facts about the whole stream (rate, units, source name …)
     - ``meta``    – facts about this frame (timestamp, sequence number, SNR …)
     - ``samples`` – per-sample arrays aligned with ``data``'s leading axis
                     (e.g. a boolean "clipped" mask, a timestamp vector)
+    - ``tags``    – labels (``"speech"``, ``segment=3``) on the whole frame or
+                    on a time span of it; a set, united at joins, that records
+                    which block attached each label
 * ``issues``      – errors and warnings that have been attached along the way
 * ``prov``        – provenance: which block produced it, from which parents
 
@@ -19,7 +22,9 @@ accept a ``Frame`` and return ``frame.evolve(data=...)``.
 
 from __future__ import annotations
 
+import enum
 import itertools
+import math
 import types
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Iterator, Mapping
@@ -38,6 +43,8 @@ __all__ = [
     "frozen",
     "as_frame",
     "TimeSpan",
+    "Tag",
+    "Tags",
     "PROVENANCE_MODE",
 ]
 
@@ -289,6 +296,165 @@ class Issue:
 
 
 # --------------------------------------------------------------------------- #
+# Tags (labels on a frame or on a time span of it)
+# --------------------------------------------------------------------------- #
+
+_SCALARS = (type(None), bool, int, float, str)
+
+
+def _tag_value(v: Any) -> Any:
+    """Normalise a tag value: scalars, enums and tuples of those. Arrays belong in
+    ``samples`` and objects in ``meta``; a tag has to hash, compare and round-trip."""
+    if isinstance(v, enum.Enum):
+        return v.value
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, _SCALARS):
+        return v
+    if isinstance(v, (tuple, list)):
+        return tuple(_tag_value(x) for x in v)
+    raise TypeError(
+        f"tag values are scalars or tuples of scalars, not {type(v).__name__}; "
+        "use meta for objects and samples for arrays"
+    )
+
+
+@dataclass(frozen=True, eq=False)
+class Tag:
+    """A label on a frame (``span=None``) or on ``[t0, t1)`` seconds of it.
+
+    Identity is the name and the span: two tags that differ only in value or origin
+    are the same tag, and the later one wins when frames merge. ``origin`` is the
+    block that attached it, stamped by the runtime."""
+
+    name: str
+    value: Any = None
+    span: tuple[float, float] | None = None
+    origin: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise TypeError("a tag name is a non-empty string")
+        object.__setattr__(self, "value", _tag_value(self.value))
+        if self.span is not None:
+            s0, s1 = self.span
+            object.__setattr__(self, "span", (float(s0), float(s1)))
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Tag) and (self.name, self.span) == (
+            other.name,
+            other.span,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self.name, self.span))
+
+    def covers(self, t: float) -> bool:
+        """True for a whole-frame tag, or a span containing ``t``."""
+        if self.span is None:
+            return True
+        s0, s1 = self.span
+        return s0 <= t < s1 or (s1 <= s0 and t == s0)
+
+    def __repr__(self) -> str:
+        out = self.name
+        if self.value is not None:
+            out += f"={self.value!r}"
+        if self.span is not None:
+            out += f"@[{self.span[0]:.6g}, {self.span[1]:.6g})"
+        return out
+
+
+class Tags(frozenset):
+    """The tags of a frame: a frozenset of :class:`Tag` with lookup by name.
+
+    ``"speech" in tags`` tests a name, ``tags["segment"]`` is a value (the whole-
+    frame tag first, then any span), ``tags.at(t)`` are the tags covering time
+    ``t``. :meth:`merge` unites several frames' tags, later ones winning on value.
+    """
+
+    def __new__(cls, items: Iterable[Any] = ()) -> "Tags":
+        tags = [
+            Tag(t) if isinstance(t, str) else t
+            for t in (items if not isinstance(items, str) else [items])
+        ]
+        for t in tags:
+            if not isinstance(t, Tag):
+                raise TypeError(f"not a Tag: {t!r}")
+        return super().__new__(cls, tags)
+
+    def __contains__(self, item: object) -> bool:
+        if isinstance(item, str):
+            return any(t.name == item for t in self)
+        return super().__contains__(item)
+
+    def __getitem__(self, name: str) -> Any:
+        found = [t for t in self if t.name == name]
+        if not found:
+            raise KeyError(f"no tag {name!r}; have {sorted(self.names)}")
+        found.sort(key=lambda t: (t.span is not None, t.span or (0.0, 0.0)))
+        return found[0].value
+
+    def get(self, name: str, default: Any = None) -> Any:
+        try:
+            return self[name]
+        except KeyError:
+            return default
+
+    @property
+    def names(self) -> frozenset[str]:
+        return frozenset(t.name for t in self)
+
+    def at(self, t: float) -> "Tags":
+        return Tags(tag for tag in self if tag.covers(t))
+
+    def whole(self) -> "Tags":
+        """Only the tags that apply to the whole frame (no span)."""
+        return Tags(tag for tag in self if tag.span is None)
+
+    def clip(self, t0: float, t1: float) -> "Tags":
+        """Spanned tags cut to the window ``[t0, t1)``, those outside it dropped."""
+        out = []
+        for tag in self:
+            if tag.span is None:
+                out.append(tag)
+                continue
+            s0, s1 = tag.span
+            if s1 <= s0:  # a point
+                if t0 <= s0 < t1:
+                    out.append(tag)
+                continue
+            lo, hi = max(s0, t0), min(s1, t1)
+            if lo < hi:
+                out.append(
+                    tag if (lo, hi) == tag.span else _replace(tag, span=(lo, hi))
+                )
+        return Tags(out)
+
+    @staticmethod
+    def merge(*groups: Iterable[Any]) -> "Tags":
+        """The union of several tag sets; on the same name and span the later wins."""
+        by_key: dict[Tag, Tag] = {}
+        for group in groups:
+            for tag in Tags(group):
+                by_key.pop(tag, None)
+                by_key[tag] = tag
+        return Tags(by_key.values())
+
+    def __repr__(self) -> str:
+        return "Tags({" + ", ".join(sorted(map(repr, self))) + "})"
+
+    def __reduce__(self) -> Any:
+        return (Tags, (tuple(self),))
+
+
+def _replace(obj: Any, **changes: Any) -> Any:
+    from dataclasses import replace
+
+    return replace(obj, **changes)
+
+
+# --------------------------------------------------------------------------- #
 # Frame
 # --------------------------------------------------------------------------- #
 
@@ -311,6 +477,7 @@ class Frame:
     issues: tuple[Issue, ...] = ()
     prov: Provenance = NO_PROV
     parts: tuple["Frame", ...] = ()  # sub-frames of a tuple frame (fan-out / zip)
+    tags: Tags = field(default_factory=Tags)  # labels on the frame or a span of it
 
     # -- construction / evolution ------------------------------------------ #
     def __post_init__(self) -> None:
@@ -320,15 +487,65 @@ class Frame:
         object.__setattr__(self, "issues", tuple(self.issues))
         if self.prov is None:  # accepted for compatibility; stored as the empty lineage
             object.__setattr__(self, "prov", NO_PROV)
+        if self.tags or not isinstance(self.tags, Tags):
+            tags = Tags(self.tags)
+            # a spanned tag only means something inside this frame's window: cut it
+            # to the window whenever the frame is made (slicing, reframing, evolving)
+            span = self.time if tags else None
+            if span is not None and span.rate and any(t.span for t in tags):
+                tags = tags.clip(span.t0, span.t1)
+            object.__setattr__(self, "tags", tags)
 
     def evolve(self, **changes: Any) -> "Frame":
-        """Copy with fields replaced. ``meta=``/``stream=``/``samples=`` are *merged*."""
+        """Copy with fields replaced. ``meta=``/``stream=``/``samples=``/``tags=`` are
+        *merged* (tags: the later wins on the same name and span)."""
         for level in ("meta", "stream", "samples"):
             if level in changes and changes[level] is not None:
                 changes[level] = frozen(getattr(self, level), **dict(changes[level]))
+        if changes.get("tags") is not None:
+            changes["tags"] = Tags.merge(self.tags, changes["tags"])
         from dataclasses import replace
 
         return replace(self, **changes)
+
+    def tag(
+        self, *names: str, span: tuple[float, float] | None = None, **values: Any
+    ) -> "Frame":
+        """Attach tags: bare labels (``f.tag("speech")``), labels with a value
+        (``f.tag(segment=3)``), on the whole frame or on ``span=(t0, t1)`` seconds."""
+        tags = [Tag(n, None, span) for n in names]
+        tags += [Tag(k, v, span) for k, v in values.items()]
+        return self.evolve(tags=tags)
+
+    def untag(self, *names: str) -> "Frame":
+        """Drop every tag with these names, whatever their span."""
+        return _replace(self, tags=Tags(t for t in self.tags if t.name not in names))
+
+    def mask(self, name: str) -> np.ndarray:
+        """A boolean array along the leading axis: True where a tag ``name`` applies
+        (everywhere for a whole-frame tag, inside the spans otherwise)."""
+        n = self._leading() or 0
+        out = np.zeros(n, dtype=bool)
+        found = [t for t in self.tags if t.name == name]
+        if not found:
+            return out
+        if any(t.span is None for t in found):
+            out[:] = True
+            return out
+        span = self.time
+        if span is None or not span.rate:
+            raise KeyError("frame has no time axis (no 't0' annotation or rate)")
+        for t in found:
+            s0, s1 = t.span  # type: ignore[misc]
+            if s1 <= s0:  # a point: the nearest sample
+                if n:
+                    out[span.index(s0)] = True
+                continue
+            # membership, start <= t < stop: the first sample at or after each edge
+            i0 = math.ceil(round((s0 - span.t0) * span.rate, 9))
+            i1 = math.ceil(round((s1 - span.t0) * span.rate, 9))
+            out[max(i0, 0) : min(i1, n)] = True
+        return out
 
     def annotate(self, **meta: Any) -> "Frame":
         """Add frame-level annotations."""
@@ -431,14 +648,18 @@ class Frame:
     # -- selection --------------------------------------------------------- #
     def __getitem__(self, key: Any) -> Any:
         """``frame["rate"]`` looks an annotation up (frame-level first, then stream-level,
-        then sample-level); ``frame[1]`` is part 1 of a tuple frame (from a fan-out / zip)."""
+        then sample-level, then a tag's value); ``frame[1]`` is part 1 of a tuple frame
+        (from a fan-out / zip)."""
         if isinstance(key, str):
             for level in (self.meta, self.stream, self.samples):
                 if key in level:
                     return level[key]
+            if key in self.tags:
+                return self.tags[key]
             raise KeyError(
                 f"no annotation {key!r}; have meta={list(self.meta)}, "
-                f"stream={list(self.stream)}, samples={list(self.samples)}"
+                f"stream={list(self.stream)}, samples={list(self.samples)}, "
+                f"tags={sorted(self.tags.names)}"
             )
         if isinstance(key, int) and (self.parts or isinstance(self.data, tuple)):
             if self.parts:
@@ -476,7 +697,12 @@ class Frame:
         )
 
     def __contains__(self, key: object) -> bool:
-        return key in self.meta or key in self.stream or key in self.samples
+        return (
+            key in self.meta
+            or key in self.stream
+            or key in self.samples
+            or key in self.tags
+        )
 
     def get(self, key: str, default: Any = None) -> Any:
         try:
@@ -486,11 +712,13 @@ class Frame:
 
     # -- convenience ------------------------------------------------------- #
     def _leading(self) -> int | None:
-        if self.data is MISSING or np.ndim(self.data) == 0:
+        if self.data is MISSING:
             return None
         try:
+            if np.ndim(self.data) == 0:
+                return None
             return len(self.data)
-        except TypeError:
+        except (TypeError, ValueError):  # scalars, ragged tuples
             return None
 
     def __array__(self, dtype: Any = None, copy: Any = None) -> np.ndarray:
@@ -525,6 +753,8 @@ class Frame:
         extra = []
         if self.meta:
             extra.append(f"meta={dict(self.meta)}")
+        if self.tags:
+            extra.append(f"tags={sorted(map(repr, self.tags))}")
         if self.issues:
             extra.append(f"issues={len(self.issues)}")
         if self.prov:
@@ -540,8 +770,9 @@ def merge_annotations(frames: Iterable[Frame], *, keep_samples: bool) -> dict[st
     """Combine annotations from several parent frames (used by the runtime).
 
     Frame-level and stream-level dicts are merged left-to-right (later parents
-    win on conflicting keys).  Sample-level annotations are only preserved when
-    the caller knows the leading axis is unchanged.
+    win on conflicting keys).  Tags are united (later parents win on the same
+    name and span).  Sample-level annotations and spanned tags are only preserved
+    when the caller knows the leading axis is unchanged.
     """
     meta: dict[str, Any] = {}
     stream: dict[str, Any] = {}
@@ -556,4 +787,15 @@ def merge_annotations(frames: Iterable[Frame], *, keep_samples: bool) -> dict[st
                 issues.append(i)
     if keep_samples and len(frames) == 1:
         samples.update(frames[0].samples)
-    return {"meta": meta, "stream": stream, "samples": samples, "issues": tuple(issues)}
+    tags = (
+        Tags.merge(*(f.tags for f in frames)) if any(f.tags for f in frames) else Tags()
+    )
+    if not keep_samples:
+        tags = tags.whole()
+    return {
+        "meta": meta,
+        "stream": stream,
+        "samples": samples,
+        "issues": tuple(issues),
+        "tags": tags,
+    }

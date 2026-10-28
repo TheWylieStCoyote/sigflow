@@ -20,7 +20,7 @@ that ``"N"`` means the same thing everywhere in a graph.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Literal, get_args, get_origin
 
 import numpy as np
 from ._arrays import array_metadata as _array_metadata
@@ -38,6 +38,13 @@ __all__ = [
     "unify",
     "narrow",
     "resolve",
+    "tag_names",
+    "cleared_names",
+    "carry_tags",
+    "TagSpec",
+    "requires",
+    "provides",
+    "clears",
     "Env",
     "Dim",
     "scoped",
@@ -275,7 +282,12 @@ class SignalType:
             ``()`` denotes a scalar.
         rate: sample rate in Hz (``None`` = unspecified / don't care).
         units: free-form unit string (``None`` = unspecified).
-        meta: required frame-level annotation keys (``None`` = no requirement).
+        meta: tag names the frames carry. On an input contract these are
+            *required* (``.requires("synced")``); on an output contract they are
+            *guaranteed* (``.provides("bits")``). A block's output carries its
+            input's tags too, minus ``cleared``.
+        cleared: tag names a block's output does not carry on from its input
+            (``.clears("raw")``).
     """
 
     dtype: Any = Any
@@ -283,6 +295,7 @@ class SignalType:
     rate: float | None = None
     units: str | None = None
     meta: frozenset[str] = field(default_factory=frozenset)
+    cleared: frozenset[str] = field(default_factory=frozenset)
 
     # -- construction ------------------------------------------------------ #
     def __class_getitem__(cls, params: Any) -> "SignalType":
@@ -331,9 +344,19 @@ class SignalType:
 
         return replace(self, **changes)
 
-    def requires(self, *keys: str) -> "SignalType":
-        """Require these frame-level annotation keys to be present."""
-        return self.with_(meta=self.meta | frozenset(keys))
+    def requires(self, *names: str) -> "SignalType":
+        """As an input contract: frames must carry these tags (checked when the
+        graph is built against what the producer guarantees, and at run time)."""
+        return self.with_(meta=self.meta | frozenset(names))
+
+    def provides(self, *names: str) -> "SignalType":
+        """As an output contract: frames carry these tags (the block must attach
+        them; checked at run time like the rest of the contract)."""
+        return self.with_(meta=self.meta | frozenset(names))
+
+    def clears(self, *names: str) -> "SignalType":
+        """As an output contract: these input tags are not carried on."""
+        return self.with_(cleared=self.cleared | frozenset(names))
 
     def resolve(self, env: Env) -> "SignalType":
         """Substitute bound symbolic dimensions with their integers."""
@@ -390,7 +413,7 @@ class SignalType:
 
     # -- display ----------------------------------------------------------- #
     def __str__(self) -> str:
-        if self.is_any:
+        if self.is_any and not self.meta and not self.cleared:
             return "Sig[Any]"
         parts = [_dn(self.dtype)]
         if self.shape is not None or self.rate is not None or self.units is not None:
@@ -409,6 +432,10 @@ class SignalType:
             parts.append(f"{self.rate}Hz" if self.rate is not None else "_")
         if self.units is not None:
             parts.append(repr(self.units))
+        if self.meta:
+            parts.append("tags=" + "|".join(sorted(self.meta)))
+        if self.cleared:
+            parts.append("clears=" + "|".join(sorted(self.cleared)))
         return "Sig[" + ", ".join(parts) + "]"
 
     __repr__ = __str__
@@ -509,12 +536,56 @@ def is_signal_type(obj: Any) -> bool:
     return isinstance(obj, (SignalType, TupleType))
 
 
+@dataclass(frozen=True)
+class TagSpec:
+    """What :func:`requires`, :func:`provides` and :func:`clears` put inside an
+    ``Annotated[...]`` contract: tag names to add to the contract's guarantees (or
+    requirements) and tag names it clears."""
+
+    meta: frozenset[str] = frozenset()
+    cleared: frozenset[str] = frozenset()
+
+    def apply(self, t: Any) -> Any:
+        if isinstance(t, TupleType):
+            return TupleType(tuple(self.apply(i) for i in t.items))
+        if isinstance(t, StreamType):
+            return StreamType(self.apply(t.item))
+        if not isinstance(t, SignalType):
+            return t
+        return t.with_(meta=t.meta | self.meta, cleared=t.cleared | self.cleared)
+
+
+def requires(*names: str) -> TagSpec:
+    """Checker-legible tag requirement for an input contract:
+    ``x: Annotated[Sig[float, N], requires("speech")]``."""
+    return TagSpec(meta=frozenset(names))
+
+
+def provides(*names: str) -> TagSpec:
+    """Checker-legible tag guarantee for an output contract:
+    ``-> Annotated[Sig[float, N], provides("speech")]``."""
+    return TagSpec(meta=frozenset(names))
+
+
+def clears(*names: str) -> TagSpec:
+    """Checker-legible: the output does not carry these input tags on:
+    ``-> Annotated[Sig[float, N], clears("raw")]``."""
+    return TagSpec(cleared=frozenset(names))
+
+
 def _as_type(obj: Any) -> Any:
     """Coerce loose specs into a type object."""
     if isinstance(obj, (SignalType, TupleType, StreamType)):
         return obj
     if obj is Any or obj is None:
         return SignalType()
+    if get_origin(obj) is Annotated:  # Annotated[Sig[...], requires("x"), ...]
+        base, *extras = get_args(obj)
+        t = _as_type(base)
+        for extra in extras:
+            if isinstance(extra, TagSpec):
+                t = extra.apply(t)
+        return t
     if get_origin(obj) is tuple:  # tuple[Sig[...], Sig[...]]
         obj = get_args(obj)
     if isinstance(obj, tuple):
@@ -581,6 +652,13 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
     if isinstance(required, TupleType) or isinstance(produced, TupleType):
         if not (isinstance(required, TupleType) and isinstance(produced, TupleType)):
             if isinstance(required, SignalType) and required.is_any:
+                missing = required.meta - tag_names(produced)
+                if missing:
+                    have = "|".join(sorted(tag_names(produced))) or "none"
+                    raise TypeMismatch(
+                        f"{where}: needs tag(s) {'|'.join(sorted(missing))}, "
+                        f"producer guarantees {have}"
+                    )
                 return env
             raise TypeMismatch(f"{where}: {produced} is not compatible with {required}")
         if len(required) != len(produced):
@@ -592,6 +670,13 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
         return env
 
     _unify_dtype(produced.dtype, required.dtype, env, where)
+
+    missing = required.meta - produced.meta
+    if missing:
+        have = "|".join(sorted(produced.meta)) or "none"
+        raise TypeMismatch(
+            f"{where}: needs tag(s) {'|'.join(sorted(missing))}, producer guarantees {have}"
+        )
 
     if required.shape is not None and produced.shape is not None:
         if len(produced.shape) != len(required.shape):
@@ -696,6 +781,37 @@ def resolve(t: Any, env: Env) -> Any:
     if dtype is t.dtype and shape == t.shape:
         return t
     return t.with_(dtype=dtype, shape=shape)
+
+
+def tag_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract guarantees (or requires), across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(tag_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return tag_names(t.item)
+    return t.meta if isinstance(t, SignalType) else frozenset()
+
+
+def cleared_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract clears, across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(cleared_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return cleared_names(t.item)
+    return t.cleared if isinstance(t, SignalType) else frozenset()
+
+
+def carry_tags(out: Any, inherited: frozenset[str]) -> Any:
+    """A block's output contract once the tags its inputs carry are added, minus
+    those it clears: what a consumer can rely on."""
+    if isinstance(out, TupleType):
+        return TupleType(tuple(carry_tags(i, inherited) for i in out.items))
+    if isinstance(out, StreamType):
+        return StreamType(carry_tags(out.item, inherited))
+    if not isinstance(out, SignalType):
+        return out
+    carried = out.meta | (inherited - out.cleared)
+    return out if carried == out.meta else out.with_(meta=carried)
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:

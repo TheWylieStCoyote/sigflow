@@ -109,12 +109,14 @@ def test_gradual_dtype_does_not_hide_later_bindings():
 
 def test_narrow_keeps_metadata_and_checks_known_rate_units():
     carried = narrow(
-        SignalType(float, (None,), meta=frozenset({"source"})),
+        SignalType(float, (None,), meta=frozenset({"source", "calibrated"})),
         SignalType(float, (4,), 48000, "V", frozenset({"calibrated"})),
     )
     assert carried == SignalType(
         float, (4,), 48000, "V", frozenset({"source", "calibrated"})
     )
+    with pytest.raises(TypeMismatch, match="needs tag"):  # a required tag is a tag
+        narrow(SignalType(float, (None,)), SignalType(float).requires("calibrated"))
     with pytest.raises(TypeMismatch, match="rate"):
         narrow(SignalType(float, rate=48000), SignalType(float, (4,), 96000))
     with pytest.raises(TypeMismatch, match="units"):

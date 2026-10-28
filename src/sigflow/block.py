@@ -35,11 +35,27 @@ import collections.abc
 import functools
 import inspect
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, TYPE_CHECKING, get_args, get_origin
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Mapping,
+    TYPE_CHECKING,
+    get_args,
+    get_origin,
+)
 
 from ._arrays import is_array
 from .frame import Frame
-from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
+from .types import (
+    SignalType,
+    StreamType,
+    TupleType,
+    as_type,
+    carry_tags,
+    is_signal_type,
+    tag_names,
+)
 
 __all__ = ["block", "source", "tap", "BlockDef", "Framed", "InputSpec", "lift"]
 
@@ -91,6 +107,8 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
             f"annotation {annotation!r} is a string that could not be evaluated; import the "
             f"names it uses at module level (or avoid quoting signal-type annotations)"
         )
+    if get_origin(annotation) is Annotated:  # Annotated[Sig[...], requires("x")]
+        annotation = as_type(annotation)
     if annotation is Frame:
         return SignalType(), True, False
     if isinstance(annotation, _FramedMarker):
@@ -106,6 +124,10 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
         return annotation, False, False
     if get_origin(annotation) is tuple:  # tuple[Sig[...], Sig[...]]
         annotation = get_args(annotation)
+    if isinstance(annotation, tuple):
+        annotation = tuple(
+            as_type(a) if get_origin(a) is Annotated else a for a in annotation
+        )
     if (
         isinstance(annotation, tuple)
         and annotation
@@ -241,6 +263,13 @@ class BlockDef:
             )
         if tap:
             self.out_type = self.in_type
+        elif self.inputs:
+            # tags the inputs carry reach the output unless the contract clears them
+            inherited = frozenset().union(
+                *(tag_names(spec.type) for spec in self.inputs)
+            )
+            if inherited:
+                self.out_type = carry_tags(self.out_type, inherited)
 
         # by default sample-level annotations survive a map block only if the
         # declared output shape has the same leading dimension as the input
@@ -591,6 +620,15 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       (see :mod:`sigflow.xarray`). ``False``: payloads pass
                       through untouched. Unset: follow ``run(..., labels=)``
                       or, when the run does not say, ``sigflow.default_labels()``
+        Tags: ``Annotated[Sig[...], requires("synced")]`` on an input means
+                      frames must carry that tag (checked against the producer's
+                      guarantees when the graph is built, and at run time);
+                      ``provides("bits")`` on the output means the block attaches
+                      it (checked at run time); ``clears("raw")`` stops an input
+                      tag from being carried on. Otherwise a block's output
+                      carries its input's tags. As values (``inputs=``,
+                      ``outputs=``, ``from_iterable(type=)``) the same is spelled
+                      ``SignalType(...).requires(...)`` / ``.provides`` / ``.clears``
         preserve_type: a single-input map block that returns what it was given,
                       as far as the contract is concerned (a CPU/GPU transfer):
                       placed after a producer, its input and output contract

@@ -31,7 +31,7 @@ import numpy as np
 
 from .block import BlockDef
 from .control import live
-from .frame import MISSING, Frame, Issue, Provenance, merge_annotations
+from .frame import MISSING, Frame, Issue, Provenance, Tags, merge_annotations
 from .graph import (
     Align,
     Block,
@@ -50,7 +50,7 @@ from .graph import (
     Zip,
 )
 from .progress import Monitor, Reporter
-from .types import Env, TypeMismatch
+from .types import Env, TypeMismatch, tag_names
 
 __all__ = ["run", "arun", "iterate", "iterate_sync", "Runner", "RunOptions"]
 
@@ -333,6 +333,7 @@ class Runner:
         stats_ = [self.mon.stats(n.name, n) for n in nodes]
         policies = [self._policy(n) for n in nodes]
         calls = [n.defn.resolve_call(self.opts.labels) for n in nodes]
+        needs = [bool(tag_names(n.in_type)) for n in nodes]  # input tag requirements
         seqs = [0] * len(nodes)
         check_first = self.opts.check == "first"
         check_all = self.opts.check == "all"
@@ -354,6 +355,8 @@ class Runner:
                     seqs[i] += 1
                     st.out += 1
                     continue
+                if needs[i] and (check_all or (check_first and st.out == 0)):
+                    _check_required(node.in_type, frame, f"{node.name} input")
                 t0 = time.perf_counter()
                 try:
                     if d.framed and (frame.data is not value or frame.prov is not prov):
@@ -397,14 +400,15 @@ class Runner:
                 )
                 seqs[i] += 1
                 if isinstance(result, Frame):
-                    frame = result.evolve(prov=prov)
+                    frame = _stamp_tags(result.evolve(prov=prov), node.name, (frame,))
                     value = result.data
                 else:
                     value = result
-                    if not d.keep_samples and frame.samples:
+                    if not d.keep_samples and (frame.samples or frame.tags):
                         frame = _clear_samples(frame)
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
+                frame = _drop_cleared(frame, node.out_type)
                 if (
                     check_all or (check_first and st.out == 0)
                 ) and value is not MISSING:
@@ -412,6 +416,7 @@ class Runner:
                         node.out_type.check(
                             value, self.opts.env, where=f"{node.name} output"
                         )
+                        _check_tags(node.out_type, frame, where=f"{node.name} output")
                     except TypeMismatch as e:
                         raise TypeMismatch(f"runtime check failed: {e}") from None
                 st.out += 1
@@ -623,6 +628,7 @@ class Runner:
                         "loop", {}, tuple(p.prov for p in (f, state) if p.prov), seq
                     ),
                     parts=(f, state),
+                    tags=f.tags.whole(),
                 )
                 out = await body.one(pair)
                 if out is None:
@@ -959,6 +965,7 @@ class Runner:
         call = d.resolve_call(self.opts.labels)
         policy = self._policy(node)
         seq = 0
+        needs = bool(tag_names(node.in_type))  # input tag requirements
         async for f in upstream:
             stats.inp += 1
             if f.failed and (not d.framed or len(d.inputs) > 1):
@@ -973,6 +980,11 @@ class Runner:
                 seq += 1
                 stats.out += 1
                 continue
+            if needs and (
+                self.opts.check == "all"
+                or (self.opts.check == "first" and stats.out == 0)
+            ):
+                _check_required(node.in_type, f, f"{node.name} input")
             t0 = time.perf_counter()
             try:
                 args = self._args(d, f)
@@ -1040,6 +1052,7 @@ class Runner:
         d = node.defn
         call = d.resolve_call(self.opts.labels)
         spec = d.inputs[0]
+        needs = bool(tag_names(node.in_type))  # input tag requirements
         if len(d.inputs) != 1:
             raise TypeError(f"{d.name}: stream blocks take exactly one stream input")
         policy = self._policy(node)
@@ -1062,6 +1075,11 @@ class Runner:
                     and getattr(f.data, "ndim", 0) >= 1
                 ):
                     first_len.append(len(f.data))
+                if needs and (
+                    self.opts.check == "all"
+                    or (self.opts.check == "first" and stats.out == 0)
+                ):
+                    _check_required(node.in_type, f, f"{node.name} input")
                 yield f
 
         async def items() -> AsyncIterator[Any]:
@@ -1216,6 +1234,7 @@ class Runner:
                     merged["issues"],
                     Provenance(op, {}, tuple(f.prov for f in items if f.prov), seq),
                     parts=tuple(items),
+                    tags=merged["tags"],
                 )
                 stats.out += 1
                 seq += 1
@@ -1238,6 +1257,7 @@ class Runner:
         inner = node.inner
         d = inner.defn
         call = d.resolve_call(self.opts.labels)
+        needs = bool(tag_names(inner.in_type))  # input tag requirements
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
         pool = (
@@ -1311,6 +1331,11 @@ class Runner:
                 if f.failed:
                     pending.append((f, None))
                 else:
+                    if needs and (
+                        self.opts.check == "all"
+                        or (self.opts.check == "first" and stats.out == 0)
+                    ):
+                        _check_required(inner.in_type, f, f"{inner.name} input")
                     cfg = live(inner.given) if inner.live else dict(inner.given)
                     fut = loop.run_in_executor(
                         pool,
@@ -1374,6 +1399,7 @@ class Runner:
                             tuple(f.prov for f in items if f.prov),
                             seq,
                         ),
+                        tags=merged["tags"],
                         parts=tuple(items),
                     )
                     stats.out += 1
@@ -1461,16 +1487,25 @@ class Runner:
             out = result.evolve(
                 prov=prov
             )  # a block's output is a new computation, whatever it returned
+            out = _stamp_tags(out, op, parents)
         else:
             ann = merge_annotations(parents, keep_samples=keep_samples)
             out = Frame(
-                result, ann["meta"], ann["stream"], ann["samples"], ann["issues"], prov
+                result,
+                ann["meta"],
+                ann["stream"],
+                ann["samples"],
+                ann["issues"],
+                prov,
+                tags=ann["tags"],
             )
+        out = _drop_cleared(out, out_type)
         # runtime contract check
         if self.opts.check == "all" or (self.opts.check == "first" and stats.out == 0):
             if out.data is not MISSING:
                 try:
                     out_type.check(out.data, self.opts.env, where=f"{op} output")
+                    _check_tags(out_type, out, where=f"{op} output")
                 except TypeMismatch as e:
                     raise TypeMismatch(f"runtime check failed: {e}") from None
         return out
@@ -1554,7 +1589,125 @@ def _call_block(target: Any, data: Any, cfg: dict, labels: bool = False) -> Any:
 
 
 def _clear_samples(f: Frame) -> Frame:
-    return Frame(f.data, f.meta, f.stream, {}, f.issues, f.prov, f.parts)
+    """The frame without what only made sense along its leading axis: sample
+    annotations and spanned tags."""
+    return Frame(
+        f.data, f.meta, f.stream, {}, f.issues, f.prov, f.parts, f.tags.whole()
+    )
+
+
+def _stamp_tags(frame: Frame, op: str, parents: tuple[Frame, ...]) -> Frame:
+    """Record ``op`` as the origin of the tags this block attached: those without an
+    origin that no parent already carried."""
+    if not frame.tags:
+        return frame
+    inherited = {id(t) for p in parents for t in p.tags}
+    stamped = [
+        t if t.origin or id(t) in inherited else _with_origin(t, op) for t in frame.tags
+    ]
+    if all(a is b for a, b in zip(stamped, frame.tags)):
+        return frame
+    from dataclasses import replace
+
+    return replace(frame, tags=Tags(stamped))
+
+
+def _with_origin(tag: Any, op: str) -> Any:
+    from dataclasses import replace
+
+    return replace(tag, origin=op)
+
+
+def _drop_cleared(frame: Frame, out_type: Any) -> Frame:
+    """The tags a block's contract clears do not leave it. A tuple output is cleared
+    port by port: a frame that kept its parts has each part cleared, a plain tuple
+    payload gets parts made for it when the ports differ, and the aggregate loses
+    what every port clears."""
+    if not frame.tags and not any(p.tags for p in frame.parts):
+        return frame
+    from dataclasses import replace
+
+    from .types import TupleType, cleared_names
+
+    if isinstance(out_type, TupleType):
+        per = [cleared_names(t) for t in out_type.items]
+        parts = frame.parts
+        if (
+            not parts
+            and isinstance(frame.data, tuple)
+            and len(frame.data) == len(per)
+            and any(p != per[0] for p in per)
+            and any(p & frame.tags.names for p in per)
+        ):
+            parts = tuple(
+                Frame(
+                    d,
+                    frame.meta,
+                    frame.stream,
+                    {},
+                    frame.issues,
+                    frame.prov,
+                    tags=frame.tags,
+                )
+                for d in frame.data
+            )
+        if parts and len(parts) == len(per):
+            cleared = tuple(_drop_cleared(p, t) for p, t in zip(parts, out_type.items))
+            gone = frozenset.intersection(*per)
+            if cleared == frame.parts and not (gone & frame.tags.names):
+                return frame
+            return replace(
+                frame,
+                parts=cleared,
+                tags=Tags(t for t in frame.tags if t.name not in gone),
+            )
+    gone = cleared_names(out_type)
+    if not gone or not (gone & frame.tags.names):
+        return frame
+    return replace(frame, tags=Tags(t for t in frame.tags if t.name not in gone))
+
+
+def _check_tags(out_type: Any, frame: Frame, where: str) -> None:
+    """A guarantee is about whole-frame tags: a span need not reach every frame. A
+    tuple frame with parts is checked port by port."""
+    from .types import TupleType, tag_names
+
+    if (
+        isinstance(out_type, TupleType)
+        and frame.parts
+        and len(frame.parts) == len(out_type.items)
+    ):
+        for i, (t, p) in enumerate(zip(out_type.items, frame.parts)):
+            _check_tags(t, p, f"{where}[{i}]")
+        return
+    missing = tag_names(out_type) - frame.tags.whole().names
+    if missing:
+        raise TypeMismatch(
+            f"{where}: contract guarantees tag(s) {'|'.join(sorted(missing))}, "
+            f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
+        )
+
+
+def _check_required(in_type: Any, frame: Frame, where: str) -> None:
+    """What a block's input contract requires must be on the frame it gets (whole-
+    frame tags; port by port for a tuple frame with parts). Producers' output checks
+    cover this in a graph; this guards frames that reach a block another way."""
+    from .types import TupleType, tag_names
+
+    if (
+        isinstance(in_type, TupleType)
+        and frame.parts
+        and len(frame.parts) == len(in_type.items)
+    ):
+        for i, (t, p) in enumerate(zip(in_type.items, frame.parts)):
+            _check_required(t, p, f"{where}[{i}]")
+        return
+    missing = tag_names(in_type) - frame.tags.whole().names
+    if missing:
+        raise TypeMismatch(
+            f"runtime check failed: {where}: needs tag(s) {'|'.join(sorted(missing))}, "
+            f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
+        )
 
 
 def _select_frame(f: Frame, node: Select) -> Frame:

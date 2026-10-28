@@ -115,6 +115,11 @@ def frame_html(frame: Any) -> str:
             rows.append(
                 f"<tr><td style='{_TD}'><b>{level}</b></td><td style='{_TD}'>{body}</td></tr>"
             )
+    if frame.tags:
+        body = ", ".join(html.escape(repr(t)) for t in sorted(frame.tags, key=repr))
+        rows.append(
+            f"<tr><td style='{_TD}'><b>tags</b></td><td style='{_TD}'>{body}</td></tr>"
+        )
     if frame.issues:
         body = "<br>".join(html.escape(str(i)) for i in frame.issues)
         rows.append(

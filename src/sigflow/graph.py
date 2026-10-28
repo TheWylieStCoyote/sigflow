@@ -28,11 +28,13 @@ from .types import (
     TupleType,
     TypeMismatch,
     as_type,
+    carry_tags,
     describe,
     narrow,
     resolve,
     scoped,
     slice_shape,
+    tag_names,
     unify,
 )
 
@@ -307,19 +309,24 @@ class Block(Node):
         return Block(self.defn, self.config, label)
 
     def resolve_ports(self, upstream: Node) -> Node:
-        if not self.defn.preserve_type:
-            return self
-        # A pass-through block (``preserve_type=True``) carries its producer's
-        # contract. Check against the *declared* input, not one inherited at an
-        # earlier placement: the same transfer can follow producers of any shape.
-        declared = scoped(self.defn.in_type, str(self.id))
-        carried = narrow(upstream.out_type, declared, where=self.name)
-        if self.in_type == carried and self.out_type == carried:
+        in_type, out_type = self.in_type, self.out_type
+        if self.defn.preserve_type:
+            # A pass-through block (``preserve_type=True``) carries its producer's
+            # contract. Check against the *declared* input, not one inherited at an
+            # earlier placement: the same transfer can follow producers of any shape.
+            declared = scoped(self.defn.in_type, str(self.id))
+            in_type = out_type = narrow(upstream.out_type, declared, where=self.name)
+        # Tags the producer guarantees reach the output unless the contract clears
+        # them; start from the declared output so an earlier placement's tags go.
+        out_type = carry_tags(
+            _declared_tags(out_type, self.defn.out_type), tag_names(upstream.out_type)
+        )
+        if self.in_type == in_type and self.out_type == out_type:
             return self
         import copy
 
         new = copy.copy(self)
-        new.in_type = new.out_type = carried
+        new.in_type, new.out_type = in_type, out_type
         return new
 
     def clone(self) -> "Block":
@@ -335,7 +342,9 @@ class Block(Node):
             else _unscope(self.in_type),
             str(new.id),
         )
-        new.out_type = scoped(_unscope(self.out_type), str(new.id))
+        new.out_type = scoped(
+            _declared_tags(_unscope(self.out_type), self.defn.out_type), str(new.id)
+        )
         return new
 
     def describe(self, indent: str = "", ratio_in: Any = None) -> str:
@@ -381,7 +390,26 @@ def _producer(node: Node, env: Env) -> Node:
     stand_in = Node()
     stand_in.name = node.name
     stand_in.out_type = resolve(node.out_type, env)
+    stand_in.port_names = tuple(getattr(node, "port_names", ()))
     return stand_in
+
+
+def _declared_tags(t: Any, declared: Any) -> Any:
+    """``t`` with its tag guarantees reset to what the block declared (dims and
+    everything else untouched), so a new placement starts clean."""
+    from .types import StreamType
+
+    if isinstance(t, TupleType) and isinstance(declared, TupleType):
+        if len(t.items) != len(declared.items):
+            return t
+        return TupleType(
+            tuple(_declared_tags(a, b) for a, b in zip(t.items, declared.items))
+        )
+    if isinstance(t, StreamType) and isinstance(declared, StreamType):
+        return StreamType(_declared_tags(t.item, declared.item))
+    if isinstance(t, SignalType) and isinstance(declared, SignalType):
+        return t if t.meta == declared.meta else t.with_(meta=declared.meta)
+    return t
 
 
 class Pipeline(Node):
@@ -652,22 +680,37 @@ class When(Node):
         then: Node,
         otherwise: Node | None = None,
         name: str | None = None,
+        tag: str | None = None,
+        passthrough: frozenset[str] = frozenset(),
     ) -> None:
         self.pred = pred
         self.then = then
         self.otherwise = otherwise
+        # ``when("speech", ...)``: the predicate establishes a tag, so ``then`` may
+        # require it although the producer does not guarantee it for every frame
+        self.tag = tag
+        self.passthrough = passthrough  # tags the producer guarantees (once placed)
+        then_in = _without_requirement(then.in_type, tag) if tag else then.in_type
         self.in_type = (
-            then.in_type
+            then_in
             if otherwise is None
-            else _common_input([then.in_type, otherwise.in_type], "when")
+            else _common_input([then_in, otherwise.in_type], "when")
         )
+        # when the branches' types differ the payload becomes gradual, but a tag
+        # every emitted path guarantees is still guaranteed
         if otherwise is None:
+            other_out = then_in  # frames the predicate rejects pass through
+            common = tag_names(then.out_type) & (tag_names(then_in) | passthrough)
             self.out_type = (
-                then.out_type if then.out_type == then.in_type else SignalType()
+                then.out_type
+                if then.out_type == then.in_type
+                else SignalType(meta=common)
             )
         else:
+            other_out = otherwise.out_type
+            common = tag_names(then.out_type) & tag_names(other_out)
             self.out_type = (
-                then.out_type if then.out_type == otherwise.out_type else SignalType()
+                then.out_type if then.out_type == other_out else SignalType(meta=common)
             )
         self.name = name or f"when({getattr(pred, '__name__', 'pred')})"
 
@@ -676,10 +719,36 @@ class When(Node):
         env = self.then.validate(env)
         return self.otherwise.validate(env) if self.otherwise is not None else env
 
+    def _established(self, t: Any) -> Any:
+        """What ``then`` can rely on: the producer's guarantees plus the routed tag."""
+        return carry_tags(t, frozenset({self.tag})) if self.tag else t
+
     def accept(self, produced: Any, env: Env, where: str) -> None:
-        self.then.accept(produced, env, f"{where} [then]")
+        self.then.accept(self._established(produced), env, f"{where} [then]")
         if self.otherwise is not None:
             self.otherwise.accept(produced, env, f"{where} [otherwise]")
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        routed = upstream
+        if self.tag:
+            routed = Node()
+            routed.name = upstream.name
+            routed.out_type = self._established(upstream.out_type)
+            routed.port_names = tuple(getattr(upstream, "port_names", ()))
+        then = self.then.resolve_ports(routed)
+        otherwise = (
+            self.otherwise.resolve_ports(upstream)
+            if self.otherwise is not None
+            else None
+        )
+        passthrough = tag_names(upstream.out_type)
+        if (
+            then is self.then
+            and otherwise is self.otherwise
+            and passthrough == self.passthrough
+        ):
+            return self
+        return When(self.pred, then, otherwise, self.name, self.tag, passthrough)
 
     def nodes(self) -> list[Node]:
         return self.then.nodes() + (
@@ -698,10 +767,33 @@ class When(Node):
 
 def when(pred: Any, then: Any, otherwise: Any = None, name: str | None = None) -> When:
     """Route frames: ``when(lambda f: f.failed, quarantine, otherwise=main)``.
-    ``pred`` receives the :class:`Frame`."""
+    ``pred`` receives the :class:`Frame`. A string routes frames carrying that
+    tag on the whole frame: ``when("speech", then=transcribe)``, and ``then`` may
+    then require the tag even though the producer does not guarantee it for
+    every frame."""
+    tag = pred if isinstance(pred, str) else None
+    if tag:
+        pred = lambda f, _t=tag: _t in f.tags.whole()  # noqa: E731
+        name = name or f"when({tag})"
     return When(
-        pred, as_node(then), as_node(otherwise) if otherwise is not None else None, name
+        pred,
+        as_node(then),
+        as_node(otherwise) if otherwise is not None else None,
+        name,
+        tag,
     )
+
+
+def _without_requirement(t: Any, name: str) -> Any:
+    from .types import StreamType
+
+    if isinstance(t, TupleType):
+        return TupleType(tuple(_without_requirement(i, name) for i in t.items))
+    if isinstance(t, StreamType):
+        return StreamType(_without_requirement(t.item, name))
+    if isinstance(t, SignalType) and name in t.meta:
+        return t.with_(meta=t.meta - {name})
+    return t
 
 
 class Switch(Node):
@@ -718,9 +810,11 @@ class Switch(Node):
         default: Any = None,
         ordered: bool = False,
         name: str | None = None,
+        passthrough: frozenset[str] = frozenset(),
     ) -> None:
         if not branches:
             raise ValueError("switch() needs at least one branch")
+        self.passthrough = passthrough  # tags the producer guarantees (once placed)
         self.key_of = (
             (lambda f, k=selector: f[k]) if isinstance(selector, str) else selector
         )
@@ -735,7 +829,13 @@ class Switch(Node):
         outs = [b.out_type for b in all_nodes] + (
             [self.in_type] if default == "pass" else []
         )
-        self.out_type = outs[0] if all(o == outs[0] for o in outs) else SignalType()
+        if all(o == outs[0] for o in outs):
+            self.out_type = outs[0]
+        else:  # gradual payload; a tag every emitted path guarantees survives
+            paths = [tag_names(b.out_type) for b in all_nodes]
+            if default == "pass":
+                paths.append(tag_names(self.in_type) | passthrough)
+            self.out_type = SignalType(meta=frozenset.intersection(*paths))
         sel = (
             selector
             if isinstance(selector, str)
@@ -753,6 +853,24 @@ class Switch(Node):
     def _all(self) -> list[Node]:
         return list(self.branches.values()) + (
             [self.default] if isinstance(self.default, Node) else []
+        )
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        branches = {k: b.resolve_ports(upstream) for k, b in self.branches.items()}
+        default = (
+            self.default.resolve_ports(upstream)
+            if isinstance(self.default, Node)
+            else self.default
+        )
+        passthrough = tag_names(upstream.out_type)
+        if (
+            default is self.default
+            and passthrough == self.passthrough
+            and all(branches[k] is b for k, b in self.branches.items())
+        ):
+            return self
+        return Switch(
+            self.selector, branches, default, self.ordered, self.name, passthrough
         )
 
     def validate(self, env: Env | None = None) -> Env:
@@ -897,6 +1015,12 @@ class Parallel(Node):
     def validate(self, env: Env | None = None) -> Env:
         return self.inner.validate(env)
 
+    def resolve_ports(self, upstream: Node) -> Node:
+        inner = self.inner.resolve_ports(upstream)
+        if inner is self.inner:
+            return self
+        return Parallel(inner, self.workers, self.backend, self.window)
+
     def nodes(self) -> list[Node]:
         return [self]
 
@@ -969,6 +1093,13 @@ class Select(Node):
             label = ", ".join(str(names[i] or i) for i in self.indices)
         self.name = f"[{label}]"
 
+    def resolve_ports(self, upstream: Node) -> Node:
+        if upstream.out_type == self.in_type or not isinstance(
+            upstream.out_type, TupleType
+        ):
+            return self
+        return Select(upstream, self.key)
+
     def describe(self, indent: str = "") -> str:
         return f"{indent}select {self.name}: {describe(self.in_type)} -> {describe(self.out_type)}"
 
@@ -990,6 +1121,11 @@ class Slice(Node):
             t.with_(shape=slice_shape(t.shape, key)) if isinstance(t, SignalType) else t
         )
         self.name = "[" + _key_repr(key) + "]"
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        if upstream.out_type == self.in_type:
+            return self
+        return Slice(upstream, self.key)
 
     def describe(self, indent: str = "") -> str:
         return f"{indent}slice {self.name}: {describe(self.in_type)} -> {describe(self.out_type)}"
@@ -1027,9 +1163,9 @@ class StreamSlice(Node):
         self.name = f"{kind}({shown})"
 
     def resolve_ports(self, upstream: Node) -> Node:
-        if self.in_type.is_any if isinstance(self.in_type, SignalType) else False:
-            return StreamSlice(self.kind, upstream, **self.params)
-        return self
+        if upstream.out_type == self.in_type:
+            return self
+        return StreamSlice(self.kind, upstream, **self.params)
 
     def describe(self, indent: str = "") -> str:
         return f"{indent}{self.name}: {describe(self.in_type)} -> {describe(self.out_type)}"
@@ -1183,6 +1319,8 @@ def fresh(node: Node, seen: set[int]) -> Node:
             fresh(node.then, seen),
             fresh(node.otherwise, seen) if node.otherwise is not None else None,
             node.name,
+            node.tag,
+            node.passthrough,
         )
     return node
 

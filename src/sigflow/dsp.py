@@ -12,11 +12,15 @@ import time as _time
 from fractions import Fraction
 from typing import Any, AsyncIterator, Iterator, Literal
 
+import math
+
 import numpy as np
 import scipy.signal as ss
 
 from .block import Framed, block, source, tap
-from .frame import Frame
+from dataclasses import replace
+
+from .frame import Frame, Tag, Tags
 from .graph import Block
 from .ratio import Ratio
 from .types import Sig, SignalType, Stream
@@ -173,13 +177,18 @@ async def ticker(period: float = 0.1, count: int = 10) -> AsyncIterator[Sig[dict
 
 class _Reframer:
     """Shared bookkeeping for re-framing stream blocks: absolute sample position and the
-    time origin of the stream, so every output frame gets an exact ``t0``."""
+    time origin of the stream, so every output frame gets an exact ``t0``, and the
+    tags of every input, as the sample intervals they cover, so an output carries
+    what applies to its samples whichever inputs they came from."""
 
     def __init__(self) -> None:
         self.buf: np.ndarray = np.empty(0)
         self.pos = 0  # absolute index of buf[0] in the stream
+        self.end = 0  # absolute index just past the last sample pushed
         self.origin: float | None = None  # t0 of the first frame seen (its sample 0)
         self.rate: float | None = None
+        # (tag, first sample, one past the last sample, whole-frame on its input?)
+        self.tags: list[tuple[Tag, int, int, bool]] = []
 
     def push(self, f: Frame) -> None:
         x = np.asarray(f.data)
@@ -187,14 +196,71 @@ class _Reframer:
             self.origin = f.meta.get("t0", 0.0) or 0.0
             self.rate = f.stream.get("rate")
         self.buf = x if self.buf.size == 0 else np.concatenate([self.buf, x])
+        first, self.end = self.end, self.end + len(x)
+        if f.tags:
+            window = f.time
+            for t in f.tags:
+                whole = t.span is None
+                i0, i1 = first, self.end
+                if not whole and window is not None and window.rate:
+                    s0, s1 = t.span  # type: ignore[misc]
+                    i0 = first + max(
+                        0, math.ceil(round((s0 - window.t0) * window.rate, 9))
+                    )
+                    i1 = first + min(
+                        len(x), math.ceil(round((s1 - window.t0) * window.rate, 9))
+                    )
+                    if s1 <= s0:  # a point
+                        i1 = i0 + 1
+                if i1 > i0:
+                    self.tags.append((t, i0, i1, whole))
 
     def take(self, f: Frame, n: int, hop: int) -> Frame:
         """The next window of ``n`` samples as a frame stamped with its exact start time,
-        then advance by ``hop``."""
+        then advance by ``hop``. It carries the tags of every input that contributed:
+        spans clipped to the window; a whole-frame tag of an input is whole again on
+        an output its samples cover entirely (adjacent inputs with the same tag and
+        value count together), a span over the covered part otherwise, and nothing
+        when the stream has no time axis to express that part."""
         t0 = (self.origin or 0.0) + (self.pos / self.rate if self.rate else 0.0)
         out = f.evolve(data=self.buf[:n].copy(), meta={"t0": t0, "offset": self.pos})
+        if self.tags:
+            out = replace(out, tags=Tags(self._tags_for(self.pos, self.pos + n, t0)))
         self.buf = self.buf[hop:]
         self.pos += hop
+        self.tags = [r for r in self.tags if r[2] > self.pos]  # consumed: forgotten
+        return out
+
+    def _tags_for(self, lo: int, hi: int, t0: float) -> list[Tag]:
+        out: list[Tag] = []
+        coverage: dict[tuple[str, Any], list[tuple[int, int, Tag]]] = {}
+        for t, i0, i1, whole in self.tags:
+            if i1 <= lo or i0 >= hi:
+                continue
+            if not whole:
+                out.append(t)  # a span: clipped to the window when the frame is made
+                continue
+            coverage.setdefault((t.name, t.value), []).append(
+                (max(i0, lo), min(i1, hi), t)
+            )
+        for runs in coverage.values():
+            runs.sort(key=lambda r: r[0])
+            merged: list[tuple[int, int, Tag]] = []
+            for a, b, t in runs:
+                if merged and a <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], b), t)
+                else:
+                    merged.append((a, b, t))
+            for a, b, t in merged:
+                if a <= lo and b >= hi:
+                    out.append(replace(t, span=None))
+                elif self.rate:
+                    out.append(
+                        replace(
+                            t,
+                            span=(t0 + (a - lo) / self.rate, t0 + (b - lo) / self.rate),
+                        )
+                    )
         return out
 
 
@@ -240,10 +306,12 @@ def buffer(
     for f in xs:
         buf.append(f)
         if len(buf) == count:
-            yield f.evolve(
+            stacked = f.evolve(
                 data=np.stack([b.data for b in buf]),
                 meta={"t0": buf[0].meta.get("t0")} if "t0" in buf[0].meta else {},
             )
+            # rows are whole frames: their whole-frame tags apply, spans do not
+            yield replace(stacked, tags=Tags.merge(*(b.tags.whole() for b in buf)))
             buf = []
 
 

@@ -54,6 +54,25 @@ New
   A manually triggered GPU CI workflow (`.github/workflows/gpu.yml`) runs the
   device and xarray tests on a self-hosted runner; the docs gained a backend
   support matrix (**Guide → Array backends and GPU**).
+- Tags, a fourth annotation level: `frame.tag("speech", segment=3)`,
+  `frame.tag("burst", span=(1.2, 1.5))`, `frame.untag(...)`, `frame.mask(name)`,
+  `frame.tags.at(t)`; `"speech" in frame` and `frame["segment"]` look tags up
+  too. A `Tag` is a name, a scalar value, an optional time span and the block
+  that attached it (stamped by the runtime). Tags are united at joins, spanned
+  tags are clipped to each frame's window and dropped by blocks that change
+  the leading axis, and `Frame.save` / `Frame.load` round-trip them. Contracts
+  declare them: `Annotated[Sig[...], requires("speech")]` on an input is
+  checked when the graph is built against the producer's guarantees and at
+  run time; `provides("bits")` on an output is checked at run time;
+  `clears("raw")` stops a tag from being carried on (as values:
+  `SignalType(...).requires(...)` / `.provides` / `.clears`).
+  `when("speech", then=...)` routes frames by tag and lets the branch require
+  it; `when` / `switch` keep the tags every branch guarantees even when the
+  payload type becomes gradual. Guarantees mean whole-frame tags. `examples/24_tags.py`
+  walks through all of it. Guarantees flow at placement through
+  generic blocks, fan-outs, zips, port selection, `when` / `switch`, reused
+  subgraphs and `Graph` wiring. (`SignalType.meta`, the dormant "required
+  annotation keys", is what `requires()` now fills.)
 - `Frame.slice` / `frame[a:b]` / `at` / `between` index array-like payloads
   directly, so labelled and device arrays keep their labels and placement;
   `Frame.save` / `Frame.load` round-trip a `DataArray` (values, dims, coords,

@@ -36,6 +36,7 @@ run it in Jupyter with `ipywidgets` installed (regenerate with
 | `21_routing_and_rates.py` | routing / rates | `switch()` by annotation or callable with pipeline branches (a stateful tracker, a 4:1 re-framer), `default=`, `ordered=True`; `ratio=` contracts, `g.ratio`, `RatioMismatch` at build time, `strict=True` verification |
 | `20_builder_time_replay.py` | 0.2 tour | units in the contract, data + stream slicing, `Frame.time`, `align()`, an explicit `Graph` diamond, `frame.save`/`replay`, `Stateful` checkpoint/resume, `plot.multi`/`history` |
 | `22_cpu_gpu.py` | CPU / CUDA processing | NumPy generation and preprocessing, explicit `to_device` / `to_host` transfers, CuPy FFT and power, CPU peak detection, numerical comparison and provenance; skips CUDA when unavailable |
+| `24_tags.py` | tags | a detector that tags levels, speech and clipped spans; a generic block carrying tags; `when("speech", ...)` routing to a block that requires and clears the tag; spans clipped by `chunk`, dropped by `rms`; `Frame.save` round trip; a requirement rejected at build time |
 | `23_xarray_blocks.py` | labelled arrays | `@block(labels=True)` with named dimensions in the contract, preserved coordinates and layout, per-channel reductions, a positional contract, `default_labels()` for library blocks, NumPy direct calls and graph provenance |
 
 A few lessons the examples were written to make visible:
