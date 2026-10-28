@@ -72,7 +72,7 @@ and select it from the Kernel menu. The tour notebook also falls back to the
 | `sigflow.progress` | `Monitor`: per-block counters, percent complete, text/Jupyter display |
 | `sigflow.control`  | `g.start()` background runs: pause / step / stop / throttle / record, `Knob` live parameters |
 | `sigflow.ui`       | ipywidgets control panels (`run.controls()`, `dashboard()`), knob widgets |
-| `sigflow.xarray`   | labelled payloads: `DataArray` inputs lined up with the block contract, outputs rebuilt from it (`@block(labels=True)`, `default_labels()`) |
+| `sigflow.xarray`   | labelled payloads: `DataArray` inputs lined up with the block contract, outputs rebuilt from it (`@block(labels=True)`, `run(labels=True)`, `default_labels()`) |
 | `sigflow.io`       | WAV / raw (GNU Radio) / npy / CSV / UDP / ZeroMQ sources and sinks |
 | `sigflow.builder`  | `Graph`: explicit DAG builder (add / connect / output) |
 | `sigflow.units`    | SI-prefixed unit registry; compatibility and conversion |
@@ -468,9 +468,11 @@ the `channel` coordinate; a new variable contributes its own name; fixed sizes
 become `dim_<axis>`. Attributes and the array name come from the first labelled
 input, and a fully named contract restores the caller's layout.
 
-`sigflow.default_labels(True)` makes every block whose `labels` option is unset
-label-aware, including the built-in `dsp` and `linalg` blocks; `labels=False`
-opts a block out, so its body receives the `DataArray` itself. A body that
+A block whose `labels` option is unset follows the run: `run(g, labels=True)`
+makes every such block label-aware for that run, including the built-in `dsp`
+and `linalg` blocks, and `sigflow.default_labels(True)` sets the package default
+a run reads when it starts; `labels=False` opts a block out, so its body
+receives the `DataArray` itself. A body that
 wants the labels takes the frame (`Framed[...]`) and reads `frame.data`.
 Scalars stay scalars, tuple outputs are handled element by element, and a
 CuPy-backed `DataArray` reaches the body as a CuPy array and comes back
@@ -517,8 +519,18 @@ frames = run(g, on_error="raise")  # output payloads are NumPy arrays
 Device indices may be nonnegative integers or `"cuda:N"` strings. Transfers
 preserve dtype, shape, frame annotations and issues, and add provenance like any
 other map block. Arrays already at the destination can be reused; `copy=True`
-forces an independent copy. `to_device()` synchronizes the current CUDA stream
-before returning, and `to_host()` waits for its GPU-to-CPU copy to finish.
+forces an independent copy. Both are `preserve_type` blocks: placed after a
+producer they carry its complete contract, so shape, rate and unit checks and
+reframing ratios (`sine(n=1024) >> to_host() >> chunk(256)` is still `1:4`)
+survive the transfer, in operator pipelines, reused subgraphs and `Graph`
+wiring in any order.
+
+A transfer is a barrier. Before a device array is read, everything running on
+its device has finished (the whole device is synchronised, since a producer may
+have used any stream), and the copy has finished before the block returns; an
+array already on the requested device is settled once and reused. Device arrays
+of other libraries (anything with `__cuda_array_interface__`) are accepted.
+Nothing is overlapped, so group work on one device between transfers.
 
 For an xarray `DataArray`, only its sample payload is transferred; dimensions,
 coordinates, name and attributes are retained. Coordinates and frame-level sample
@@ -530,7 +542,9 @@ NumPy. This does not make the built-in NumPy/SciPy DSP blocks GPU-aware: use
 CuPy-compatible blocks between the transfers, and return to the CPU before
 NumPy-based reframing, plotting, file sinks or persistence. The existing run error
 policy applies to transfers too; `on_error="raise"` surfaces installation or CUDA
-errors immediately.
+errors immediately. The backend support matrix, the synchronisation rules and
+the GPU CI workflow are in `docs/guide/array-backends.md` (**Guide → Array
+backends and GPU**).
 
 ### Seeing the graph
 

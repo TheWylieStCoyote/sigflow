@@ -43,7 +43,23 @@ contract, gives the body the bare array and rebuilds a labelled array around the
 result; name the dimensions in the contract (`Sig[float, tuple[Literal["channel"],
 Literal["time"]]]`) to match them by name. The [labelled arrays
 guide](../guide/xarray.md) covers reductions, several inputs, stream blocks,
-GPU-backed arrays and the `default_labels()` switch.
+GPU-backed arrays and the `run(labels=True)` option.
+
+## Carrying the producer's contract
+
+`@block(preserve_type=True)` declares that a single-input map block hands on
+what it was given, as far as the contract is concerned. Placed after a
+producer, its input and output contract become the producer's: dtype, shape,
+rate, units and required keys, narrowed by whatever the block declared itself.
+Downstream shape checks and reframing ratios then see through the block. The
+transfer blocks `to_device` and `to_host` use it, so moving data between
+devices does not weaken a graph's checks. Sample annotations are kept by
+default. The promise is checked at runtime like any other output contract, so
+a body that changes shape or dtype fails the inherited contract.
+
+Resolution happens in operator pipelines and in explicit `Graph` wiring,
+including reused subgraphs and edges connected in reverse order; a `Graph`
+`connect` that fails its type or rate checks leaves the graph as it was.
 
 ## Options worth knowing
 

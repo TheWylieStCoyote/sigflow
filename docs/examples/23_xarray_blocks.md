@@ -33,7 +33,7 @@ from typing import Literal
 
 import numpy as np
 
-from sigflow import Sig, block, default_labels, dsp, from_iterable, run
+from sigflow import Sig, block, dsp, from_iterable, run
 from sigflow.dims import M, N
 
 CHANNEL = Literal["channel"]
@@ -111,15 +111,13 @@ def main() -> None:
     spec = spectrum(signal.transpose("channel", "time"))
     print("Spectrum dimensions:", spec.dims, "| coordinates:", list(spec.coords))
 
-    # --- the default switch covers the built-in library blocks --------------
-    previous = default_labels(True)
-    try:
-        frame = run(
-            from_iterable([signal.isel(channel=0)]) >> dsp.scale(gain=0.5),
-            check="all",
-        )[0]
-    finally:
-        default_labels(previous)
+    # --- the run option covers the built-in library blocks ------------------
+    # (``default_labels(True)`` sets the same thing package-wide)
+    frame = run(
+        from_iterable([signal.isel(channel=0)]) >> dsp.scale(gain=0.5),
+        check="all",
+        labels=True,
+    )[0]
     print("dsp.scale on a DataArray:", frame.data.dims, frame.data.attrs)
 
     print("\nProvenance:")

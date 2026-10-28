@@ -54,18 +54,24 @@ goes straight to the body.
 
 - `@block(labels=True)` makes one block label-aware; `labels=False` opts a
   block out, so its body receives the `DataArray` itself.
-- `sigflow.default_labels(True)` makes every block whose `labels` option is
-  unset label-aware, including the built-in `dsp`, `linalg` and `plot` blocks.
-  It returns the previous setting. The default is off in this release.
+- `run(graph, labels=True)` makes every block whose `labels` option is unset
+  label-aware for that run, including the built-in `dsp`, `linalg` and `plot`
+  blocks (`iterate`, `arun` and `graph(data, labels=True)` take it too).
+- `sigflow.default_labels(True)` sets the package default for runs that do not
+  pass `labels=` and for blocks called directly. It returns the previous
+  setting; the default is off in this release.
 
 ```python
-from sigflow import default_labels, dsp, from_iterable, run
+from sigflow import dsp, from_iterable, run
 
-previous = default_labels(True)
-frame = run(from_iterable([data.isel(channel=0)]) >> dsp.scale(gain=0.5))[0]
+frame = run(from_iterable([data.isel(channel=0)]) >> dsp.scale(gain=0.5), labels=True)[0]
 assert frame.data.dims == ("time",)
-default_labels(previous)
 ```
+
+A run reads the default once, when it starts, and the resolved choice travels
+with the run: into its threads and its `parallel(..., backend="process")`
+workers. Switching the default in another thread or cell while a run is in
+progress does not change what that run's blocks receive.
 
 ## How axes are matched
 
@@ -162,15 +168,18 @@ returns the bare array, with a warning, when it is not.
 
 The body receives `da.data`, not `da.values`, so a CuPy-backed `DataArray`
 reaches a label-aware block as a CuPy array and comes back labelled and still
-on the device. `to_device` and `to_host` move only the payload. Write the body
-against the array library you expect, as with any other block.
+on the device. `to_device` and `to_host` move only the payload and carry the
+producer's contract through. Write the body against the array library you
+expect, as with any other block. The support matrix and the synchronisation
+rules are in [Array backends and GPU](array-backends.md).
 
 ## Troubleshooting
 
 | Symptom | What to check |
 |---|---|
 | The body received a `DataArray` | The block is not label-aware: add `labels=True` or switch `default_labels(True)`. |
-| `dimension 'channel' is 8 but here needs 3` | A positional contract met a differently laid out array; name the dimensions in the contract. |
+| `dimension 'channel' is 8 but here needs 3` at run time | A positional contract met a differently laid out array; name the dimensions in the contract. |
+| The same message while *building* the graph | The source's declared type is positional (`tuple[Literal[8], Literal[3]]`), which means what it says for a plain array: eight channels. Declare the source by name too (`type=Sig[float, tuple[TIME, CHANNEL]]`) or leave its shape open; static checks match named shapes by position. |
 | A reduction came back as a plain array | The contract has no shape and the rank changed; declare the output shape. |
 | New axis is called `dim_1` | Fixed sizes have no name; use a dimension variable, or return a `DataArray` from the body. |
 | Labels lost after a block | The block opted out (`labels=False`), or the body returned a Python scalar. |

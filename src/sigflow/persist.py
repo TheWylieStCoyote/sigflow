@@ -18,7 +18,6 @@ checkpoint lists them under ``skipped``.
 from __future__ import annotations
 
 import json
-import sys
 import warnings
 import pickle
 import time
@@ -27,6 +26,7 @@ from typing import Any
 
 import numpy as np
 
+from ._arrays import is_array, is_data_array
 from .frame import NO_PROV, Frame, Issue, Provenance, frozen
 
 __all__ = [
@@ -66,15 +66,6 @@ def _jsonable(v: Any) -> Any:
     if isinstance(v, (str, int, float, bool)) or v is None:
         return v
     return repr(v)
-
-
-def _is_arraylike(x: Any) -> bool:
-    return hasattr(x, "shape") and hasattr(x, "dtype")
-
-
-def _is_dataarray(x: Any) -> bool:
-    xr = sys.modules.get("xarray")
-    return xr is not None and isinstance(x, xr.DataArray)
 
 
 def _host(x: Any) -> np.ndarray:
@@ -163,7 +154,7 @@ def save_frame(f: Frame, path: str) -> str:
         for i, x in enumerate(data):
             arrays[f"data_{i}"] = _host(x)
         kind = "tuple"
-    elif _is_dataarray(data):
+    elif is_data_array(data):
         # the payload as an array plus a record of dims, coords, attrs and name
         arrays["data"] = _host(data.data)
         labels = {
@@ -179,7 +170,7 @@ def save_frame(f: Frame, path: str) -> str:
                 "attrs": _jsonable(dict(c.attrs)),
             }
         kind = "xarray"
-    elif isinstance(data, (int, float, complex, np.generic)) or _is_arraylike(data):
+    elif isinstance(data, (int, float, complex, np.generic)) or is_array(data):
         arrays["data"] = _host(data)
         kind = "array"
     else:

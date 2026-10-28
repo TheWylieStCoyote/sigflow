@@ -17,6 +17,7 @@ from __future__ import annotations
 import itertools
 from typing import Any, Iterable, Mapping
 
+from ._arrays import is_array
 from .block import BlockDef
 from .frame import frozen
 from .ratio import Ratio, RatioMismatch, as_ratio, leading_dim
@@ -28,6 +29,7 @@ from .types import (
     TypeMismatch,
     as_type,
     describe,
+    narrow,
     scoped,
     slice_shape,
     unify,
@@ -190,11 +192,8 @@ class Node:
         still called as plain functions (see :class:`~sigflow.block.BlockDef`)."""
         if self.in_type is None:
             raise TypeError(f"{self.name} has its own source; call run() instead")
-        import numpy as _np
-
         if (
-            isinstance(items, (_np.ndarray,))
-            or all(hasattr(items, attr) for attr in ("shape", "dtype", "ndim"))
+            is_array(items)
             or not hasattr(items, "__iter__")
             or isinstance(items, (str, bytes, dict))
         ):
@@ -306,6 +305,22 @@ class Block(Node):
     def named(self, label: str) -> "Block":
         return Block(self.defn, self.config, label)
 
+    def resolve_ports(self, upstream: Node) -> Node:
+        if not self.defn.preserve_type:
+            return self
+        # A pass-through block (``preserve_type=True``) carries its producer's
+        # contract. Check against the *declared* input, not one inherited at an
+        # earlier placement: the same transfer can follow producers of any shape.
+        declared = scoped(self.defn.in_type, str(self.id))
+        carried = narrow(upstream.out_type, declared, where=self.name)
+        if self.in_type == carried and self.out_type == carried:
+            return self
+        import copy
+
+        new = copy.copy(self)
+        new.in_type = new.out_type = carried
+        return new
+
     def clone(self) -> "Block":
         """A copy with a fresh identity (new symbol scope); stateful subclasses share state."""
         import copy
@@ -314,7 +329,9 @@ class Block(Node):
         new.given = self.given
         new.id = next(_ids)
         new.in_type = scoped(
-            self.defn.in_type if self.defn.refine is None else _unscope(self.in_type),
+            self.defn.in_type
+            if self.defn.refine is None and not self.defn.preserve_type
+            else _unscope(self.in_type),
             str(new.id),
         )
         new.out_type = scoped(_unscope(self.out_type), str(new.id))

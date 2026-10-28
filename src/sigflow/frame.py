@@ -26,6 +26,8 @@ from typing import Any, Iterable, Iterator, Mapping
 
 import numpy as np
 
+from ._arrays import is_positional
+
 __all__ = [
     "Frame",
     "Issue",
@@ -292,13 +294,10 @@ class Issue:
 
 
 def _index(data: Any, key: Any) -> Any:
-    """``data[key]`` for anything array-like (ndarray, DataArray, CuPy, ...), so labels
-    and device placement survive; other payloads (lists) go through ``np.asarray``."""
-    if (
-        hasattr(data, "shape")
-        and hasattr(data, "dtype")
-        and hasattr(data, "__getitem__")
-    ):
+    """``data[key]`` for positional arrays (ndarray, DataArray, CuPy, dask...), so
+    labels and device placement survive; lists and label-indexed objects (pandas)
+    go through ``np.asarray`` as before."""
+    if is_positional(data):
         return data[key]
     return np.asarray(data)[key]
 

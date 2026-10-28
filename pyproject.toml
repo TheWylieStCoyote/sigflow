@@ -27,6 +27,7 @@ dev = [
   "greenlet",
   "pyzmq",
   "xarray",
+  "dask[array]",
   "mkdocs-material",
 ]
 

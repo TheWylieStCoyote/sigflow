@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, get_args, get_origin
 
 import numpy as np
+from ._arrays import array_metadata as _array_metadata
 from .dims import M, N, T
 
 __all__ = [
@@ -35,6 +36,7 @@ __all__ = [
     "StreamType",
     "TypeMismatch",
     "unify",
+    "narrow",
     "Env",
     "Dim",
     "scoped",
@@ -243,17 +245,6 @@ def _norm_shape(shape: Any) -> tuple[Dim, ...] | None:
 def _unlit(x: Any) -> Any:
     """``Literal["V"]`` -> ``"V"``: the checker-readable spelling of a rate or unit."""
     return get_args(x)[0] if get_origin(x) is Literal else x
-
-
-def _array_metadata(value: Any) -> tuple[np.dtype, tuple[int, ...]]:
-    """Inspect arrays without materializing their data (including CUDA/lazy arrays)."""
-    if hasattr(value, "dtype") and hasattr(value, "shape"):
-        try:
-            return np.dtype(value.dtype), tuple(int(n) for n in value.shape)
-        except (TypeError, ValueError):
-            pass  # torch / pandas extension dtypes, unknown lazy sizes: materialise
-    array = np.asarray(value)
-    return array.dtype, array.shape
 
 
 def _labelled_shape(value: Any, want: Any, shape: tuple[int, ...]) -> tuple[int, ...]:
@@ -635,6 +626,34 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
             f"{where}: units {produced.units!r} produced, {required.units!r} required{hint}"
         )
     return env
+
+
+def narrow(produced: Any, required: Any, where: str = "") -> Any:
+    """The contract carried by a node that passes its input through unchanged
+    (``required`` is its declared input) once ``produced`` is connected to it:
+    ``produced`` wherever it says something, ``required`` where ``produced`` is
+    gradual (``Any`` dtype, unknown shape, no rate or units). Raises
+    :class:`TypeMismatch` when ``produced`` does not satisfy ``required``."""
+    produced, required = _as_type(produced), _as_type(required)
+    unify(produced, required, Env(), where)
+    if isinstance(produced, TupleType) and isinstance(required, TupleType):
+        return TupleType(
+            tuple(narrow(p, r, where) for p, r in zip(produced.items, required.items))
+        )
+    if not (isinstance(produced, SignalType) and isinstance(required, SignalType)):
+        return produced
+    dtype = produced.dtype
+    if (dtype is Any or isinstance(dtype, DVar)) and not (
+        required.dtype is Any or isinstance(required.dtype, DVar)
+    ):
+        dtype = required.dtype
+    return SignalType(
+        dtype,
+        produced.shape if produced.shape is not None else required.shape,
+        produced.rate if produced.rate is not None else required.rate,
+        produced.units if produced.units is not None else required.units,
+        produced.meta,
+    )
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:

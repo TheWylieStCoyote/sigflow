@@ -82,6 +82,7 @@ class RunOptions:
         resume: Any = None,
         strict: bool = False,
         provenance: str = "full",
+        labels: bool | None = None,
     ) -> None:
         if provenance not in ("full", "roots", "off"):
             raise ValueError("provenance must be 'full', 'roots' or 'off'")
@@ -100,6 +101,13 @@ class RunOptions:
         self.monitor = monitor or Monitor()
         self.queue_size = queue_size
         self.env = Env()
+        # blocks with an unset ``labels`` option follow the run; the package default
+        # is read once here, so the choice travels with the run (threads, workers)
+        if labels is None:
+            from .xarray import current_default
+
+            labels = current_default()
+        self.labels = bool(labels)
 
 
 # --------------------------------------------------------------------------- #
@@ -319,6 +327,7 @@ class Runner:
         Provenance still gets one node per block; annotations are merged once."""
         stats_ = [self.mon.stats(n.name, n) for n in nodes]
         policies = [self._policy(n) for n in nodes]
+        calls = [n.defn.resolve_call(self.opts.labels) for n in nodes]
         seqs = [0] * len(nodes)
         check_first = self.opts.check == "first"
         check_all = self.opts.check == "all"
@@ -348,7 +357,7 @@ class Runner:
                         )  # materialize what a framed block sees
                     arg = frame if d.framed else value
                     cfg = live(node.given) if node.live else node.given
-                    result = d.call(arg, **cfg)
+                    result = calls[i](arg, **cfg)
                 except Exception as e:
                     st.errors += 1
                     st.time += time.perf_counter() - t0
@@ -874,7 +883,7 @@ class Runner:
         stats = self.mon.stats(node.name, node)
         d = node.defn
         try:
-            produced = d.call(
+            produced = d.resolve_call(self.opts.labels)(
                 **node.given
             )  # sources get Knob objects and read .value per frame
         except Exception as e:
@@ -942,6 +951,7 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
+        call = d.resolve_call(self.opts.labels)
         policy = self._policy(node)
         seq = 0
         async for f in upstream:
@@ -964,7 +974,7 @@ class Runner:
                 cfg = (
                     live(node.given) if node.live else node.given
                 )  # knobs resolved per call
-                result = d.call(*args, **cfg)
+                result = call(*args, **cfg)
                 if inspect.isawaitable(result):
                     result = await result
             except Exception as e:
@@ -1023,6 +1033,7 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
+        call = d.resolve_call(self.opts.labels)
         spec = d.inputs[0]
         if len(d.inputs) != 1:
             raise TypeError(f"{d.name}: stream blocks take exactly one stream input")
@@ -1058,7 +1069,7 @@ class Runner:
         seq = 0
         try:
             if inspect.isasyncgenfunction(d.fn):
-                agen = d.call(items(), **node.given)
+                agen = call(items(), **node.given)
                 last: tuple[Frame, ...] = ()
                 async for out in agen:
                     parents, consumed[:] = tuple(consumed) or last, []
@@ -1085,7 +1096,7 @@ class Runner:
                     else _run_sync_stream
                 )
                 async for out, parents in driver(
-                    d.call,
+                    call,
                     node.given,
                     frames(),
                     consumed,
@@ -1221,6 +1232,7 @@ class Runner:
 
         inner = node.inner
         d = inner.defn
+        call = d.resolve_call(self.opts.labels)
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
         pool = (
@@ -1298,9 +1310,10 @@ class Runner:
                     fut = loop.run_in_executor(
                         pool,
                         _call_block,
-                        d if node.backend == "process" else d.call,
+                        d if node.backend == "process" else call,
                         f.data,
                         cfg,
+                        self.opts.labels,
                     )
                     pending.append((f, fut))
                 async for out in emit_ready(block_on_first=len(pending) >= node.window):
@@ -1528,9 +1541,10 @@ class _SubPipe:
             pass
 
 
-def _call_block(target: Any, data: Any, cfg: dict) -> Any:
-    """Worker-side call (module-level so it pickles for process pools)."""
-    fn = target.call if isinstance(target, BlockDef) else target
+def _call_block(target: Any, data: Any, cfg: dict, labels: bool = False) -> Any:
+    """Worker-side call (module-level so it pickles for process pools). A process
+    worker gets the definition and the run's resolved ``labels`` flag."""
+    fn = target.resolve_call(labels) if isinstance(target, BlockDef) else target
     return fn(data, **cfg)
 
 

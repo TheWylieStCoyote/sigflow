@@ -24,13 +24,27 @@ New
   and rebuilds a labelled array around each output from the output contract:
   a dimension variable seen on an input keeps its name and coordinate, new
   ones get their own name, fixed sizes become `dim_<axis>`. Runtime checks
-  read a labelled array's sizes by name. `sigflow.default_labels(True)`
-  switches every block with an unset `labels` option on, including the
-  built-in `dsp` / `linalg` blocks; `labels=False` opts out. `Framed` inputs
-  and `DataArray` results pass through untouched.
+  read a labelled array's sizes by name. A block with an unset `labels`
+  option follows the run: `run(g, labels=True)` switches every such block on,
+  including the built-in `dsp` / `linalg` blocks, and
+  `sigflow.default_labels(True)` sets the package default a run reads once
+  when it starts (so the choice is per run and reaches process-pool workers);
+  `labels=False` opts out. `Framed` inputs and `DataArray` results pass
+  through untouched. A stream block keeps only the item it is processing.
+- `@block(preserve_type=True)`: a single-input map block that carries its
+  producer's complete contract (`types.narrow`), so shape, rate and unit checks
+  and reframing ratios see through it, in pipelines, reused subgraphs and
+  `Graph` wiring in any order. A `Graph.connect` that fails is rolled back.
 - CPU / CUDA transfers (`sigflow.to_device`, `sigflow.to_host`; CuPy is
-  optional): explicit, synchronous moves of a frame's payload that keep dtype,
-  shape, annotations and, for a `DataArray`, its labels.
+  optional): explicit moves of a frame's payload that keep dtype, shape,
+  annotations and, for a `DataArray`, its labels, and carry the producer's
+  contract (`preserve_type`). A transfer is a barrier: the source device is
+  synchronised before its data is read, so work a producer launched on any
+  stream is complete, and the copy is finished before the block returns.
+  Device arrays of other libraries (`__cuda_array_interface__`) are accepted.
+  A manually triggered GPU CI workflow (`.github/workflows/gpu.yml`) runs the
+  device and xarray tests on a self-hosted runner; the docs gained a backend
+  support matrix (**Guide → Array backends and GPU**).
 - `Frame.slice` / `frame[a:b]` / `at` / `between` index array-like payloads
   directly, so labelled and device arrays keep their labels and placement;
   `Frame.save` / `Frame.load` round-trip a `DataArray` (values, dims, coords,

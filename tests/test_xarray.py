@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import gc
 import inspect
+import pickle
 import sys
+import weakref
 from typing import Iterator, Literal
 
 import numpy as np
@@ -15,14 +18,17 @@ from sigflow import (
     Framed,
     Sig,
     Stream,
+    TypeMismatch,
     block,
     default_labels,
     dsp,
     from_iterable,
     linalg,
+    parallel,
     run,
 )
 from sigflow.dims import M, N, T
+from sigflow.runtime import RunOptions, _call_block
 
 CHANNEL = Literal["channel"]
 TIME = Literal["time"]
@@ -259,3 +265,114 @@ def test_gpu_payload_stays_on_device(xr):
     np.testing.assert_allclose(cp.asnumpy(result.data), (x - x.mean("time")).data)
     f = Frame(cp.arange(8.0))
     assert isinstance(f[1:3].data, cp.ndarray)
+
+
+def test_named_source_contracts_compose_in_any_layout(xr):
+    @block
+    def needs3(x: Sig[float, tuple[Literal[3]]]) -> Sig[float, tuple[Literal[3]]]:
+        return x
+
+    x = signal(xr)  # dims (time, channel): 8 x 3
+    # a source declared by name feeds (channel, time) blocks in any layout, and the
+    # static check agrees with the runtime one
+    named = from_iterable([x], type=Sig[float, tuple[TIME, CHANNEL]])
+    out = run(named >> center >> rms >> needs3, check="all", on_error="raise")
+    assert out[0].data.dims == ("channel",) and out[0].data.shape == (3,)
+    # a positional declaration means what it says for a plain array: 8 channels
+    positional = from_iterable([x], type=Sig[float, tuple[Literal[8], Literal[3]]])
+    with pytest.raises(TypeMismatch, match="channel.*8.*needs 3"):
+        _ = positional >> center >> rms >> needs3
+
+
+def test_stream_blocks_keep_only_the_latest_item(xr):
+    @block(labels=True)
+    def double(
+        xs: Stream[Sig[float, tuple[TIME]]],
+    ) -> Iterator[Sig[float, tuple[TIME]]]:
+        for item in xs:
+            yield item * 2
+
+    items = [
+        xr.DataArray(
+            np.full(4, float(i)), dims=("time",), coords={"time": np.arange(4)}
+        )
+        for i in range(6)
+    ]
+    alive = [weakref.ref(item) for item in items]
+
+    def feed():
+        while items:
+            yield items.pop(0)  # the feeder keeps nothing behind
+
+    for i, result in enumerate(double.call(feed())):
+        assert result.dims == ("time",) and float(result[0]) == 2 * i
+        gc.collect()
+        # the wrapper holds the item being processed, not the ones before it
+        assert all(ref() is None for ref in alive[:i])
+
+
+def test_mismatched_return_shapes_reach_the_checker(xr):
+    @block(labels=True)
+    def two(x: Sig[float, tuple[M, N]]) -> Sig[float, tuple[M, N]]:
+        return x * 2, x * 3
+
+    @block(labels=True)
+    def one(x: Sig[float, tuple[M, N]]) -> tuple[Sig[float], Sig[float]]:
+        return x * 2
+
+    x = signal(xr)
+    direct = two(x)
+    assert isinstance(direct, tuple) and direct[0].dims == x.dims
+    assert one(x).dims == x.dims
+    with pytest.raises(TypeMismatch, match="two output"):
+        run(from_iterable([x]) >> two, check="all", on_error="raise")
+    with pytest.raises(TypeMismatch, match="one output"):
+        run(from_iterable([x]) >> one, check="all", on_error="raise")
+
+
+@block
+def follows_the_run(x: Sig[float, tuple[N]]) -> Sig[float, tuple[N]]:
+    """No ``labels`` option: label-aware only when the run (or the default) says so."""
+    return x * 2
+
+
+def test_labels_are_a_run_option(xr, default_off):
+    x = signal(xr).isel(channel=0)
+    plain = run(from_iterable([x]) >> follows_the_run)[0].data
+    assert isinstance(plain, xr.DataArray)  # untouched: xarray did the arithmetic
+    labelled = run(from_iterable([x]) >> follows_the_run, labels=True)[0].data
+    assert labelled.dims == ("time",) and labelled.time.equals(x.time)
+    assert isinstance(
+        run(from_iterable([x]) >> follows_the_run, labels=False)[0].data, xr.DataArray
+    )
+    # the package default is read when the run starts, not while it runs
+    default_labels(True)
+    opts = RunOptions()
+    default_labels(False)
+    assert opts.labels is True and RunOptions().labels is False
+    assert RunOptions(labels=True).labels is True
+    assert follows_the_run.resolve_call(True) is follows_the_run.adapted
+    assert follows_the_run.resolve_call(False) is follows_the_run.fn
+    assert center.resolve_call(False) is center.adapted  # its own option wins
+
+
+def test_process_workers_get_the_resolved_flag(xr, default_off):
+    x = signal(xr).isel(channel=0)
+    # what a process-pool worker does: unpickle the definition, apply the run's flag
+    defn = pickle.loads(pickle.dumps(follows_the_run))
+    assert isinstance(_call_block(defn, x, {}, True), xr.DataArray)
+    assert _call_block(defn, x, {}, True).dims == ("time",)
+    assert isinstance(_call_block(defn, x.values, {}, True), np.ndarray)
+    out = run(
+        from_iterable([x, x])
+        >> parallel(follows_the_run, workers=2, backend="process"),
+        labels=True,
+    )
+    assert [f.data.dims for f in out] == [("time",), ("time",)]
+
+
+def test_pandas_payloads_index_by_position():
+    pd = pytest.importorskip("pandas")
+    f = Frame(pd.Series([1.0, 2.0, 3.0], index=["a", "b", "c"]), stream={"rate": 1})
+    assert f.slice(0).data == 1.0
+    assert isinstance(f[0:2].data, np.ndarray) and list(f[0:2].data) == [1.0, 2.0]

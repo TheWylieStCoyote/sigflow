@@ -1,9 +1,8 @@
 """Labelled payloads: ``xarray.DataArray`` frames flow through blocks by contract.
 
 A block body is an ordinary array function. When a block is *label-aware*
-(``@block(labels=True)``, or :func:`default_labels` switched on for every block)
 and an input arrives as a ``DataArray``, the wrapper installed by
-:class:`~sigflow.block.BlockDef`:
+:class:`~sigflow.block.BlockDef` (``defn.adapted``):
 
 1. lines the array up with the input contract: when every dimension of
    ``Sig[float, tuple[CHANNEL, TIME]]`` names a dimension of the array, it is
@@ -30,31 +29,46 @@ that wants the labels reads them from ``frame.data``.
 Calls without any ``DataArray`` take a fast path straight to the body, and
 nothing here imports xarray: a ``DataArray`` can only exist once xarray has
 been imported by the caller.
+
+Whether a block is label-aware is its ``labels`` option (``@block(labels=True)``
+or ``labels=False``). A block that leaves it unset follows the run:
+``run(graph, labels=True)``, or, when the run does not say, the package default
+set with :func:`default_labels`. A run reads the default once when it starts
+(``RunOptions``), so changing it while a run is in progress, from another
+thread or in a process-pool worker, does not change which body a block
+executes: the resolved flag travels with the run. A block called directly
+(``defn(x)``) reads the default at call time.
 """
 
 from __future__ import annotations
 
 import functools
 import inspect
-import sys
 from typing import Any, Callable, Iterable
 
+from ._arrays import xarray_module
 from .types import SignalType, TupleType
 
-__all__ = ["default_labels", "adapt"]
+__all__ = ["default_labels", "current_default", "adapt"]
 
 _DEFAULT = False
 
 
 def default_labels(enabled: bool = True) -> bool:
-    """Make every block whose ``labels`` option is unset label-aware (or not).
+    """Make every block whose ``labels`` option is unset label-aware (or not) in
+    runs that do not pass ``labels=`` themselves and in direct calls.
 
     Returns the previous setting. Blocks declared with ``labels=True`` or
-    ``labels=False`` are unaffected.
+    ``labels=False`` are unaffected. A run captures the setting when it starts.
     """
     global _DEFAULT
     previous, _DEFAULT = _DEFAULT, bool(enabled)
     return previous
+
+
+def current_default() -> bool:
+    """The package default for blocks whose ``labels`` option is unset."""
+    return _DEFAULT
 
 
 class _Labels:
@@ -139,7 +153,8 @@ def _rewrap(value: Any, t: Any, labels: _Labels, xr: Any) -> Any:
         attrs=dict(ref.attrs),
         name=ref.name,
     )
-    if dims != tuple(t.shape or ()):
+    shape = t.shape if isinstance(t, SignalType) else None
+    if dims != tuple(shape or ()):
         return out  # positional contract: keep the contract's axis order
     # a fully named contract is checked by name in any layout, so go back to the
     # caller's: dimensions the first input had keep their order, new ones follow
@@ -195,18 +210,30 @@ def _has_labelled(values: Iterable[Any], xr: Any) -> bool:
 
 
 def _stream(items: Any, t: Any, labels: _Labels, xr: Any) -> Any:
-    """Unwrap the items of a stream input lazily; the labels follow the latest item."""
+    """Unwrap the items of a stream input lazily. The labels follow the latest item:
+    each item replaces the references the previous one left (the other, non-stream
+    inputs were unwrapped before the body started and stay), so a long stream
+    does not pin every array it has seen."""
+    base: int | None = None
+
+    def take(item: Any) -> Any:
+        nonlocal base
+        if base is None:
+            base = len(labels.refs)
+        del labels.refs[base:]
+        return _unwrap(item, t, labels, xr)
+
     if hasattr(items, "__aiter__"):
 
         async def agen() -> Any:
             async for item in items:
-                yield _unwrap(item, t, labels, xr)
+                yield take(item)
 
         return agen()
 
     def gen() -> Any:
         for item in items:
-            yield _unwrap(item, t, labels, xr)
+            yield take(item)
 
     return gen()
 
@@ -214,7 +241,8 @@ def _stream(items: Any, t: Any, labels: _Labels, xr: Any) -> Any:
 def adapt(defn: Any) -> Callable[..., Any]:
     """Return ``defn.fn`` wrapped so labelled inputs are unwrapped and outputs
     rewrapped according to the block's contract (see the module docstring).
-    Installed as ``defn.call``; ``defn.fn`` stays the raw body."""
+    Installed as ``defn.adapted``; ``defn.fn`` stays the raw body, and
+    ``defn.resolve_call(default)`` picks one of the two for a block."""
     fn: Callable[..., Any] = defn.fn
     inputs = list(defn.inputs)
     if not inputs:
@@ -225,10 +253,6 @@ def adapt(defn: Any) -> Callable[..., Any]:
         signature = None
     by_name = {spec.name: spec for spec in inputs}
     has_stream = any(spec.stream for spec in inputs)
-
-    def enabled() -> bool:
-        flag = defn.labels
-        return _DEFAULT if flag is None else bool(flag)
 
     def prepare(
         args: tuple, kwargs: dict, labels: _Labels, xr: Any
@@ -260,9 +284,7 @@ def adapt(defn: Any) -> Callable[..., Any]:
 
     def wanted(args: tuple, kwargs: dict) -> Any:
         """The xarray module when this call should be adapted, else None."""
-        if not enabled():
-            return None
-        xr = sys.modules.get("xarray")
+        xr = xarray_module()
         if xr is None:
             return None
         if has_stream or _has_labelled(args, xr) or _has_labelled(kwargs.values(), xr):

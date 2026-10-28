@@ -37,6 +37,7 @@ import inspect
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, TYPE_CHECKING, get_args, get_origin
 
+from ._arrays import is_array
 from .frame import Frame
 from .types import SignalType, StreamType, TupleType, as_type, is_signal_type
 
@@ -176,9 +177,11 @@ class BlockDef:
         threaded: bool = False,
         ratio: Any = None,
         labels: bool | None = None,
+        preserve_type: bool = False,
     ) -> None:
         self.fn = fn
-        self.labels = labels  # None: follow sigflow.xarray.default_labels()
+        self.labels = labels  # None: follow the run (or sigflow.default_labels())
+        self.preserve_type = preserve_type
         self.refine = refine
         self.total = total
         self.ratio_spec = ratio  # see sigflow.ratio: "1:1", "N:1", (4, 1), callable
@@ -216,6 +219,8 @@ class BlockDef:
             else:
                 kind = "map"
         self.kind = kind
+        if preserve_type and (kind != "map" or len(self.inputs) != 1):
+            raise TypeError("preserve_type requires a single-input map block")
         if ratio is None and kind != "stream":
             self.ratio_spec = (
                 "1:1"  # map blocks, taps and sources are one frame per frame
@@ -240,15 +245,29 @@ class BlockDef:
         # by default sample-level annotations survive a map block only if the
         # declared output shape has the same leading dimension as the input
         if keep_samples is None:
-            keep_samples = _same_leading(self.in_type, self.out_type)
+            keep_samples = preserve_type or _same_leading(self.in_type, self.out_type)
         self.keep_samples = keep_samples
 
-        # ``call`` is what the runtime invokes: ``fn`` behind a thin wrapper that
-        # unwraps labelled (xarray) payloads for the body and rewraps outputs from
-        # the contract; plain arrays take its fast path. ``fn`` stays the raw body.
+        # ``adapted`` is ``fn`` behind a thin wrapper that unwraps labelled (xarray)
+        # payloads for the body and rewraps outputs from the contract; plain arrays
+        # take its fast path. ``fn`` stays the raw body; ``resolve_call`` picks.
         from .xarray import adapt
 
-        self.call = adapt(self)
+        self.adapted = adapt(self)
+
+    def resolve_call(self, default_labels: bool) -> Callable[..., Any]:
+        """The callable a run invokes for this block: the labelled-payload wrapper
+        when the block is label-aware (its ``labels`` option, or ``default_labels``
+        when that is unset), else the raw body."""
+        flag = default_labels if self.labels is None else self.labels
+        return self.adapted if flag else self.fn
+
+    def call(self, *args: Any, **kwargs: Any) -> Any:
+        """Call the body as a run would, following ``sigflow.default_labels()`` when
+        the block's ``labels`` option is unset."""
+        from .xarray import current_default
+
+        return self.resolve_call(current_default())(*args, **kwargs)
 
     # -- stream-rate contract --------------------------------------------- #
     def ratio_for(self, in_type: Any = None) -> Any:
@@ -409,6 +428,7 @@ class BlockDef:
             keep_samples=self.keep_samples,
             tap=self.tap,
             labels=self.labels,
+            preserve_type=self.preserve_type,
             doc=self.__doc__,
             refine=self.refine,
             total=self.total,
@@ -511,6 +531,7 @@ def _looks_like_data(x: Any) -> bool:
         return False
     return (
         isinstance(x, (_np.ndarray, _np.generic, Frame, list, tuple, dict))
+        or is_array(x)
         or hasattr(x, "__array__")
         or hasattr(x, "__iter__")
         or hasattr(x, "__next__")
@@ -568,8 +589,15 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       input contract, the body gets the bare array, and outputs
                       are rebuilt as labelled arrays from the output contract
                       (see :mod:`sigflow.xarray`). ``False``: payloads pass
-                      through untouched. Unset: follow
-                      ``sigflow.xarray.default_labels()``
+                      through untouched. Unset: follow ``run(..., labels=)``
+                      or, when the run does not say, ``sigflow.default_labels()``
+        preserve_type: a single-input map block that returns what it was given,
+                      as far as the contract is concerned (a CPU/GPU transfer):
+                      placed after a producer, its input and output contract
+                      become the producer's, so shape, rate, units and required
+                      keys are still checked downstream and reframing ratios
+                      still resolve. Sample annotations are kept. The promise is
+                      checked at runtime like any other output contract
     """
     if fn is None:
         return lambda f: BlockDef(f, **options)
