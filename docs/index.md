@@ -571,6 +571,12 @@ output type with dimensions resolved, and carry the full signature as a hover
 tooltip. `g.to_dot()` gives Graphviz source for `dot` or the `graphviz`
 package. `g` on its own still renders the typed node table.
 
+`run.probe("fft")` watches one block of a background run without editing the
+graph: the newest frame it put out (`probe.latest`), the recent ones, a
+callback per frame, a plot block fed as if it sat after the block, and
+`probe.wait(n)` to block until more frames arrive. Names are those of
+`run.monitor.table()`, so a second `fft` is `"fft#2"`.
+
 The same picture can show a run. `run.diagram()` on a background run
 (`g.start()`) displays it live: every block carries the frames it took in and
 put out, errors in red, and a border colour for its state (grey before its

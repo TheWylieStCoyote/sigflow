@@ -416,6 +416,8 @@ class Runner:
                         prov=prov,
                     )
                     value, failed = MISSING, True
+                    if st.watchers:  # a probe sees the failure as the next block would
+                        st.notify(frame)
                     seqs[i] += 1
                     st.out += 1
                     continue
@@ -437,6 +439,12 @@ class Runner:
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
                 frame = _drop_cleared(frame, node.out_type)
+                if st.watchers:  # a probe: materialise what this block put out
+                    st.notify(
+                        frame
+                        if frame.data is value and frame.prov is prov
+                        else frame.evolve(data=value, prov=prov)
+                    )
                 if (
                     check_all or (check_first and st.out == 0)
                 ) and value is not MISSING:
@@ -1044,11 +1052,14 @@ class Runner:
             if self._policy(node) == "raise":
                 raise
             stats.errors += 1
-            yield Frame(
+            failed = Frame(
                 MISSING,
                 issues=(Issue(str(e), "error", node.name, e),),
                 prov=Provenance(node.name, node.config),
             )
+            if stats.watchers:
+                stats.notify(failed)
+            yield failed
             return
         if inspect.isawaitable(produced):
             produced = await produced
@@ -1148,7 +1159,10 @@ class Runner:
                     node.name, node.config, (f.prov,) if f.prov else (), seq
                 )
                 issue = Issue(f"{type(e).__name__}: {e}", "error", node.name, e, prov)
-                yield f.evolve(data=MISSING, issues=f.issues + (issue,), prov=prov)
+                failed = f.evolve(data=MISSING, issues=f.issues + (issue,), prov=prov)
+                if stats.watchers:
+                    stats.notify(failed)
+                yield failed
                 seq += 1
                 stats.out += 1
                 continue
@@ -1369,7 +1383,7 @@ class Runner:
                         )
                     break
                 merged = merge_annotations(items, keep_samples=False)
-                yield Frame(
+                joined = Frame(
                     tuple(f.data for f in items),
                     merged["meta"],
                     merged["stream"],
@@ -1379,6 +1393,9 @@ class Runner:
                     parts=tuple(items),
                     tags=merged["tags"],
                 )
+                if stats.watchers:
+                    stats.notify(joined)
+                yield joined
                 stats.out += 1
                 seq += 1
         finally:
@@ -1654,6 +1671,8 @@ class Runner:
                 _check_tags(out_type, out, where=f"{op} output")
             except TypeMismatch as e:
                 raise TypeMismatch(f"runtime check failed: {e}") from None
+        if stats.watchers:
+            stats.notify(out)
         return out
 
 

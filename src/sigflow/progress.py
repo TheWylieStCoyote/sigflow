@@ -18,6 +18,16 @@ class Stats:
     errors: int = 0
     time: float = 0.0  # seconds spent inside the block function
     total: int | None = None  # expected number of items (sources only, when known)
+    watchers: list[Any] = field(default_factory=list)  # called with every output frame
+
+    def notify(self, frame: Any) -> None:
+        """Hand an output frame to the watchers (probes); a watcher that raises is
+        dropped, never the run."""
+        for fn in list(self.watchers):
+            try:
+                fn(frame)
+            except Exception:
+                self.watchers.remove(fn)
 
 
 @dataclass
@@ -31,6 +41,8 @@ class Monitor:
     finished: float | None = None
     _stats: dict[str, Stats] = field(default_factory=dict)
     _by_key: dict[Any, Stats] = field(default_factory=dict)
+    _pending: dict[str, list[Any]] = field(default_factory=dict)  # watchers by name
+    _pending_nodes: dict[Any, list[Any]] = field(default_factory=dict)  # by identity
 
     def stats(self, name: str, node: Any = None) -> Stats:
         """Stats for a node; nodes sharing a name get distinct rows (``fft``, ``fft#2``)."""
@@ -48,7 +60,39 @@ class Monitor:
                 shown = f"{name}#{n}"
                 n += 1
             s = self._by_key[key] = self._stats[shown] = Stats(shown)
+            s.watchers.extend(self._pending.pop(shown, ()))
+            s.watchers.extend(self._pending_nodes.pop(key[1], ()))
         return s
+
+    def watch_node(self, node: Any, fn: Any) -> None:
+        """Like :meth:`watch`, for a node object: exact whatever name it is shown
+        under, and before the run reaches it."""
+        st = self.lookup(node)
+        if st is not None:
+            st.watchers.append(fn)
+        else:
+            ident = getattr(node, "id", id(node))
+            self._pending_nodes.setdefault(ident, []).append(fn)
+
+    def watch(self, name: str, fn: Any) -> None:
+        """Call ``fn(frame)`` with every output frame of the node shown as ``name``
+        (``fft``, ``fft#2``: the names of :meth:`table`); before the run reaches the
+        node the watcher waits for it. What ``run.probe()`` is built on."""
+        s = self._stats.get(name)
+        if s is not None:
+            s.watchers.append(fn)
+        else:
+            self._pending.setdefault(name, []).append(fn)
+
+    def unwatch(self, name: str, fn: Any) -> None:
+        s = self._stats.get(name)
+        if s is not None and fn in s.watchers:
+            s.watchers.remove(fn)
+        if fn in self._pending.get(name, ()):
+            self._pending[name].remove(fn)
+        for fns in self._pending_nodes.values():
+            if fn in fns:
+                fns.remove(fn)
 
     @property
     def blocks(self) -> list[Stats]:

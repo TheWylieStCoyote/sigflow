@@ -87,6 +87,11 @@ every block, errors in red and the state as the border colour, refreshed while t
 `run.controls(diagram=True)` puts the same picture inside the panel.""")
 code("""run2.resume()
 run2.diagram()""")
+md("""A **probe** watches one block without editing the graph: the frames it puts out, as the next
+block receives them. Feed a plot block from it, or just look at the latest frame.""")
+code("""probe = run2.probe("drifting_tone")
+probe.wait(3)
+probe.latest""")
 
 md("""## 3. Knobs: sliders, dropdowns, toggles — and plot options — on a running graph
 

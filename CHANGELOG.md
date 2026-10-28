@@ -66,6 +66,10 @@ New
   the members as parts, annotations and tags merged as at a join, a warning
   on a group released before it was complete. The mirror of a detector plus
   `per_key`; the example gathers every track's result per spectrum frame.
+- Probes: `run.probe("fft")` watches one block of a background run without
+  editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
+  `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which
+  also works with a blocking `run(g, monitor=mon)`.
 - Live diagram: `run.diagram()` displays the graph's diagram refreshed while a
   background run goes, with frames in and out on every block, errors in red, a
   state colour on the border and frame counts on the edges;

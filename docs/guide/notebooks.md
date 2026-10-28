@@ -14,6 +14,14 @@ status line. It needs no ipywidgets. `run.controls(diagram=True)` adds the same
 picture to the panel, and `g.draw(stats=run.monitor)` is a still of it after a
 run.
 
+`run.probe("fft")` watches one block without editing the graph: `probe.latest`
+is the newest frame the block put out, `probe.history` the recent ones,
+`probe.on(fn)` runs a callback per frame, `probe.plot(plot.spectrum())` feeds
+a plot block as if it sat after the block, `probe.wait(n)` blocks until more
+frames arrive and `probe.show()` keeps the latest frame displayed. A second
+block of the same name is `"fft#2"`, a fan-out or zip is `"fanout"` / `"zip"`,
+as in `run.monitor.table()`; a node object works too.
+
 The panel needs **ipywidgets in the kernel** (`python -m pip install
 ipywidgets`, then restart the kernel); `require_widgets()` tells you whether it
 will work. Live figures inside the panel are refreshed images; with the

@@ -14,7 +14,7 @@ from . import io
 from .block import BlockDef, Framed, block, lift, source, tap
 from .builder import Graph
 from .collect import gather
-from .control import Knob, Run
+from .control import Knob, Probe, Run
 from .device import to_device, to_host
 from .dims import (
     A,
@@ -158,6 +158,7 @@ __all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "Monitor",
     "Run",
     "Knob",
+    "Probe",
     "dashboard",
     "require_widgets",
     "io",

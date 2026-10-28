@@ -6,6 +6,7 @@
     run.frames                          # outputs so far
     run.wait()                          # block until finished, returns all frames
     run.state                           # "running" | "paused" | "stopped" | "done" | "failed"
+    run.probe("fft")                    # watch one block's output without editing the graph
 
 Pausing gates the *sources*: in-flight frames drain through the graph and then
 everything idles until resumed. ``step()`` lets exactly one source frame
@@ -22,7 +23,7 @@ from typing import Any
 
 from .frame import Frame
 
-__all__ = ["Control", "Knob", "Run", "live"]
+__all__ = ["Control", "Knob", "Probe", "Run", "live"]
 
 
 class Knob:
@@ -202,6 +203,153 @@ class Control:
             self._apply(self._gate.set)  # wake anything waiting so it can cancel
 
 
+class Probe:
+    """A window on one block of a running graph (``run.probe("fft")``): every frame the
+    block puts out, as the next block would receive it, without editing the graph.
+
+    ``latest`` is the newest frame, ``history`` the last ``keep``, ``count`` how many
+    were seen (``failed`` of them failed). ``on(fn)`` calls ``fn(frame)`` for each,
+    ``plot(block)`` feeds a plot block as if it were placed after the probed block,
+    ``wait(n)`` blocks until ``n`` more frames arrive, ``show()`` displays the latest
+    frame in a notebook and keeps it fresh, ``close()`` detaches. Callbacks run on
+    the run's thread and must be quick; one that raises is recorded in ``errors``
+    and dropped, never the run.
+    """
+
+    def __init__(
+        self,
+        run: Run,
+        name: str,
+        keep: int = 16,
+        plot: Any = None,
+        node: Any = None,
+    ) -> None:
+        from collections import deque
+
+        self.run = run
+        self.name = name
+        self.node = node  # when probing by node: exact, whatever name it is shown under
+        self.history: deque[Frame] = deque(maxlen=max(1, keep))
+        self.count = 0
+        self.failed = 0
+        self.errors: list[BaseException] = []
+        self.plots: list[Any] = []
+        self._callbacks: list[Callable[[Frame], Any]] = []
+        self._cv = threading.Condition()
+        self._handle: Any = None
+        self._closed = False
+        if plot is not None:
+            self.plot(plot)
+        if node is not None:
+            run.monitor.watch_node(node, self._see)
+        else:
+            run.monitor.watch(name, self._see)
+
+    # -- what arrives --------------------------------------------------------- #
+    def _see(self, frame: Frame) -> None:
+        with self._cv:
+            self.history.append(frame)
+            self.count += 1
+            if frame.failed:
+                self.failed += 1
+            self._cv.notify_all()
+        for fn in list(self._callbacks):
+            try:
+                fn(frame)
+            except Exception as e:
+                self.errors.append(e)
+                self._callbacks.remove(fn)
+        for p in self.plots:
+            try:
+                p._on_frame(frame)
+            except Exception as e:
+                self.errors.append(e)
+
+    @property
+    def latest(self) -> Frame | None:
+        return self.history[-1] if self.history else None
+
+    @property
+    def data(self) -> Any:
+        f = self.latest
+        return None if f is None else f.data
+
+    def on(self, fn: Callable[[Frame], Any]) -> Probe:
+        self._callbacks.append(fn)
+        return self
+
+    def plot(self, block: Any) -> Probe:
+        """Feed a plot block (``plot.line()``, ``plot.spectrum()``, ...) with every frame;
+        show it with ``run.controls(plots=[block])`` or ``block.figure``."""
+        if not hasattr(block, "_on_frame"):
+            raise TypeError("probe.plot() takes a plot block (sigflow.plot.*)")
+        self.plots.append(block)
+        return self
+
+    def wait(self, n: int = 1, timeout: float | None = None) -> Frame | None:
+        """Block until ``n`` more frames have arrived (or the run finishes, or
+        ``timeout`` seconds pass); returns the latest frame."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        with self._cv:
+            target = self.count + n
+            while self.count < target and not self.run.finished and not self._closed:
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    break
+                self._cv.wait(0.05 if remaining is None else min(0.05, remaining))
+            return self.latest
+
+    def close(self) -> None:
+        self._closed = True
+        self.run.monitor.unwatch(self.name, self._see)
+        with self._cv:
+            self._cv.notify_all()
+
+    # -- notebook --------------------------------------------------------------- #
+    def html(self) -> str:
+        from .notebook import frame_html
+
+        f = self.latest
+        head = (
+            f"<div style='font-family:monospace'><b>probe {self.name}</b> · "
+            f"{self.count} frames"
+            + (f" · {self.failed} failed" if self.failed else "")
+            + "</div>"
+        )
+        return head + (frame_html(f) if f is not None else "<i>no frames yet</i>")
+
+    def _repr_html_(self) -> str:
+        return self.html()
+
+    def show(self, refresh: float = 0.5) -> None:
+        """Display the latest frame and keep it fresh until the run finishes or
+        ``close()``."""
+        from IPython.display import HTML, display
+
+        self._handle = display(HTML(self.html()), display_id=True)
+
+        def ticker() -> None:
+            while not self.run.finished and not self._closed:
+                self._update()
+                time.sleep(refresh)
+            self._update()
+
+        threading.Thread(target=ticker, name="sigflow-probe", daemon=True).start()
+
+    def _update(self) -> None:
+        if self._handle is None:
+            return
+        from IPython.display import HTML
+
+        try:
+            self._handle.update(HTML(self.html()))
+        except Exception:
+            pass
+
+    def __repr__(self) -> str:
+        return f"<Probe {self.name!r}: {self.count} frames, latest={self.latest!r}>"
+
+
 class Run:
     """Handle on a graph running in a background thread with its own event loop."""
 
@@ -221,6 +369,7 @@ class Run:
             Frame
         ] = []  # frames kept with the Snapshot button / .snapshot()
         self.exception: BaseException | None = None
+        self.probes: list[Probe] = []
         self._options = options
         self._done = threading.Event()
         self._cancelled = False
@@ -355,6 +504,28 @@ class Run:
 
     def __repr__(self) -> str:
         return f"<Run {self.graph.name!r} {self.state}: {len(self.frames)} frames>"
+
+    # -- probes -------------------------------------------------------------- #
+    def probe(self, target: Any, keep: int = 16, plot: Any = None) -> Probe:
+        """Watch one block's output while the graph runs, without editing the graph:
+        ``target`` is a block's displayed name (``"fft"``, ``"fft#2"`` for a second
+        block of the same name, ``"fanout"`` / ``"zip"`` for a join; the names of
+        ``run.monitor.table()``) or a node of ``run.graph``. Returns a :class:`Probe`;
+        ``keep`` is how many recent frames it holds, ``plot`` a plot block to feed."""
+        if isinstance(target, str):
+            name = target
+            base = name.split("#", 1)[0]
+            known = {n.name for n in self.graph.nodes()} | {"fanout", "zip"}
+            if base not in known:
+                raise KeyError(
+                    f"no block called {base!r} in {self.graph.name!r}; "
+                    f"blocks: {sorted(n for n in known if n not in ('fanout', 'zip'))}"
+                )
+            probe = Probe(self, name, keep=keep, plot=plot)
+        else:
+            probe = Probe(self, target.name, keep=keep, plot=plot, node=target)
+        self.probes.append(probe)
+        return probe
 
     # -- notebook UI ------------------------------------------------------- #
     def diagram(self, refresh: float = 0.5, types: bool = True) -> Any:
