@@ -30,12 +30,20 @@ New
   `sigflow.default_labels(True)` sets the package default a run reads once
   when it starts (so the choice is per run and reaches process-pool workers);
   `labels=False` opts out. `Framed` inputs and `DataArray` results pass
-  through untouched. A stream block keeps only the item it is processing.
+  through untouched. A stream block keeps only the item it is processing,
+  and that item's own labels: dimension names, coordinates, name and
+  attributes follow the latest labelled item, a plain-array item gets none,
+  and the block's static inputs keep theirs.
 - `@block(preserve_type=True)`: a single-input map block that carries its
   producer's complete contract (`types.narrow`) as the graph has pinned it
   down so far (`types.resolve`), so shape, rate and unit checks and reframing
   ratios see through it, in pipelines, reused subgraphs and `Graph` wiring in
-  any order. A `Graph.connect` that fails is rolled back.
+  any order. The carried contract is merged axis by axis: a declared `(4,)`
+  survives a producer that only says `(None,)`, repeated variables keep their
+  equality across tuple elements, and required keys from both sides are kept.
+- `Graph.connect` is transactional: any failure (type or rate mismatch, cycle,
+  bad port name or index) restores the members, edges, bindings and naming
+  counter, including nodes the failed call added implicitly.
 - CPU / CUDA transfers (`sigflow.to_device`, `sigflow.to_host`; CuPy is
   optional): explicit moves of a frame's payload that keep dtype, shape,
   annotations and, for a `DataArray`, its labels, and carry the producer's
@@ -53,16 +61,9 @@ New
 
 Changed
 
-- Pass-through contract narrowing fills partially known axes from declarations
-  and retains repeated-variable constraints across tuple elements. Known rates
-  and units are checked even when shape is unknown.
-- Builder connections roll back all validation exceptions, including invalid
-  port selections and failures after implicitly adding nodes.
-- Label-aware streams refresh dimension mappings as well as references for each
-  item, preserving changing coordinates and names without retaining stale labels.
-  Real CUDA-array-interface tests cover foreign views, copies, allocation
-  lifetime and non-default producer streams.
-
+- Declared rates and units are checked when a graph is built even when the
+  produced shape is unknown; before, an unknown shape skipped those checks
+  until run time.
 - `Frame.prov` and `Issue.prov` are `Provenance`, never `None` (passing `None`
   still works and stores `NO_PROV`); test with `if f.prov:` rather than
   `is None`.

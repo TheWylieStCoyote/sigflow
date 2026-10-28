@@ -539,8 +539,7 @@ def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
         env.union_dtype(produced.name, required.name, where)
         return
     if isinstance(required, DVar):
-        if produced is not Any:
-            env.bind_dtype(required.name, produced, where)
+        env.bind_dtype(required.name, produced, where)
         return
     if isinstance(produced, DVar):
         v = env.value(produced.name)
