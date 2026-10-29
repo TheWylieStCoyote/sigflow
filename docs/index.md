@@ -4,6 +4,9 @@ A small Python framework for building signal-processing applications out of
 typed, pure functions, composed into graphs with operators and executed lazily
 with generators. It depends only on NumPy, SciPy and matplotlib.
 
+**Documentation:** <https://thewyliestcoyote.github.io/sigflow/> — concepts,
+guides, one page per example, and the changelog.
+
 ```python
 import numpy as np
 from sigflow import block, Sig, Stream, run
