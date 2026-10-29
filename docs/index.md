@@ -732,3 +732,7 @@ sample offset), back-pressure policies and a sound-card / SDR source, identity-t
 taps so `Any` stops leaking through fan-outs, a richer set of scipy.signal
 wrappers, a `parallel()` that spans several machines over the ZeroMQ transport,
 and persisting `Lineage` indexes beside recordings.
+
+## License
+
+MIT, see `LICENSE`.
