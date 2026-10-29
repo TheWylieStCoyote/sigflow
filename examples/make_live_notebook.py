@@ -196,6 +196,19 @@ frames = holder["run"].wait(timeout=30)
 print(holder["run"].state, "after", holder["run"].monitor.stats("random_walk").out, "steps; last values",
       [round(f.data, 1) for f in frames])""")
 
+md("""A **breakpoint** holds the graph on a frame at the block that produced it, before the next block
+sees it. Set one on the walk, let it run into it, look at the held frame, then step frame by frame
+or let it go. `run.break_on_error()` does the same for any failure.""")
+code("""run8 = (random_walk() >> (lambda x: x)).start(keep=5, paused=True)
+run8.break_when("random_walk", lambda f: abs(f.data) > 5)
+run8.controls()
+run8.resume()""")
+code("""run8.wait_break(10)
+print(run8.status())
+run8.held               # the frame the graph is holding; Step in the panel holds the next one""")
+code("""run8.step(); run8.wait_break(5); print(run8.status())
+run8.stop()""")
+
 md("""## 8. Tidy up and look back
 
 A stopped run keeps its frames, snapshots, recording, monitor and lineage.""")

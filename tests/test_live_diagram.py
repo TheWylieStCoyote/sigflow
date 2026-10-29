@@ -72,6 +72,10 @@ def test_live_diagram_tracks_a_run_outside_a_notebook():
     handle = g.start(paused=True)
     live = handle.diagram()  # no notebook: the object comes back, nothing is displayed
     assert isinstance(live, LiveDiagram) and handle.live_diagram is live
+    for _ in range(100):  # the run registers its nodes as its tasks start
+        if len(live.diagram.counts(handle.monitor)) == len(live.diagram.cell.boxes):
+            break
+        time.sleep(0.02)
     first = live.svg
     assert "paused · 0 produced" in first and "#d97706' stroke-width='2.2'" in first
     handle.step(3)

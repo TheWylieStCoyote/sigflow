@@ -7,6 +7,7 @@
     run.wait()                          # block until finished, returns all frames
     run.state                           # "running" | "paused" | "stopped" | "done" | "failed"
     run.probe("fft")                    # watch one block's output without editing the graph
+    run.break_when("fft", pred)         # hold the graph on a frame fft puts out; run.held
 
 Pausing gates the *sources*: in-flight frames drain through the graph and then
 everything idles until resumed. ``step()`` lets exactly one source frame
@@ -23,7 +24,7 @@ from typing import Any
 
 from .frame import Frame
 
-__all__ = ["Control", "Knob", "Probe", "Run", "live"]
+__all__ = ["Breakpoint", "Control", "Knob", "Probe", "Run", "live"]
 
 
 class Knob:
@@ -132,11 +133,22 @@ class Control:
         )
         self._last_release = 0.0
         self._lock = threading.Lock()
+        # breakpoints: the frame the graph is holding, where, and why
+        self.held: Frame | None = None
+        self.held_at: str | None = None
+        self.held_by: Any = None
+        self.held_event = threading.Event()  # set while a frame is held
+        self.break_on_error = False  # hold any failed frame, at any node
+        self.step_at: str | None = None  # hold the next frame this node puts out
+        self.on_hold: Callable[[], None] | None = None  # UI refresh
+        self._release: asyncio.Event | None = None
+        self._verdict: tuple[str, Any] = ("go", None)
 
     # -- runtime side ------------------------------------------------------ #
     def attach(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
         self._gate = asyncio.Event()
+        self._release = asyncio.Event()
         if (
             not self._paused or self._steps > 0
         ):  # step() may have been called before attach
@@ -163,6 +175,54 @@ class Control:
                 self._steps -= 1
                 if self._steps == 0 and self._paused:
                     self._gate.clear()
+
+    async def hold(self, name: str, frame: Frame, by: Any) -> Frame | None:
+        """Called by the runtime when a breakpoint matched: keep ``frame`` here, at
+        node ``name``, until :meth:`release`. Returns the frame to pass on (the same,
+        a replacement, or None to drop it)."""
+        if self._release is None:
+            self._release = asyncio.Event()
+        with self._lock:
+            self.held, self.held_at, self.held_by = frame, name, by
+            self.step_at = None
+            self._verdict = ("go", None)
+        self._release.clear()
+        self.held_event.set()
+        if self.on_hold is not None:
+            try:
+                self.on_hold()
+            except Exception:
+                pass
+        try:
+            await self._release.wait()
+        finally:
+            verdict, payload = self._verdict
+            with self._lock:  # already cleared by release(); here for cancellation
+                self.held = self.held_at = self.held_by = None
+            self.held_event.clear()
+        if self.stop_requested:
+            raise asyncio.CancelledError
+        if verdict == "drop":
+            return None
+        return payload if verdict == "replace" else frame
+
+    def release(
+        self, verdict: str = "go", payload: Any = None, step: bool = False
+    ) -> bool:
+        """Let a held frame go: ``verdict`` is ``"go"``, ``"replace"`` (with ``payload``)
+        or ``"drop"``; ``step`` holds the next frame of the same node. False if
+        nothing was held. The held state clears here, on the caller's thread, so a
+        ``wait_break()`` right after sees the next hold, not this one."""
+        with self._lock:
+            if self.held is None:
+                return False
+            self._verdict = (verdict, payload)
+            self.step_at = self.held_at if step else None
+            self.held = self.held_at = self.held_by = None
+            self.held_event.clear()
+        if self._release is not None:
+            self._apply(self._release.set)
+        return True
 
     # -- user side --------------------------------------------------------- #
     @property
@@ -201,6 +261,98 @@ class Control:
         self.stop_requested = True
         if self._gate is not None:
             self._apply(self._gate.set)  # wake anything waiting so it can cancel
+        if self._release is not None:
+            self._apply(self._release.set)  # a held frame too
+
+
+class Breakpoint:
+    """A condition on the frames one block puts out (``run.break_when(...)``). When
+    it matches, the graph holds that frame at the block, before the next block
+    receives it, until the run is resumed, stepped, or the frame is replaced or
+    dropped. ``hits`` are the frames that matched; ``disable()`` keeps it around but
+    inert, ``remove()`` takes it off the node."""
+
+    def __init__(
+        self,
+        run: Run,
+        name: str,
+        pred: Callable[[Frame], Any] | None = None,
+        *,
+        tag: str | None = None,
+        seq: int | None = None,
+        every: int | None = None,
+        once: bool = False,
+        node: Any = None,
+    ) -> None:
+        self.run, self.name, self.node = run, name, node
+        self.pred, self.tag, self.seq, self.every, self.once = (
+            pred,
+            tag,
+            seq,
+            every,
+            once,
+        )
+        self.enabled = True
+        self.hits: list[Frame] = []
+        self.count = 0
+        self.errors: list[BaseException] = []
+        self._seen = 0
+        run.monitor.hold_at(name, self, node=node)
+
+    def matches(self, frame: Frame) -> bool:
+        """Called by the runtime on the run's thread with every frame of the node."""
+        if not self.enabled:
+            return False
+        if self.seq is not None and frame.prov.seq != self.seq:
+            return False
+        if self.tag is not None and self.tag not in frame.tags:
+            return False
+        if self.pred is not None:
+            try:
+                if not self.pred(frame):
+                    return False
+            except Exception as e:
+                self.errors.append(e)
+                self.enabled = False
+                return False
+        if self.every:
+            self._seen += 1
+            if self._seen % self.every:
+                return False
+        self.hits.append(frame)
+        self.count += 1
+        if self.once:
+            self.enabled = False
+        return True
+
+    def disable(self) -> Breakpoint:
+        self.enabled = False
+        return self
+
+    def enable(self) -> Breakpoint:
+        self.enabled = True
+        return self
+
+    def remove(self) -> None:
+        self.enabled = False
+        self.run.monitor.unhold(self)
+        if self in self.run.breakpoints:
+            self.run.breakpoints.remove(self)
+
+    def __repr__(self) -> str:
+        what = []
+        if self.pred is not None:
+            what.append(getattr(self.pred, "__name__", "pred"))
+        if self.tag is not None:
+            what.append(f"tag={self.tag!r}")
+        if self.seq is not None:
+            what.append(f"seq={self.seq}")
+        if self.every:
+            what.append(f"every={self.every}")
+        state = "" if self.enabled else ", disabled"
+        return (
+            f"<Breakpoint at {self.name!r} {' '.join(what)}: {self.count} hits{state}>"
+        )
 
 
 class Probe:
@@ -370,6 +522,8 @@ class Run:
         ] = []  # frames kept with the Snapshot button / .snapshot()
         self.exception: BaseException | None = None
         self.probes: list[Probe] = []
+        self.breakpoints: list[Breakpoint] = []
+        self.control.on_hold = self._refresh
         self._options = options
         self._done = threading.Event()
         self._cancelled = False
@@ -424,12 +578,17 @@ class Run:
         return self
 
     def resume(self) -> Run:
-        self.control.resume()
+        """Carry on: release a held frame, or un-pause the sources."""
+        if not self.control.release():
+            self.control.resume()
         self._refresh()
         return self
 
     def step(self, n: int = 1) -> Run:
-        self.control.step(n)
+        """On a held frame: let it go and hold the next frame the same block puts
+        out. Otherwise: let ``n`` source frames through, then stay paused."""
+        if not self.control.release(step=True):
+            self.control.step(n)
         self._refresh()
         return self
 
@@ -479,6 +638,8 @@ class Run:
     @property
     def state(self) -> str:
         if not self.finished:
+            if self.control.held is not None:
+                return "break"
             return "paused" if self.control.paused else "running"
         if self.exception is not None:
             return "failed"
@@ -500,10 +661,89 @@ class Run:
     def status(self) -> str:
         pct = self.monitor.percent
         head = f"{pct:5.1f}%" if pct is not None else f"{len(self.frames)} frames"
-        return f"[{self.state}] {head}  {self.monitor.elapsed:.2f}s"
+        line = f"[{self.state}] {head}  {self.monitor.elapsed:.2f}s"
+        if self.held is not None:
+            line += f"  break at {self.held_at} #{self.held.prov.seq}"
+        return line
 
     def __repr__(self) -> str:
         return f"<Run {self.graph.name!r} {self.state}: {len(self.frames)} frames>"
+
+    # -- breakpoints --------------------------------------------------------- #
+    def break_when(
+        self,
+        target: Any,
+        pred: Callable[[Frame], Any] | None = None,
+        *,
+        tag: str | None = None,
+        seq: int | None = None,
+        every: int | None = None,
+        once: bool = False,
+    ) -> Breakpoint:
+        """Hold the graph on a frame ``target`` puts out: when ``pred(frame)`` is true,
+        when the frame carries ``tag``, when its sequence number is ``seq``, every
+        ``every``-th match. The frame waits at the block, nothing downstream sees it,
+        until ``resume()`` (go on), ``step()`` (go on, hold the next one),
+        ``replace_held(frame)`` or ``drop_held()``. ``target`` names a block as
+        ``run.probe`` does. See :class:`Breakpoint`."""
+        name, node = self._target(target)
+        bp = Breakpoint(
+            self, name, pred, tag=tag, seq=seq, every=every, once=once, node=node
+        )
+        self.breakpoints.append(bp)
+        return bp
+
+    def break_at(self, target: Any, seq: int) -> Breakpoint:
+        """Hold the one frame of ``target`` with sequence number ``seq``."""
+        return self.break_when(target, seq=seq, once=True)
+
+    def break_on_error(self, enabled: bool = True) -> Run:
+        """Hold any failed frame, at the block that failed (``False`` switches it off)."""
+        self.control.break_on_error = enabled
+        return self
+
+    @property
+    def held(self) -> Frame | None:
+        """The frame the graph is holding at a breakpoint, or None."""
+        return self.control.held
+
+    @property
+    def held_at(self) -> str | None:
+        return self.control.held_at
+
+    def wait_break(self, timeout: float | None = None) -> Frame | None:
+        """Block until a breakpoint holds a frame (returned) or the run finishes."""
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self.finished:
+            if self.control.held_event.wait(0.05):
+                return self.control.held
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+        return self.control.held
+
+    def replace_held(self, frame: Frame) -> Run:
+        """Let the graph go on with ``frame`` in place of the held one."""
+        self.control.release("replace", frame)
+        self._refresh()
+        return self
+
+    def drop_held(self) -> Run:
+        """Let the graph go on without the held frame."""
+        self.control.release("drop")
+        self._refresh()
+        return self
+
+    def _target(self, target: Any) -> tuple[str, Any]:
+        if isinstance(target, str):
+            base = target.split("#", 1)[0]
+            known = {n.name for n in self.graph.nodes()} | {"fanout", "zip"}
+            if base not in known:
+                raise KeyError(
+                    f"no block called {base!r} in {self.graph.name!r}; "
+                    f"blocks: {sorted(n for n in known if n not in ('fanout', 'zip'))}"
+                )
+            return target, None
+        return target.name, target
 
     # -- probes -------------------------------------------------------------- #
     def probe(self, target: Any, keep: int = 16, plot: Any = None) -> Probe:
@@ -512,18 +752,8 @@ class Run:
         block of the same name, ``"fanout"`` / ``"zip"`` for a join; the names of
         ``run.monitor.table()``) or a node of ``run.graph``. Returns a :class:`Probe`;
         ``keep`` is how many recent frames it holds, ``plot`` a plot block to feed."""
-        if isinstance(target, str):
-            name = target
-            base = name.split("#", 1)[0]
-            known = {n.name for n in self.graph.nodes()} | {"fanout", "zip"}
-            if base not in known:
-                raise KeyError(
-                    f"no block called {base!r} in {self.graph.name!r}; "
-                    f"blocks: {sorted(n for n in known if n not in ('fanout', 'zip'))}"
-                )
-            probe = Probe(self, name, keep=keep, plot=plot)
-        else:
-            probe = Probe(self, target.name, keep=keep, plot=plot, node=target)
+        name, node = self._target(target)
+        probe = Probe(self, name, keep=keep, plot=plot, node=node)
         self.probes.append(probe)
         return probe
 
@@ -593,10 +823,13 @@ class Run:
 
             if handle is None:
                 return
+            from .ui import held_html
+
             handle.update(
                 HTML(
                     f"<div style='font-family:monospace'><b>{self.state}</b> · {len(self.frames)} frames"
-                    f"<div style='color:#dc2626;margin:4px 0'>{_HELP}</div>{monitor_html(self.monitor)}</div>"
+                    f"<div style='color:#dc2626;margin:4px 0'>{_HELP}</div>{held_html(self)}"
+                    f"{monitor_html(self.monitor)}</div>"
                 )
             )
 

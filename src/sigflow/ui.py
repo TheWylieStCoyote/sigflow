@@ -10,6 +10,7 @@ kernel). Without it, ``run.controls()`` shows a status line and says so.
 
 from __future__ import annotations
 
+import html
 import threading
 import time
 from typing import Any
@@ -25,6 +26,7 @@ __all__ = [
 _COLOURS = {
     "running": "#16a34a",
     "paused": "#d97706",
+    "break": "#7c3aed",
     "stopped": "#6b7280",
     "done": "#2563eb",
     "failed": "#dc2626",
@@ -250,6 +252,8 @@ class ControlPanel:
             )
         if self.live is not None:
             rows.append(self.diagram_html)
+        self.break_html = w.HTML()  # the held frame, while a breakpoint holds one
+        rows.append(self.break_html)
         self.images = [w.Image(format="png", width=width) for _ in self.plots]
         if self.images:
             rows.append(w.HBox(self.images, layout=w.Layout(flex_flow="row wrap")))
@@ -302,6 +306,7 @@ class ControlPanel:
             self.progress_label.value = f"{mon.produced} frames"
         if self.live is not None:
             self.diagram_html.value = self.live.html()
+        self.break_html.value = held_html(run)
         for img, p in zip(self.images, self.plots):
             if p.frames:
                 try:
@@ -318,8 +323,9 @@ class ControlPanel:
             self.b_record,
         ):
             b.disabled = done
-        self.b_pause.disabled = done or run.control.paused
-        self.b_resume.disabled = done or not run.control.paused
+        held = run.held is not None
+        self.b_pause.disabled = done or run.control.paused or held
+        self.b_resume.disabled = done or not (run.control.paused or held)
 
     def _ticker(self) -> None:
         while not self.run.finished:
@@ -337,6 +343,29 @@ class ControlPanel:
         from IPython.display import display
 
         display(self.widget)
+
+
+def held_html(run: Any) -> str:
+    """The frame a run holds at a breakpoint, with where and why, or nothing."""
+    f = run.held
+    if f is None:
+        return ""
+    from .notebook import frame_html
+
+    by = run.control.held_by
+    why = (
+        "stepped"
+        if by == "step"
+        else "failed"
+        if by == "error"
+        else html.escape(repr(by))
+    )
+    return (
+        f"<div style='border-left:3px solid {_COLOURS['break']};padding:4px 8px;margin:4px 0'>"
+        f"<b style='color:{_COLOURS['break']};font-family:monospace'>break at {html.escape(str(run.held_at))}"
+        f" #{f.prov.seq}</b> <span style='color:#6b7280'>· {why} · Resume lets it go, Step holds the next</span>"
+        f"{frame_html(f)}</div>"
+    )
 
 
 def dashboard(runs: Any, **kw: Any) -> Any:

@@ -66,6 +66,13 @@ New
   the members as parts, annotations and tags merged as at a join, a warning
   on a group released before it was complete. The mirror of a detector plus
   `per_key`; the example gathers every track's result per spectrum frame.
+- Breakpoints: `run.break_when("fft", pred)`, `break_at(name, seq)`,
+  `tag=`, `every=`, `once=` and `run.break_on_error()` hold the graph on a
+  frame at the block that produced it, before the next block receives it;
+  `run.held`, `held_at`, `state == "break"`, `resume()`, `step()` (the next
+  frame of the same block), `replace_held()`, `drop_held()` and
+  `wait_break()`. The panel shows the held frame and the live diagram marks the
+  block. Built on `Control.hold()` / `release()` and `Monitor.hold_at()`.
 - Probes: `run.probe("fft")` watches one block of a background run without
   editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
   `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which

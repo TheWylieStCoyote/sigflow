@@ -54,6 +54,7 @@ _STATE = {
     "paused": "#d97706",
     "error": "#dc2626",
     "done": "#16a34a",
+    "break": "#7c3aed",  # holding a frame at a breakpoint
 }
 _CAPTION_H = 18  # space under a live diagram for its status line
 
@@ -83,6 +84,7 @@ class Badge:
     errors: int = 0
     time: float = 0.0
     state: str | None = None
+    name: str = ""  # the node's name in the monitor's table
 
 
 @dataclass
@@ -390,7 +392,7 @@ class Diagram:
         for b in self.cell.boxes:
             st = monitor.lookup(b.node) if b.node is not None else None
             if st is not None:
-                out[b.id] = Badge(st.inp, st.out, st.errors, st.time)
+                out[b.id] = Badge(st.inp, st.out, st.errors, st.time, name=st.name)
         return out
 
     @staticmethod
@@ -398,12 +400,16 @@ class Diagram:
         counts: dict[int, Badge],
         previous: dict[int, tuple[int, int]] | None,
         run_state: str | None,
+        held_at: str | None = None,
     ) -> dict[int, Badge]:
-        """Give each badge its state: errors win; a box whose counts moved since
-        ``previous`` is active; otherwise the run's state (paused / finished) or idle
-        when nothing has flowed yet; a settled box keeps its ordinary border."""
+        """Give each badge its state: the block holding a frame at a breakpoint
+        first, then errors; a box whose counts moved since ``previous`` is active;
+        otherwise the run's state (paused / finished) or idle when nothing has
+        flowed yet; a settled box keeps its ordinary border."""
         for bid, badge in counts.items():
-            if badge.errors:
+            if held_at is not None and badge.name == held_at:
+                badge.state = "break"
+            elif badge.errors:
                 badge.state = "error"
             elif run_state in ("done", "stopped", "failed"):
                 badge.state = "done"
@@ -415,11 +421,13 @@ class Diagram:
                 badge.state = "idle"
         return counts
 
-    def caption(self, run_state: str | None = None) -> str:
+    def caption(self, run_state: str | None = None, held_at: str | None = None) -> str:
         mon = self.monitor
         if mon is None:
             return ""
         state = run_state or ("running" if mon.running else "done")
+        if held_at is not None:
+            state = f"break at {held_at}"
         line = f"{state} · {mon.produced} produced · {mon.elapsed:.1f}s"
         if mon.errors:
             line += f" · {mon.errors} error{'s' if mon.errors != 1 else ''}"
@@ -601,10 +609,13 @@ class LiveDiagram:
     def svg(self) -> str:
         """The picture now; boxes that moved since the previous call are active."""
         counts = self.diagram.counts(self.run.monitor)
-        badges = self.diagram.badges(counts, self._previous, self.run.state)
+        held_at = getattr(self.run, "held_at", None)
+        badges = self.diagram.badges(counts, self._previous, self.run.state, held_at)
         self._previous = {k: (b.inp, b.out) for k, b in counts.items()}
         self.diagram.monitor = self.run.monitor
-        return self.diagram.render(badges, caption=self.diagram.caption(self.run.state))
+        return self.diagram.render(
+            badges, caption=self.diagram.caption(self.run.state, held_at)
+        )
 
     def html(self) -> str:
         return f"<div style='overflow:auto;background:white;padding:4px;border-radius:6px'>{self.svg}</div>"

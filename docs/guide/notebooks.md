@@ -22,6 +22,18 @@ frames arrive and `probe.show()` keeps the latest frame displayed. A second
 block of the same name is `"fft#2"`, a fan-out or zip is `"fanout"` / `"zip"`,
 as in `run.monitor.table()`; a node object works too.
 
+`run.break_when("fft", lambda f: f["snr"] < 3)` sets a breakpoint: when a
+frame `fft` puts out matches, the graph holds it there, before the next block
+receives it, and upstream stalls on its queues. `run.held` is the frame,
+`run.held_at` the block, `run.state` is `"break"`. `run.resume()` lets it go,
+`run.step()` lets it go and holds the next frame of the same block,
+`run.replace_held(frame)` and `run.drop_held()` change what goes on. Match on
+a tag (`tag="clipped"`), a sequence number (`run.break_at("fft", seq=143)`),
+every n-th match (`every=50`) or any failure anywhere (`run.break_on_error()`).
+The panel shows the held frame with Resume and Step wired up, the live
+diagram marks the block, and `run.wait_break(timeout)` blocks a script until a
+breakpoint hits.
+
 The panel needs **ipywidgets in the kernel** (`python -m pip install
 ipywidgets`, then restart the kernel); `require_widgets()` tells you whether it
 will work. Live figures inside the panel are refreshed images; with the

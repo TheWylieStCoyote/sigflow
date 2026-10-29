@@ -577,6 +577,13 @@ callback per frame, a plot block fed as if it sat after the block, and
 `probe.wait(n)` to block until more frames arrive. Names are those of
 `run.monitor.table()`, so a second `fft` is `"fft#2"`.
 
+`run.break_when("fft", lambda f: f["snr"] < 3)` holds the graph on a matching
+frame at that block, before the next block receives it: `run.held` is the
+frame, `run.resume()` lets it go, `run.step()` holds the next frame of the
+same block, `run.replace_held(frame)` and `run.drop_held()` change what goes
+on. `run.break_at(name, seq=)`, `tag=`, `every=` and `run.break_on_error()`
+cover the usual conditions; `run.wait_break()` blocks a script until one hits.
+
 The same picture can show a run. `run.diagram()` on a background run
 (`g.start()`) displays it live: every block carries the frames it took in and
 put out, errors in red, and a border colour for its state (grey before its

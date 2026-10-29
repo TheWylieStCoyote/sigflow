@@ -364,6 +364,7 @@ class Runner:
         policies = [self._policy(n) for n in nodes]
         calls = [n.defn.resolve_call(self.opts.labels) for n in nodes]
         needs = [bool(tag_names(n.in_type)) for n in nodes]  # input tag requirements
+        control = self.opts.control
         seqs = [0] * len(nodes)
         check_first = self.opts.check == "first"
         check_all = self.opts.check == "all"
@@ -418,6 +419,12 @@ class Runner:
                     value, failed = MISSING, True
                     if st.watchers:  # a probe sees the failure as the next block would
                         st.notify(frame)
+                    if _holding(control, st):
+                        kept = await _hold(control, st, frame)
+                        if kept is None:
+                            value = None
+                            break
+                        frame = kept
                     seqs[i] += 1
                     st.out += 1
                     continue
@@ -439,12 +446,17 @@ class Runner:
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
                 frame = _drop_cleared(frame, node.out_type)
-                if st.watchers:  # a probe: materialise what this block put out
-                    st.notify(
-                        frame
-                        if frame.data is value and frame.prov is prov
-                        else frame.evolve(data=value, prov=prov)
-                    )
+                if st.watchers or _holding(control, st):
+                    if not (frame.data is value and frame.prov is prov):
+                        frame = frame.evolve(data=value, prov=prov)
+                    if st.watchers:  # a probe sees what this block put out
+                        st.notify(frame)
+                    if _holding(control, st):
+                        kept = await _hold(control, st, frame)
+                        if kept is None:
+                            value = None  # dropped at the breakpoint
+                            break
+                        frame, value = kept, kept.data
                 if (
                     check_all or (check_first and st.out == 0)
                 ) and value is not MISSING:
@@ -1038,8 +1050,11 @@ class Runner:
             await self._gate()
             f = self._wrap_output(item, node.name, {}, (), seq, node.out_type, stats)
             seq += 1
+            kept = await self._held(stats, f)
+            if kept is None:
+                continue
             stats.out += 1
-            yield f
+            yield kept
 
     async def _block_source(self, node: Block) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
@@ -1104,11 +1119,15 @@ class Runner:
                 stats.out += 1
                 continue
             await self._gate()
-            yield self._wrap_output(
+            out = self._wrap_output(
                 item, node.name, node.config, (), seq, node.out_type, stats
             )
             seq += 1
+            kept = await self._held(stats, out)
+            if kept is None:
+                continue
             stats.out += 1
+            yield kept
 
     # -- map blocks -------------------------------------------------------- #
     async def _map_block(
@@ -1182,8 +1201,11 @@ class Runner:
                 keep_samples=d.keep_samples,
             )  # provenance records the values used
             seq += 1
+            kept = await self._held(stats, out)
+            if kept is None:
+                continue
             stats.out += 1
-            yield out
+            yield kept
 
     def _args(self, d: BlockDef, f: Frame) -> list[Any]:
         if len(d.inputs) == 1:
@@ -1257,7 +1279,7 @@ class Runner:
                     while not failed_q.empty():
                         yield self._forward_failed(failed_q.get_nowait(), node, seq)
                         seq += 1
-                    yield self._wrap_output(
+                    produced = self._wrap_output(
                         out,
                         node.name,
                         node.config,
@@ -1268,7 +1290,11 @@ class Runner:
                         keep_samples=False,
                     )
                     seq += 1
+                    kept = await self._held(stats, produced)
+                    if kept is None:
+                        continue
                     stats.out += 1
+                    yield kept
             else:
                 driver = (
                     _run_inline_stream
@@ -1286,7 +1312,7 @@ class Runner:
                     while not failed_q.empty():
                         yield self._forward_failed(failed_q.get_nowait(), node, seq)
                         seq += 1
-                    yield self._wrap_output(
+                    produced = self._wrap_output(
                         out,
                         node.name,
                         node.config,
@@ -1297,7 +1323,11 @@ class Runner:
                         keep_samples=False,
                     )
                     seq += 1
+                    kept = await self._held(stats, produced)
+                    if kept is None:
+                        continue
                     stats.out += 1
+                    yield kept
         except Exception as e:
             stats.errors += 1
             if policy == "raise":
@@ -1350,7 +1380,12 @@ class Runner:
     async def _zip_streams(
         self, streams: list[AsyncIterator[Frame]], op: str, node: Node
     ) -> AsyncIterator[Frame]:
-        stats = self.mon.stats(node.name, node)
+        # the joined frames belong to the join itself: when a fan-out or zip heads a
+        # chain, register them under the join (its name, and the id the operator-tree
+        # node gave it), so probes, breakpoints and the diagram find "fanout" / "zip"
+        head = getattr(node, "stages", [node])[0]
+        owner = head if hasattr(head, "join_op") else node
+        stats = self.mon.stats(owner.name, owner)
         out_qs: list[asyncio.Queue] = [asyncio.Queue() for _ in streams]
 
         async def drive(s: AsyncIterator[Frame], q: asyncio.Queue) -> None:
@@ -1395,9 +1430,12 @@ class Runner:
                 )
                 if stats.watchers:
                     stats.notify(joined)
-                yield joined
-                stats.out += 1
                 seq += 1
+                kept = await self._held(stats, joined)
+                if kept is None:
+                    continue
+                yield kept
+                stats.out += 1
         finally:
             for t in tasks:
                 t.cancel()
@@ -1472,7 +1510,7 @@ class Runner:
                 stats.time += time.perf_counter() - t0
                 if result is None:
                     continue
-                yield self._wrap_output(
+                out = self._wrap_output(
                     result,
                     inner.name,
                     inner.config,
@@ -1483,7 +1521,11 @@ class Runner:
                     keep_samples=d.keep_samples,
                 )
                 seq += 1
+                kept = await self._held(stats, out)
+                if kept is None:
+                    continue
                 stats.out += 1
+                yield kept
 
         try:
             async for f in upstream:
@@ -1630,6 +1672,13 @@ class Runner:
 
     def _policy(self, node: Block) -> str:
         return self.opts.on_error or node.defn.on_error
+
+    async def _held(self, stats: Any, frame: Frame) -> Frame | None:
+        """``frame`` once any breakpoint on this node has let it go (None: dropped)."""
+        control = self.opts.control
+        if not _holding(control, stats):
+            return frame
+        return await _hold(control, stats, frame)
 
     def _wrap_output(
         self,
@@ -1840,6 +1889,40 @@ def _port_tags(out: Frame, result: Any, parents: tuple[Frame, ...]) -> Frame:
         for d, p in zip(result, before)
     )
     return replace(out, parts=parts)
+
+
+def _holding(control: Any, stats: Any) -> bool:
+    """Whether a frame this node puts out may have to wait at a breakpoint."""
+    return control is not None and bool(
+        stats.holds or control.step_at is not None or control.break_on_error
+    )
+
+
+async def _hold(control: Any, stats: Any, frame: Frame) -> Frame | None:
+    """Give breakpoints on this node a look at ``frame``; when one matches, keep the
+    frame at the gate until the user lets it go. Returns the frame to pass on, or
+    None to drop it."""
+    hit: Any = None
+    if control.step_at == stats.name:
+        hit = "step"
+    elif control.break_on_error and frame.failed and _failed_here(stats, frame):
+        hit = "error"
+    else:
+        for bp in list(stats.holds):
+            if bp.matches(frame):
+                hit = bp
+                break
+    if hit is None:
+        return frame
+    return await control.hold(stats.name, frame, hit)
+
+
+def _failed_here(stats: Any, frame: Frame) -> bool:
+    """Whether this node is where ``frame`` failed (a failed frame passes through the
+    blocks after it, which must not hold it again)."""
+    name = stats.name.split("#", 1)[0]
+    errors = frame.errors
+    return bool(errors) and errors[-1].origin == name
 
 
 def _drop_cleared(frame: Frame, out_type: Any) -> Frame:

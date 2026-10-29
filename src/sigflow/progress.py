@@ -19,6 +19,7 @@ class Stats:
     time: float = 0.0  # seconds spent inside the block function
     total: int | None = None  # expected number of items (sources only, when known)
     watchers: list[Any] = field(default_factory=list)  # called with every output frame
+    holds: list[Any] = field(default_factory=list)  # breakpoints on this node's output
 
     def notify(self, frame: Any) -> None:
         """Hand an output frame to the watchers (probes); a watcher that raises is
@@ -43,6 +44,8 @@ class Monitor:
     _by_key: dict[Any, Stats] = field(default_factory=dict)
     _pending: dict[str, list[Any]] = field(default_factory=dict)  # watchers by name
     _pending_nodes: dict[Any, list[Any]] = field(default_factory=dict)  # by identity
+    _pending_holds: dict[str, list[Any]] = field(default_factory=dict)
+    _pending_hold_nodes: dict[Any, list[Any]] = field(default_factory=dict)
 
     def stats(self, name: str, node: Any = None) -> Stats:
         """Stats for a node; nodes sharing a name get distinct rows (``fft``, ``fft#2``)."""
@@ -62,7 +65,35 @@ class Monitor:
             s = self._by_key[key] = self._stats[shown] = Stats(shown)
             s.watchers.extend(self._pending.pop(shown, ()))
             s.watchers.extend(self._pending_nodes.pop(key[1], ()))
+            s.holds.extend(self._pending_holds.pop(shown, ()))
+            s.holds.extend(self._pending_hold_nodes.pop(key[1], ()))
         return s
+
+    def hold_at(self, name: str, bp: Any, node: Any = None) -> None:
+        """Register a breakpoint on the node shown as ``name`` (or on ``node`` by
+        identity); pending until the run reaches it. What ``run.break_when()`` uses."""
+        if node is not None:
+            st = self.lookup(node)
+            if st is not None:
+                st.holds.append(bp)
+            else:
+                ident = getattr(node, "id", id(node))
+                self._pending_hold_nodes.setdefault(ident, []).append(bp)
+            return
+        s = self._stats.get(name)
+        if s is not None:
+            s.holds.append(bp)
+        else:
+            self._pending_holds.setdefault(name, []).append(bp)
+
+    def unhold(self, bp: Any) -> None:
+        for s in self._stats.values():
+            if bp in s.holds:
+                s.holds.remove(bp)
+        for pending in (self._pending_holds, self._pending_hold_nodes):
+            for bps in pending.values():
+                if bp in bps:
+                    bps.remove(bp)
 
     def watch_node(self, node: Any, fn: Any) -> None:
         """Like :meth:`watch`, for a node object: exact whatever name it is shown
