@@ -519,9 +519,10 @@ class Runner:
                     for q in outs:
                         await q.put(f)
             except BaseException as e:
-                # a failure (or cancellation) is recorded once for the whole graph; every
-                # consumer checks it, so the run re-raises instead of ending quietly
-                if not failure.done():
+                # a failure is recorded once for the whole graph; every consumer checks
+                # it, so the run re-raises instead of ending quietly. A cancellation is
+                # the graph being stopped, not a failure to report.
+                if not failure.done() and not isinstance(e, asyncio.CancelledError):
                     failure.set_exception(e)
                 for q in [queues[(dst, slot)] for _, dst, slot in edges] + outs:
                     try:
@@ -622,6 +623,10 @@ class Runner:
                     await t
                 except (asyncio.CancelledError, Exception):
                     pass
+            if failure.done() and not failure.cancelled():
+                failure.exception()  # retrieved: no "exception was never retrieved"
+            else:
+                failure.cancel()
 
     # -- per-frame sub-pipelines (feedback / when) ------------------------- #
     def _subpipe(self, node: Node) -> _SubPipe:
@@ -1523,6 +1528,7 @@ class Runner:
                 prov,
                 tags=ann["tags"],
             )
+            out = _port_tags(out, result, parents)
         out = _drop_cleared(out, out_type)
         # runtime contract check
         checked = self.opts.check == "all" or (
@@ -1655,6 +1661,26 @@ def _with_origin(tag: Any, op: str) -> Any:
     from dataclasses import replace
 
     return replace(tag, origin=op)
+
+
+def _port_tags(out: Frame, result: Any, parents: tuple[Frame, ...]) -> Frame:
+    """A tuple returned for a tuple frame whose parts carry different tags gets parts
+    of its own, port by port, so ``out[i]`` carries port ``i``'s tags and not every
+    port's (the static contract carries guarantees port by port the same way)."""
+    if not (isinstance(result, tuple) and len(parents) == 1):
+        return out
+    before = parents[0].parts
+    if len(before) != len(result) or not before:
+        return out
+    if all(p.tags == before[0].tags for p in before):
+        return out
+    from dataclasses import replace
+
+    parts = tuple(
+        Frame(d, out.meta, out.stream, {}, out.issues, out.prov, tags=p.tags)
+        for d, p in zip(result, before)
+    )
+    return replace(out, parts=parts)
 
 
 def _drop_cleared(frame: Frame, out_type: Any) -> Frame:

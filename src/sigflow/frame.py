@@ -505,6 +505,8 @@ class Frame:
                 changes[level] = frozen(getattr(self, level), **dict(changes[level]))
         if changes.get("tags") is not None:
             changes["tags"] = Tags.merge(self.tags, changes["tags"])
+        if "data" in changes and "parts" not in changes:
+            changes["parts"] = ()  # the parts described the old data
         from dataclasses import replace
 
         return replace(self, **changes)

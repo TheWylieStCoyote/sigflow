@@ -83,6 +83,12 @@ Changed
 - Declared rates and units are checked when a graph is built even when the
   produced shape is unknown; before, an unknown shape skipped those checks
   until run time.
+- Tuple frames keep one story: `frame.evolve(data=...)` drops parts that
+  described the old data (so `frame[0]` and port selection no longer return
+  stale frames), a plain tuple returned for a tuple frame whose parts carry
+  different tags gets parts of its own so each port keeps its tags, and
+  `Frame.save` / `Frame.load` round-trip per-port tags. Stopping a lowered
+  graph early no longer logs an unretrieved cancellation.
 - Stopping a synchronous iteration early (`iterate_sync`, `replay`, a `break`
   or an exception in the consumer) now stops the graph: the helper thread is
   told to stop and joined, and the sources' generators are closed at once

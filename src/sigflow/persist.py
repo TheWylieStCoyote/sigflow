@@ -186,15 +186,9 @@ def save_frame(f: Frame, path: str) -> str:
             {"message": i.message, "level": i.level, "origin": i.origin}
             for i in f.issues
         ],
-        "tags": [
-            {
-                "name": t.name,
-                "value": _jsonable(t.value),
-                "span": list(t.span) if t.span is not None else None,
-                "origin": t.origin,
-            }
-            for t in sorted(f.tags, key=repr)
-        ],
+        "tags": _tags_record(f.tags),
+        # a tuple frame's parts: only their tags are kept (the data is data_<i>)
+        "parts": [{"tags": _tags_record(p.tags)} for p in f.parts] or None,
         "prov": prov_to_dict(f.prov) if f.prov else None,
         "object": _jsonable(data) if kind == "object" else None,
     }
@@ -224,12 +218,42 @@ def load_frame(path: str) -> Frame:
         Issue(i["message"], i["level"], i["origin"]) for i in record["issues"]
     )
     prov = prov_from_dict(record["prov"]) if record["prov"] else NO_PROV
-    tags = Tags(
-        Tag(t["name"], t["value"], tuple(t["span"]) if t["span"] else None, t["origin"])
-        for t in record.get("tags", ())
-    )
+    tags = _tags_load(record.get("tags", ()))
+    parts: tuple[Frame, ...] = ()
+    if record["kind"] == "tuple" and record.get("parts"):
+        parts = tuple(
+            Frame(
+                d,
+                record["meta"],
+                record["stream"],
+                {},
+                issues,
+                prov,
+                tags=_tags_load(part["tags"]),
+            )
+            for d, part in zip(data, record["parts"])
+        )
     return Frame(
-        data, record["meta"], record["stream"], samples, issues, prov, tags=tags
+        data, record["meta"], record["stream"], samples, issues, prov, parts, tags
+    )
+
+
+def _tags_record(tags: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": t.name,
+            "value": _jsonable(t.value),
+            "span": list(t.span) if t.span is not None else None,
+            "origin": t.origin,
+        }
+        for t in sorted(tags, key=repr)
+    ]
+
+
+def _tags_load(records: Any) -> Tags:
+    return Tags(
+        Tag(t["name"], t["value"], tuple(t["span"]) if t["span"] else None, t["origin"])
+        for t in records
     )
 
 
