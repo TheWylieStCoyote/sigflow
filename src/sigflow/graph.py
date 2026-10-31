@@ -29,6 +29,7 @@ from .types import (
     TupleType,
     TypeMismatch,
     as_type,
+    carry_from,
     carry_tags,
     describe,
     narrow,
@@ -319,8 +320,8 @@ class Block(Node):
             in_type = out_type = narrow(upstream.out_type, declared, where=self.name)
         # Tags the producer guarantees reach the output unless the contract clears
         # them; start from the declared output so an earlier placement's tags go.
-        out_type = carry_tags(
-            _declared_tags(out_type, self.defn.out_type), tag_names(upstream.out_type)
+        out_type = carry_from(
+            _declared_tags(out_type, self.defn.out_type), upstream.out_type
         )
         if self.in_type == in_type and self.out_type == out_type:
             return self

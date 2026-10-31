@@ -461,3 +461,68 @@ def test_per_port_clearing_on_a_plain_tuple_return():
         graph.out_type.items[1].meta == {"foo"}
         and graph.out_type.items[0].meta == frozenset()
     )
+
+
+@pytest.fixture
+def branch_local_tag_graph():
+    @block
+    def flag(f: Framed[Sig[float, N]]) -> Annotated[Sig[float, N], provides("foo")]:
+        return f.tag("foo")
+
+    return dsp.sine(n=4, frames=1) >> (flag | dsp.scale(gain=1.0))
+
+
+@block(preserve_type=True)
+def preserve_tuple_parts(
+    f: Framed[tuple[Sig[float, N], Sig[float, N]]],
+) -> Framed[tuple[Sig[float, N], Sig[float, N]]]:
+    return f
+
+
+def test_preserve_type_keeps_tag_guarantees_local_to_their_ports(
+    branch_local_tag_graph,
+):
+    assert branch_local_tag_graph.out_type.items[0].meta == {"foo"}
+    assert branch_local_tag_graph.out_type.items[1].meta == frozenset()
+    graph = branch_local_tag_graph >> preserve_tuple_parts
+    assert graph.out_type.items[0].meta == {"foo"}
+    assert graph.out_type.items[1].meta == frozenset(), (
+        "a type-preserving tuple block must not copy a sibling's tag guarantee"
+    )
+
+
+def test_preserved_tuple_parts_pass_runtime_tag_checks(branch_local_tag_graph):
+    graph = branch_local_tag_graph >> preserve_tuple_parts
+    out = run(graph, check="all", on_error="raise")[0]
+    assert "foo" in out.tags
+    assert "foo" in out[0].tags and "foo" not in out[1].tags
+    np.testing.assert_array_equal(out[0].data, out[1].data)
+
+
+@pytest.mark.parametrize("right_tagged", [False, True])
+def test_clearing_a_port_recomputes_aggregate_tags(right_tagged):
+    from sigflow import TupleType
+    from sigflow.runtime import _drop_cleared
+
+    left = Frame(np.zeros(4)).tag("foo")
+    right = Frame(np.ones(4))
+    if right_tagged:
+        right = right.tag("foo")
+    parent = Frame(
+        (left.data, right.data),
+        parts=(left, right),
+        tags=Tags.merge(left.tags, right.tags),
+    ).tag("aggregate_only")
+    contract = TupleType(
+        (SignalType(float, (4,)).clears("foo"), SignalType(float, (4,)))
+    )
+
+    out = _drop_cleared(parent, contract)
+    assert "foo" not in out[0].tags
+    assert ("foo" in out[1].tags) == right_tagged
+    expected = {"aggregate_only", "foo"} if right_tagged else {"aggregate_only"}
+    assert out.tags.names == expected, (
+        "a tag inherited only from cleared parts must leave the aggregate, while "
+        "independently attached aggregate tags must survive"
+    )
+    assert "foo" in parent.tags and "foo" in parent[0].tags  # the input is immutable

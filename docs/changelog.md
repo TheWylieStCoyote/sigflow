@@ -83,6 +83,12 @@ Changed
 - Declared rates and units are checked when a graph is built even when the
   produced shape is unknown; before, an unknown shape skipped those checks
   until run time.
+- Stopping a synchronous iteration early (`iterate_sync`, `replay`, a `break`
+  or an exception in the consumer) now stops the graph: the helper thread is
+  told to stop and joined, and the sources' generators are closed at once
+  rather than at garbage collection. A tuple-to-tuple block carries tag
+  guarantees port by port, and clearing a tag on one port removes it from the
+  tuple frame unless another part still carries it.
 - The `zmq` extra pulls in `tornado` on Windows, which pyzmq's asyncio support
   needs on the default proactor event loop.
 - `parallel(..., backend="process")` starts its workers from a fork server

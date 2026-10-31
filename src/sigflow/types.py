@@ -45,6 +45,7 @@ __all__ = [
     "TupleType",
     "TypeMismatch",
     "Vector",
+    "carry_from",
     "carry_tags",
     "cleared_names",
     "clears",
@@ -800,6 +801,21 @@ def cleared_names(t: Any) -> frozenset[str]:
     if isinstance(t, StreamType):
         return cleared_names(t.item)
     return t.cleared if isinstance(t, SignalType) else frozenset()
+
+
+def carry_from(out: Any, produced: Any) -> Any:
+    """``out`` once it carries what ``produced`` guarantees: port by port when both
+    are tuples of the same length (a tuple-to-tuple block keeps each port's tags to
+    itself), else everything the producer guarantees onto every output."""
+    if (
+        isinstance(out, TupleType)
+        and isinstance(produced, TupleType)
+        and len(out.items) == len(produced.items)
+    ):
+        return TupleType(
+            tuple(carry_from(o, p) for o, p in zip(out.items, produced.items))
+        )
+    return carry_tags(out, tag_names(produced))
 
 
 def carry_tags(out: Any, inherited: frozenset[str]) -> Any:

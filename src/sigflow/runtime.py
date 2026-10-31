@@ -135,21 +135,47 @@ async def aiter_any(obj: Any, threaded: bool = False) -> AsyncIterator[Any]:
         if inspect.isawaitable(obj):
             obj = cast(Any, await obj)
     if hasattr(obj, "__aiter__"):
-        async for item in obj:
-            yield item
+        try:
+            async for item in obj:
+                yield item
+        finally:
+            await _aclose(obj)  # an async generator cut short releases what it holds
         return
     it = iter(obj)
-    if threaded:
-        loop = asyncio.get_running_loop()
-        while True:
-            item = await loop.run_in_executor(None, next, it, _DONE)
-            if item is _DONE:
-                return
-            yield item
-    else:
-        for item in it:
-            yield item
-            await asyncio.sleep(0)  # stay cooperative with async sources
+    try:
+        if threaded:
+            loop = asyncio.get_running_loop()
+            while True:
+                item = await loop.run_in_executor(None, next, it, _DONE)
+                if item is _DONE:
+                    return
+                yield item
+        else:
+            for item in it:
+                yield item
+                await asyncio.sleep(0)  # stay cooperative with async sources
+    finally:
+        _close(it)  # a generator cut short runs its finally now, not at collection
+
+
+def _close(it: Any) -> None:
+    close = getattr(it, "close", None)
+    if close is None:
+        return
+    try:
+        close()
+    except ValueError:  # still executing on a worker thread (threaded source)
+        pass
+
+
+async def _aclose(obj: Any) -> None:
+    aclose = getattr(obj, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------- #
@@ -1634,8 +1660,9 @@ def _with_origin(tag: Any, op: str) -> Any:
 def _drop_cleared(frame: Frame, out_type: Any) -> Frame:
     """The tags a block's contract clears do not leave it. A tuple output is cleared
     port by port: a frame that kept its parts has each part cleared, a plain tuple
-    payload gets parts made for it when the ports differ, and the aggregate loses
-    what every port clears."""
+    payload gets parts made for it when the ports differ, and the aggregate keeps a
+    tag only while some part still carries it, or if no part ever did (a tag
+    attached to the tuple frame itself)."""
     if not frame.tags and not any(p.tags for p in frame.parts):
         return frame
     from dataclasses import replace
@@ -1666,7 +1693,9 @@ def _drop_cleared(frame: Frame, out_type: Any) -> Frame:
             )
         if parts and len(parts) == len(per):
             cleared = tuple(_drop_cleared(p, t) for p, t in zip(parts, out_type.items))
-            gone = frozenset.intersection(*per)
+            before = frozenset().union(*(p.tags.names for p in parts))
+            after = frozenset().union(*(p.tags.names for p in cleared))
+            gone = before - after  # carried only by parts that lost it
             # identity, not ==: comparing frames would compare their arrays
             unchanged = len(cleared) == len(frame.parts) and all(
                 a is b for a, b in zip(cleared, frame.parts)
@@ -2015,24 +2044,47 @@ def run(graph: Node, **kw: Any) -> list[Frame]:
 
 
 def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
-    """Synchronous iterator over output frames (runs the loop in a helper thread)."""
+    """Synchronous iterator over output frames (runs the loop in a helper thread).
+
+    Stopping early (``close()``, a ``break``, an exception in the consumer, or
+    dropping the iterator) stops the graph: the helper thread is told to stop,
+    the sources are closed and the thread is joined, so nothing stays behind."""
     q: queue.Queue = queue.Queue(maxsize=64)
+    stop = threading.Event()  # the consumer is gone: produce nothing more
+
+    def send(item: Any) -> bool:
+        """Hand an item to the consumer, giving up when it has stopped listening."""
+        while not stop.is_set():
+            try:
+                q.put(item, timeout=0.05)
+                return True
+            except queue.Full:
+                continue
+        return False
 
     async def main() -> None:
         try:
             async for f in iterate(graph, **options):
-                await asyncio.get_running_loop().run_in_executor(None, q.put, f)
+                delivered = await asyncio.get_running_loop().run_in_executor(
+                    None, send, f
+                )
+                if not delivered:
+                    break  # unwinds the graph: generators close, sources release
         except BaseException as e:
-            q.put(("error", e))
+            send(("error", e))
         finally:
-            q.put(_DONE)
+            send(_DONE)
 
     t = threading.Thread(
         target=lambda: asyncio.run(main()), daemon=True, name="sigflow-iter"
     )
     t.start()
-    while True:
-        it = q.get()
-        if it is _DONE:
-            return
-        yield _unwrap(it)
+    try:
+        while True:
+            it = q.get()
+            if it is _DONE:
+                return
+            yield _unwrap(it)
+    finally:
+        stop.set()
+        t.join(timeout=5)
