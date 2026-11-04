@@ -1,7 +1,8 @@
 """Every Python sample in README.md runs as written (each as its own script).
 
 A sample that demonstrates an error ends with a comment naming it, such as
-``# TypeMismatch: ...``; it must fail with that error and that message.
+``# TypeMismatch: ...``; it must fail with that error and that message. A sample that
+uses a GPU (``to_device``) is skipped without CuPy and a CUDA device.
 """
 
 from __future__ import annotations
@@ -20,11 +21,24 @@ BLOCKS = [
     (README[: m.start()].count("\n") + 1, m.group(1))
     for m in re.finditer(r"^```python\n(.*?)^```", README, re.DOTALL | re.MULTILINE)
 ]
+
+
+def _has_gpu() -> bool:
+    try:
+        import cupy  # type: ignore[import-not-found]
+
+        return bool(cupy.cuda.runtime.getDeviceCount())
+    except Exception:  # no CuPy, no driver, no device: all mean no GPU
+        return False
+
+
 EXPECTED_ERROR = re.compile(r"^# (\w+(?:Mismatch|Error)): (.+)$", re.MULTILINE)
 
 
 @pytest.mark.parametrize("line,code", BLOCKS, ids=[f"line {n}" for n, _ in BLOCKS])
 def test_readme_sample_runs(line, code, tmp_path):
+    if "to_device(" in code and not _has_gpu():
+        pytest.skip("needs CuPy and a CUDA device")
     script = tmp_path / "sample.py"
     script.write_text(code, encoding="utf-8")
     env = dict(os.environ, MPLBACKEND="Agg")
