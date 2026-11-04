@@ -92,6 +92,9 @@ New
   editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
   `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which
   also works with a blocking `run(g, monitor=mon)`.
+- `examples/26_graph_checks.py` walks through what `Graph.connect` checks on
+  the spot and what `validate()` checks later; one `connect` now emits a
+  `TagWarning` once instead of once per re-check pass.
 - Tag contracts in signatures: `accepts(...)` declares tags an input reads when
   present, `may_provide(...)` tags an output sometimes attaches, and
   `requires` / `accepts` / `provides` / `may_provide` take value types by

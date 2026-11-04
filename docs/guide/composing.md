@@ -58,6 +58,17 @@ it the run stops at the shortest branch. The monitor scales the sources'
 totals by the graph ratio, so the expected frame count is right for a
 re-framing chain.
 
+## What a Graph checks, and when
+
+`Graph.connect` checks each edge against the consumer's input contract on the
+spot: dtype, shape and symbol sizes, rate, units, and tags with their value
+types; rates where branches meet, port names, and cycles. A refused connect
+leaves the graph exactly as it was, nodes it added included, and earlier
+edges are re-checked, so wiring in any order finds the same problems. A member
+that is itself a pipeline is checked at its entry when connected and checked
+through by `g.validate()`, which `run` does before any frame moves.
+[Example 26](../examples/26_graph_checks.md) shows each case.
+
 ## Keyed routing
 
 `when(pred, then, otherwise)` chooses between two 1:1 branches per frame.

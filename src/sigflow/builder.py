@@ -344,9 +344,15 @@ class Graph(Node):
         whatever order the edges were connected in, then recheck every edge. What
         the edges have bound so far (a size a source fixed, reaching a transfer
         through generic members) is applied to the contract a member picks up."""
+        import warnings
+
+        from .types import TagWarning
+
         self._env = Env()
-        for src, target, slot in self.edges:
-            self._check_edge(src, Ref(self, self.members[target], target), slot)
+        with warnings.catch_warnings():  # this pass only gathers bindings: the
+            warnings.simplefilter("ignore", TagWarning)  # final pass warns, once
+            for src, target, slot in self.edges:
+                self._check_edge(src, Ref(self, self.members[target], target), slot)
         for name in self.order():
             produced = self._produced(name)
             if produced is not None:

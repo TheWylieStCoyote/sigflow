@@ -29,3 +29,4 @@ Every script under `examples/` runs on its own (`python examples/NN_name.py`). T
 | [23_xarray_blocks](23_xarray_blocks.md) | Labelled arrays: ``xarray.DataArray`` frames flow through ordinary blocks |
 | [24_tags](24_tags.md) | Tags: labels on frames, or on a time span of them, that the runtime carries |
 | [25_per_signal](25_per_signal.md) | A varying number of signals, each processed by its own stateful graph |
+| [26_graph_checks](26_graph_checks.md) | What an explicit Graph checks while you wire it, and what it checks later |
