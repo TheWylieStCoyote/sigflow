@@ -149,6 +149,36 @@ output guarantees when the graph is built and what an output frame carries at
 run time, in the same way. Tags the block attaches itself are never filtered
 by it, and `clears(...)` still applies on top.
 
+One port of a tuple output can have a policy of its own, overriding the
+block's for that port:
+
+```python
+@block
+def split(x: Sig[float, N]) -> tuple[Annotated[Sig[float, N], carries("none")], Sig[float, N]]:
+    return x, x
+```
+
+`g.describe()` shows a block's policy next to its contract, the diagram's
+tooltips show the same, and `run.report()` has a "Tag contracts" table: what
+each block requires, accepts, provides, may provide and clears, and what it
+passes on.
+
+## Tag warnings
+
+Some wiring is not wrong but cannot do what it says. When the graph is built,
+a `TagWarning` names it:
+
+- a block **accepts** a tag that nothing upstream provides or may provide;
+- `when("tag", ...)` **routes on** such a tag, so its branch never runs;
+- `per_key("tag", ...)` **keys on** such a tag, or on one that is only
+  possible, so some or all frames pass through without a key.
+
+`may_provide(...)` travels downstream the way guarantees do, under each
+block's policy, so a tag a block sometimes attaches is known to be possible
+several blocks later. A producer that says nothing about its tags, such as a
+source declared without them, is gradual and draws no warning. Filter the
+warning with the `warnings` module like any other.
+
 ## Ports
 
 A block returning several signals, a fan-out and a zip have **tuple outputs**

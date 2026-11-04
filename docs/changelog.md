@@ -99,7 +99,12 @@ New
   producer's declarations and at run time on the frame. A block's propagation
   policy is `@block(tags="carry" | "none" | "declared" | keep(...) | drop(...),
   spans="carry" | "drop", merge="union" | "intersection" | "first")`, applied
-  statically and at run time. The plan is in `design/tag-contracts.md`.
+  statically and at run time. `carries(...)` gives one port of a tuple output
+  a policy of its own. `may_provide` travels downstream, and a `TagWarning`
+  names an `accepts`, a `when("tag")` or a `per_key("tag")` that nothing
+  upstream provides or may provide. `describe()` shows a block's policy and
+  `run.report()` a table of every block's tag contract. The plan is in
+  `design/tag-contracts.md`.
 - Live diagram: `run.diagram()` displays the graph's diagram refreshed while a
   background run goes, with frames in and out on every block, errors in red, a
   state colour on the border and frame counts on the edges;

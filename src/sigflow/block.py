@@ -270,11 +270,28 @@ class BlockDef:
         elif self.inputs:
             # tags the inputs carry reach the output under the block's policy,
             # unless the contract clears them
-            inherited, types = inherited_under(
-                self.tag_policy, [spec.type for spec in self.inputs], self.in_type
-            )
-            if inherited:
-                self.out_type = carry_tags(self.out_type, inherited, types)
+            groups = [spec.type for spec in self.inputs]
+            if isinstance(self.out_type, TupleType) and any(
+                isinstance(o, SignalType) and o.carry is not None
+                for o in self.out_type.items
+            ):
+                # ports with a policy of their own carry under it
+                items = []
+                for o in self.out_type.items:
+                    pol = (
+                        o.carry
+                        if isinstance(o, SignalType) and o.carry
+                        else self.tag_policy
+                    )
+                    names, types = inherited_under(pol, groups, self.in_type)
+                    items.append(carry_tags(o, names, types) if names else o)
+                self.out_type = TupleType(tuple(items))
+            else:
+                inherited, types = inherited_under(
+                    self.tag_policy, groups, self.in_type
+                )
+                if inherited:
+                    self.out_type = carry_tags(self.out_type, inherited, types)
 
         # by default sample-level annotations survive a map block only if the
         # declared output shape has the same leading dimension as the input

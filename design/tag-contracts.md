@@ -1,15 +1,15 @@
 # Plan: tag contracts in block signatures
 
-Status: in progress on branch `tag_contracts` (from `main`). Started 2026-11-07.
+Status: all phases done on branch `tag_contracts` (from `main`). Started 2026-11-07.
 
 | Phase | State |
 |---|---|
 | 1. Typed tags and `accepts` / `may_provide` | done |
-| 2. `may_provide` checks against downstream `accepts` / `when` | open |
+| 2. `may_provide` checks against downstream `accepts` / `when` | done: `TagWarning`; `may_provide` travels downstream |
 | 3. Propagation policy (`tags=`, `spans=`, `merge=`) | done |
-| 3b. Per-port policy on tuple outputs (`carries(...)`) | open |
-| 4. Surfacing in `describe()`, the diagram and `run.report()`; docs pages | contract display and the contracts page done; diagram and report open |
-| 5. `per_key` checks its key against the producer's guarantees | open |
+| 3b. Per-port policy on tuple outputs (`carries(...)`) | done |
+| 4. Surfacing in `describe()`, the diagram and `run.report()`; docs pages | done |
+| 5. `per_key` checks its key against the producer's guarantees | done: `TagWarning` |
 
 ## Goal
 

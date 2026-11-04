@@ -42,12 +42,14 @@ __all__ = [
     "StreamType",
     "TagPolicy",
     "TagSpec",
+    "TagWarning",
     "Tensor",
     "TupleType",
     "TypeMismatch",
     "Vector",
     "accepted_names",
     "accepts",
+    "carries",
     "carry_from",
     "carry_tags",
     "cleared_names",
@@ -58,6 +60,7 @@ __all__ = [
     "is_signal_type",
     "keep",
     "may_provide",
+    "maybe_names",
     "narrow",
     "provides",
     "requires",
@@ -312,6 +315,7 @@ class SignalType:
     )  # accepts(): read if present
     maybe: frozenset[str] = field(default_factory=frozenset)  # sometimes attached
     tag_types: frozenset[tuple[str, Any]] = field(default_factory=frozenset)
+    carry: Any = None  # a TagPolicy for this port of a tuple output (carries(...))
 
     # -- construction ------------------------------------------------------ #
     def __class_getitem__(cls, params: Any) -> SignalType:
@@ -579,6 +583,53 @@ def is_signal_type(obj: Any) -> bool:
     return isinstance(obj, (SignalType, TupleType))
 
 
+class TagWarning(UserWarning):
+    """A tag contract that cannot be right as wired, though it is not an error: a
+    block reads (``accepts``) or routes on (``when("tag")``, ``per_key("tag")``) a tag
+    that nothing upstream provides or may provide. Filter it with the ``warnings``
+    module like any other warning."""
+
+
+def maybe_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract says may be attached, across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(maybe_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return maybe_names(t.item)
+    return t.maybe if isinstance(t, SignalType) else frozenset()
+
+
+def says_about_tags(t: Any) -> bool:
+    """Whether a contract says anything about the tags it carries. One that says
+    nothing (a source declared without tags) is gradual: nothing is warned about."""
+    return bool(tag_names(t) or maybe_names(t))
+
+
+def warn_unknown_tag(produced: Any, name: str, where: str, how: str) -> None:
+    """Warn (:class:`TagWarning`) when ``produced`` says what tags it carries and
+    ``name`` is neither guaranteed nor possible."""
+    import warnings
+
+    if not says_about_tags(produced):
+        return
+    if name in tag_names(produced):
+        return
+    if name in maybe_names(produced):
+        if how == "keys on":
+            warnings.warn(
+                f"{where}: keys on tag {name!r}, which the producer only may provide: "
+                f"frames without it pass through untouched",
+                TagWarning,
+                stacklevel=3,
+            )
+        return
+    warnings.warn(
+        f"{where}: {how} tag {name!r}, which nothing upstream provides or may provide",
+        TagWarning,
+        stacklevel=3,
+    )
+
+
 @dataclass(frozen=True)
 class TagSpec:
     """What :func:`requires`, :func:`accepts`, :func:`provides`, :func:`may_provide`
@@ -591,6 +642,7 @@ class TagSpec:
     optional: frozenset[str] = frozenset()
     maybe: frozenset[str] = frozenset()
     tag_types: frozenset[tuple[str, Any]] = frozenset()
+    carry: Any = None  # a TagPolicy for one port (carries(...))
 
     def apply(self, t: Any) -> Any:
         if isinstance(t, TupleType):
@@ -605,6 +657,7 @@ class TagSpec:
             optional=t.optional | self.optional,
             maybe=t.maybe | self.maybe,
             tag_types=_merge_types(t.tag_types, self.tag_types),
+            carry=self.carry if self.carry is not None else t.carry,
         )
 
 
@@ -822,6 +875,8 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
         raise TypeMismatch(
             f"{where}: needs tag(s) {'|'.join(sorted(missing))}, producer guarantees {have}"
         )
+    for name in sorted(required.optional):
+        warn_unknown_tag(produced, name, where, "accepts")
     if required.tag_types and produced.tag_types:
         made = dict(produced.tag_types)
         for name, want in required.tag_types:
@@ -1004,6 +1059,18 @@ class TagPolicy:
     def is_default(self) -> bool:
         return self.mode == "carry" and self.spans == "carry" and self.merge == "union"
 
+    def __str__(self) -> str:
+        parts = []
+        if self.mode in ("keep", "drop"):
+            parts.append(f"tags={self.mode}({', '.join(sorted(self.names))})")
+        elif self.mode != "carry":
+            parts.append(f"tags={self.mode}")
+        if self.spans != "carry":
+            parts.append(f"spans={self.spans}")
+        if self.merge != "union":
+            parts.append(f"merge={self.merge}")
+        return ", ".join(parts) or "tags=carry"
+
     def passes(self, name: str, declared: frozenset[str]) -> bool:
         """Whether an inherited tag of this name is carried on."""
         if self.mode == "carry":
@@ -1033,6 +1100,13 @@ class TagPolicy:
         if isinstance(tags, TagPolicy):
             return TagPolicy(tags.mode, tags.names, spans, merge)
         return TagPolicy(str(tags), frozenset(), spans, merge)
+
+
+def carries(tags: Any = "carry", spans: str = "carry", merge: str = "union") -> TagSpec:
+    """A propagation policy for one port of a tuple output, inside ``Annotated``:
+    ``-> tuple[Annotated[Sig[...], carries("none")], Sig[...]]``. It overrides the
+    block's ``tags=`` / ``spans=`` / ``merge=`` for that port."""
+    return TagSpec(carry=TagPolicy.of(tags, spans, merge))
 
 
 def keep(*names: str) -> TagPolicy:
@@ -1072,6 +1146,23 @@ def carry_from(
     """``out`` once it carries what ``produced`` guarantees: port by port when both
     are tuples of the same length (a tuple-to-tuple block keeps each port's tags to
     itself), else everything the producer guarantees onto every output."""
+    if isinstance(out, TupleType) and any(
+        isinstance(o, SignalType) and o.carry is not None for o in out.items
+    ):
+        per_port = isinstance(produced, TupleType) and len(out.items) == len(
+            produced.items
+        )
+        return TupleType(
+            tuple(
+                carry_from(
+                    o,
+                    produced.items[i] if per_port else produced,
+                    o.carry if isinstance(o, SignalType) and o.carry else policy,
+                    declared_in,
+                )
+                for i, o in enumerate(out.items)
+            )
+        )
     if (
         isinstance(out, TupleType)
         and isinstance(produced, TupleType)
@@ -1091,21 +1182,41 @@ def carry_from(
         else [produced]
     )
     names, types = inherited_under(policy, groups, declared_in)
-    return carry_tags(out, names, types)
+    may = _maybe_under(policy, groups, declared_in)
+    return carry_tags(out, names, types, may)
+
+
+def _maybe_under(
+    policy: TagPolicy | None, groups: list[Any], declared_in: Any = None
+) -> frozenset[str]:
+    """Tags that may arrive from ``groups`` and that ``policy`` would pass on."""
+    policy = policy or TagPolicy()
+    declared = (
+        tag_names(declared_in) | accepted_names(declared_in)
+        if declared_in is not None
+        else frozenset()
+    )
+    names = (
+        frozenset().union(*(maybe_names(g) for g in groups)) if groups else frozenset()
+    )
+    return frozenset(n for n in names if policy.passes(n, declared))
 
 
 def carry_tags(
     out: Any,
     inherited: frozenset[str],
     types: frozenset[tuple[str, Any]] = frozenset(),
+    maybe: frozenset[str] = frozenset(),
 ) -> Any:
     """A block's output contract once the tags its inputs carry are added, minus
     those it clears: what a consumer can rely on. ``types`` are the inherited tags'
     value types; the block's own declarations win."""
     if isinstance(out, TupleType):
-        return TupleType(tuple(carry_tags(i, inherited, types) for i in out.items))
+        return TupleType(
+            tuple(carry_tags(i, inherited, types, maybe) for i in out.items)
+        )
     if isinstance(out, StreamType):
-        return StreamType(carry_tags(out.item, inherited, types))
+        return StreamType(carry_tags(out.item, inherited, types, maybe))
     if not isinstance(out, SignalType):
         return out
     passed = inherited - out.cleared
@@ -1113,9 +1224,10 @@ def carry_tags(
     typed = _merge_types(
         frozenset((n, t) for n, t in types if n in passed), out.tag_types
     )
-    if carried == out.meta and typed == out.tag_types:
+    may = (out.maybe | (maybe - out.cleared)) - carried
+    if carried == out.meta and typed == out.tag_types and may == out.maybe:
         return out
-    return out.with_(meta=carried, tag_types=typed)
+    return out.with_(meta=carried, tag_types=typed, maybe=may)
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:

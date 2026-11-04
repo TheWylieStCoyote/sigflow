@@ -248,6 +248,21 @@ class RunReport:
             f"<div style='overflow:auto;background:white;padding:4px'>{diagram}</div>",
             _section("Blocks", monitor_html(mon)),
         ]
+        contracts = tag_contracts(run.graph)
+        if contracts:
+            rows = "".join(
+                f"<tr><td style='{_TD}'>{esc(name)}</td><td style='{_TD}'>{esc(inp)}</td>"
+                f"<td style='{_TD}'>{esc(out)}</td><td style='{_TD}'>{esc(pol)}</td></tr>"
+                for name, inp, out, pol in contracts
+            )
+            sections.append(
+                _section(
+                    "Tag contracts",
+                    f"<table style='{_CSS}'><tr><th style='{_TD}'>block</th>"
+                    f"<th style='{_TD}'>input</th><th style='{_TD}'>output</th>"
+                    f"<th style='{_TD}'>passes on</th></tr>{rows}</table>",
+                )
+            )
         knobs = run.knobs()
         if knobs:
             rows = "".join(
@@ -308,6 +323,58 @@ class RunReport:
 
     def __repr__(self) -> str:
         return f"<RunReport {self.run.name!r}: {self.run.state}>"
+
+
+def tag_contracts(graph: Any) -> list[tuple[str, str, str, str]]:
+    """For each block of ``graph`` that says anything about tags: its name, what
+    its input requires and accepts, what its output provides, may provide and
+    clears, and its propagation policy."""
+    from .graph import Block
+    from .types import (
+        SignalType,
+        TupleType,
+        accepted_names,
+        cleared_names,
+        maybe_names,
+        tag_names,
+        tag_types_of,
+    )
+
+    def typed(names: Any, types: dict[str, Any]) -> str:
+        return ", ".join(
+            f"{n}: {getattr(types[n], '__name__', types[n])}" if n in types else n
+            for n in sorted(names)
+        )
+
+    rows = []
+    for n in graph.nodes():
+        if not isinstance(n, Block):
+            continue
+        d = n.defn
+        tin, tout = d.in_type, d.out_type
+        types = dict(tag_types_of(tin)) | dict(tag_types_of(tout))
+        inp = []
+        if tag_names(tin):
+            inp.append("requires " + typed(tag_names(tin), types))
+        if accepted_names(tin):
+            inp.append("accepts " + typed(accepted_names(tin), types))
+        out = []
+        if tag_names(tout):
+            out.append("provides " + typed(tag_names(tout), types))
+        if maybe_names(tout):
+            out.append("may provide " + typed(maybe_names(tout), types))
+        if cleared_names(tout):
+            out.append("clears " + ", ".join(sorted(cleared_names(tout))))
+        ports = [
+            f"port {i}: {t.carry}"
+            for i, t in enumerate(tout.items if isinstance(tout, TupleType) else ())
+            if isinstance(t, SignalType) and t.carry is not None
+        ]
+        policy = "" if d.tag_policy.is_default else str(d.tag_policy)
+        policy = "; ".join(p for p in [policy, *ports] if p)
+        if inp or out or policy:
+            rows.append((n.name, "; ".join(inp), "; ".join(out), policy or "all"))
+    return rows
 
 
 def _section(title: str, body: str) -> str:

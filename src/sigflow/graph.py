@@ -362,6 +362,8 @@ class Block(Node):
         it = "" if self.in_type is None else f"{describe(self.in_type)} -> "
         r = self.ratio_for(ratio_in if ratio_in is not None else self.in_type)
         tail = f"  [{r}]" if self.kind == "stream" and r and r != Ratio.ONE else ""
+        if not self.defn.tag_policy.is_default:
+            tail += f"  [{self.defn.tag_policy}]"
         return f"{indent}{self.name}({cfg}): {it}{describe(self.out_type)}{tail}"
 
 
@@ -418,9 +420,15 @@ def _declared_tags(t: Any, declared: Any) -> Any:
     if isinstance(t, StreamType) and isinstance(declared, StreamType):
         return StreamType(_declared_tags(t.item, declared.item))
     if isinstance(t, SignalType) and isinstance(declared, SignalType):
-        if t.meta == declared.meta and t.tag_types == declared.tag_types:
+        if (
+            t.meta == declared.meta
+            and t.tag_types == declared.tag_types
+            and t.maybe == declared.maybe
+        ):
             return t
-        return t.with_(meta=declared.meta, tag_types=declared.tag_types)
+        return t.with_(
+            meta=declared.meta, tag_types=declared.tag_types, maybe=declared.maybe
+        )
     return t
 
 
@@ -738,6 +746,10 @@ class When(Node):
         return carry_tags(t, frozenset({self.tag})) if self.tag else t
 
     def accept(self, produced: Any, env: Env, where: str) -> None:
+        if self.tag:
+            from .types import warn_unknown_tag
+
+            warn_unknown_tag(produced, self.tag, where, "routes on")
         self.then.accept(self._established(produced), env, f"{where} [then]")
         if self.otherwise is not None:
             self.otherwise.accept(produced, env, f"{where} [otherwise]")
@@ -987,6 +999,10 @@ class PerKey(Node):
         return self.body.validate(env if env is not None else Env())
 
     def accept(self, produced: Any, env: Env, where: str) -> None:
+        if isinstance(self.selector, str):
+            from .types import warn_unknown_tag
+
+            warn_unknown_tag(produced, self.selector, where, "keys on")
         self.body.accept(produced, env, f"{where} [per key]")
 
     def resolve_ports(self, upstream: Node) -> Node:

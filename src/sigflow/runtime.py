@@ -446,10 +446,7 @@ class Runner:
                         frame = _clear_samples(frame)
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
-                if not d.tag_policy.is_default:
-                    frame = _apply_policy(
-                        frame, (received,), d.tag_policy, _declared_names(d)
-                    )
+                frame = _tag_policy(frame, (received,), d, node.out_type)
                 frame = _drop_cleared(frame, node.out_type)
                 if st.watchers or _holding(control, st):
                     if not (frame.data is value and frame.prov is prov):
@@ -1728,8 +1725,8 @@ class Runner:
                 tags=ann["tags"],
             )
             out = _port_tags(out, result, parents)
-        if defn is not None and not defn.tag_policy.is_default:
-            out = _apply_policy(out, parents, defn.tag_policy, _declared_names(defn))
+        if defn is not None:
+            out = _tag_policy(out, parents, defn, out_type)
         out = _drop_cleared(out, out_type)
         # runtime contract check
         checked = self.opts.check == "all" or (
@@ -2076,6 +2073,84 @@ def _check_required(in_type: Any, frame: Frame, where: str) -> None:
             f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
         )
     _check_tag_values(in_type, frame, where, prefix="runtime check failed: ")
+
+
+def _has_port_policies(out_type: Any) -> bool:
+    from .types import TupleType
+
+    return isinstance(out_type, TupleType) and any(
+        getattr(t, "carry", None) is not None for t in out_type.items
+    )
+
+
+def _tag_policy(
+    frame: Frame, parents: tuple[Frame, ...], defn: Any, out_type: Any
+) -> Frame:
+    """A block's propagation: per port when its tuple output has ``carries(...)``
+    ports (the others follow the block's policy), else the block's policy."""
+    declared = _declared_names(defn)
+    if _has_port_policies(out_type):
+        return _port_policies(frame, parents, out_type, declared, defn.tag_policy)
+    if defn.tag_policy.is_default:
+        return frame
+    return _apply_policy(frame, parents, defn.tag_policy, declared)
+
+
+def _port_policies(
+    frame: Frame,
+    parents: tuple[Frame, ...],
+    out_type: Any,
+    declared: frozenset[str],
+    default: Any = None,
+) -> Frame:
+    """Apply the per-port policies (``carries(...)``) of a tuple output: each port's
+    part passes on, of the tags it inherited, what its own policy (or the block's,
+    ``default``) allows; the tuple frame keeps a tag while a part still carries it,
+    or if no part ever did."""
+    from .types import TupleType
+
+    if not isinstance(out_type, TupleType):
+        return frame
+    policies = [getattr(t, "carry", None) or default for t in out_type.items]
+    if all(p is None or p.is_default for p in policies):
+        return frame
+    n = len(out_type.items)
+    parts = frame.parts
+    if not parts and isinstance(frame.data, tuple) and len(frame.data) == n:
+        parts = tuple(
+            Frame(
+                d,
+                frame.meta,
+                frame.stream,
+                {},
+                frame.issues,
+                frame.prov,
+                tags=frame.tags,
+            )
+            for d in frame.data
+        )
+    if len(parts) != n:
+        return frame
+    inputs = parents[0].parts if len(parents) == 1 and parents[0].parts else ()
+    new = tuple(
+        _apply_policy(
+            part,
+            (inputs[i],) if len(inputs) == n else parents,
+            pol,
+            declared,
+        )
+        if pol is not None and not pol.is_default
+        else part
+        for i, (part, pol) in enumerate(zip(parts, policies))
+    )
+    before = frozenset().union(*(p.tags.names for p in parts))
+    after = frozenset().union(*(p.tags.names for p in new))
+    gone = before - after
+    from dataclasses import replace
+
+    return replace(
+        frame, parts=new, tags=Tags(t for t in frame.tags if t.name not in gone)
+    )
 
 
 def _declared_names(defn: Any) -> frozenset[str]:

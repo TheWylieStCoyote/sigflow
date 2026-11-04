@@ -19,6 +19,7 @@ from sigflow import (
     TypeMismatch,
     accepts,
     block,
+    carries,
     clears,
     drop,
     from_iterable,
@@ -29,7 +30,10 @@ from sigflow import (
     run,
 )
 from sigflow.dims import N
-from sigflow.types import tag_type_ok
+from sigflow.types import TagWarning, tag_type_ok
+
+# these tests are about types and policies; the warnings have tests of their own
+pytestmark = pytest.mark.filterwarnings("ignore::sigflow.types.TagWarning")
 
 
 def source(frames: int = 3, **tags):
@@ -293,3 +297,135 @@ def test_policy_options_are_validated_and_survive_bind():
 
     bound = b.bind(gain=2.0)
     assert bound.tag_policy == b.tag_policy
+
+
+# ------------------------------------------------------------------ warnings
+
+
+def declared(*provided: str, maybe: tuple[str, ...] = ()):
+    t = SignalType(float, (N,)).provides(*provided)
+    if maybe:
+        t = t.may_provide(*maybe)
+    return from_iterable([], type=t)
+
+
+@pytest.mark.filterwarnings("error::sigflow.types.TagWarning")
+def test_accepting_a_tag_nothing_can_supply_warns():
+    @block
+    def reads(x: Annotated[Sig[float, N], accepts("snr_db")]) -> Sig[float, N]:
+        return x
+
+    with pytest.warns(TagWarning, match="accepts tag 'snr_db', which nothing upstream"):
+        _ = declared("synced") >> reads
+    _ = declared("synced", maybe=("snr_db",)) >> reads  # may arrive: fine
+    _ = declared("snr_db") >> reads  # guaranteed: fine
+    _ = from_iterable([]) >> reads  # a source that says nothing about tags: gradual
+
+
+@pytest.mark.filterwarnings("error::sigflow.types.TagWarning")
+def test_may_provide_travels_downstream_under_the_policy():
+    @block
+    def crc(
+        f: Framed[Sig[float, N]],
+    ) -> Annotated[Sig[float, N], may_provide("crc_fail")]:
+        return f
+
+    @block
+    def ident(x: Sig[float, N]) -> Sig[float, N]:
+        return x
+
+    @block(tags="none")
+    def forget(x: Sig[float, N]) -> Sig[float, N]:
+        return x
+
+    @block
+    def reads(x: Annotated[Sig[float, N], accepts("crc_fail")]) -> Sig[float, N]:
+        return x
+
+    g = declared("synced") >> crc >> ident
+    assert g.out_type.maybe == {"crc_fail"}
+    _ = g >> reads  # two blocks down, still possible
+    gone = declared("synced") >> crc >> forget
+    assert gone.out_type.maybe == frozenset()
+
+
+@pytest.mark.filterwarnings("error::sigflow.types.TagWarning")
+def test_routing_on_a_tag_nothing_can_supply_warns():
+    from sigflow import dsp, when
+
+    with pytest.warns(TagWarning, match="routes on tag 'speech'"):
+        _ = declared("synced") >> when("speech", then=dsp.scale(gain=1.0))
+    _ = declared("synced", maybe=("speech",)) >> when(
+        "speech", then=dsp.scale(gain=1.0)
+    )
+
+
+@pytest.mark.filterwarnings("error::sigflow.types.TagWarning")
+def test_per_key_checks_its_key():
+    from sigflow import dsp, per_key
+
+    with pytest.warns(TagWarning, match="keys on tag 'track', which nothing upstream"):
+        _ = declared("synced") >> per_key("track", dsp.scale(gain=1.0))
+    with pytest.warns(TagWarning, match="only may provide: frames without it pass"):
+        _ = declared("synced", maybe=("track",)) >> per_key(
+            "track", dsp.scale(gain=1.0)
+        )
+    _ = declared("track") >> per_key("track", dsp.scale(gain=1.0))
+    _ = from_iterable([]) >> per_key("track", dsp.scale(gain=1.0))  # says nothing
+
+
+# ------------------------------------------------------------------ per port, surfacing
+
+
+def test_a_port_with_its_own_policy():
+    @block
+    def split(
+        x: Sig[float, N],
+    ) -> tuple[Annotated[Sig[float, N], carries("none")], Sig[float, N]]:
+        return x, x
+
+    g = tagged() >> split
+    assert [set(i.meta) for i in g.out_type.items] == [set(), {"raw", "calibrated"}]
+    out = run(g, check="all", on_error="raise")[0]
+    assert out[0].tags.names == set() and out[1].tags.names == {
+        "raw",
+        "calibrated",
+        "note",
+    }
+    assert out.tags.names == {"raw", "calibrated", "note"}  # a part still carries them
+
+    @block(tags="none")
+    def quiet_but_one(
+        x: Sig[float, N],
+    ) -> tuple[Sig[float, N], Annotated[Sig[float, N], carries(keep("calibrated"))]]:
+        return x, x
+
+    out = run(tagged() >> quiet_but_one, check="all", on_error="raise")[0]
+    assert out[0].tags.names == set() and out[1].tags.names == {"calibrated"}
+    assert out.tags.names == {"calibrated"}
+
+
+def test_describe_and_the_report_show_contracts_and_policies():
+    @block(tags=keep("calibrated"), spans="drop")
+    def reads(
+        f: Framed[Annotated[Sig[float, N], requires("raw"), accepts(snr=float)]],
+    ) -> Annotated[Sig[float, N], provides(level=float), may_provide("crc")]:
+        return f.tag(level=1.0)
+
+    g = tagged() >> reads
+    assert "[tags=keep(calibrated), spans=drop]" in g.describe()
+    from sigflow.notebook import tag_contracts
+
+    assert tag_contracts(g) == [
+        (
+            "reads",
+            "requires raw; accepts snr: float",
+            "provides level: float; may provide crc",
+            "tags=keep(calibrated), spans=drop",
+        )
+    ]
+    handle = g.start(paused=True)
+    handle.resume()
+    handle.wait()
+    page = handle.report().html
+    assert "Tag contracts" in page and "may provide crc" in page
