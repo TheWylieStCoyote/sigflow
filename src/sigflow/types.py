@@ -40,17 +40,24 @@ __all__ = [
     "SignalType",
     "Stream",
     "StreamType",
+    "TagPolicy",
     "TagSpec",
     "Tensor",
     "TupleType",
     "TypeMismatch",
     "Vector",
+    "accepted_names",
+    "accepts",
     "carry_from",
     "carry_tags",
     "cleared_names",
     "clears",
     "describe",
+    "drop",
+    "inherited_under",
     "is_signal_type",
+    "keep",
+    "may_provide",
     "narrow",
     "provides",
     "requires",
@@ -58,6 +65,8 @@ __all__ = [
     "scoped",
     "slice_shape",
     "tag_names",
+    "tag_type_ok",
+    "tag_types_of",
     "unify",
 ]
 
@@ -298,6 +307,11 @@ class SignalType:
     units: str | None = None
     meta: frozenset[str] = field(default_factory=frozenset)
     cleared: frozenset[str] = field(default_factory=frozenset)
+    optional: frozenset[str] = field(
+        default_factory=frozenset
+    )  # accepts(): read if present
+    maybe: frozenset[str] = field(default_factory=frozenset)  # sometimes attached
+    tag_types: frozenset[tuple[str, Any]] = field(default_factory=frozenset)
 
     # -- construction ------------------------------------------------------ #
     def __class_getitem__(cls, params: Any) -> SignalType:
@@ -346,15 +360,26 @@ class SignalType:
 
         return replace(self, **changes)
 
-    def requires(self, *names: str) -> SignalType:
+    def requires(self, *names: str, **types: Any) -> SignalType:
         """As an input contract: frames must carry these tags (checked when the
-        graph is built against what the producer guarantees, and at run time)."""
-        return self.with_(meta=self.meta | frozenset(names))
+        graph is built against what the producer guarantees, and at run time).
+        ``requires("synced", track=int)`` also types a tag's value."""
+        return requires(*names, **types).apply(self)
 
-    def provides(self, *names: str) -> SignalType:
+    def provides(self, *names: str, **types: Any) -> SignalType:
         """As an output contract: frames carry these tags (the block must attach
-        them; checked at run time like the rest of the contract)."""
-        return self.with_(meta=self.meta | frozenset(names))
+        them; checked at run time like the rest of the contract), typed by keyword."""
+        return provides(*names, **types).apply(self)
+
+    def accepts(self, *names: str, **types: Any) -> SignalType:
+        """As an input contract: tags the block reads when they are there; never
+        required, but a present one with a value of the wrong type is refused."""
+        return accepts(*names, **types).apply(self)
+
+    def may_provide(self, *names: str, **types: Any) -> SignalType:
+        """As an output contract: tags the block sometimes attaches; not guaranteed,
+        typed when present."""
+        return may_provide(*names, **types).apply(self)
 
     def clears(self, *names: str) -> SignalType:
         """As an output contract: these input tags are not carried on."""
@@ -415,7 +440,13 @@ class SignalType:
 
     # -- display ----------------------------------------------------------- #
     def __str__(self) -> str:
-        if self.is_any and not self.meta and not self.cleared:
+        if (
+            self.is_any
+            and not self.meta
+            and not self.cleared
+            and not self.optional
+            and not self.maybe
+        ):
             return "Sig[Any]"
         parts = [_dn(self.dtype)]
         if self.shape is not None or self.rate is not None or self.units is not None:
@@ -435,10 +466,20 @@ class SignalType:
         if self.units is not None:
             parts.append(repr(self.units))
         if self.meta:
-            parts.append("tags=" + "|".join(sorted(self.meta)))
+            parts.append("tags=" + "|".join(sorted(self._typed_names(self.meta))))
+        if self.optional:
+            parts.append(
+                "accepts=" + "|".join(sorted(self._typed_names(self.optional)))
+            )
+        if self.maybe:
+            parts.append("maybe=" + "|".join(sorted(self._typed_names(self.maybe))))
         if self.cleared:
             parts.append("clears=" + "|".join(sorted(self.cleared)))
         return "Sig[" + ", ".join(parts) + "]"
+
+    def _typed_names(self, names: frozenset[str]) -> list[str]:
+        types = dict(self.tag_types)
+        return [f"{n}:{_type_name(types[n])}" if n in types else n for n in names]
 
     __repr__ = __str__
 
@@ -540,12 +581,16 @@ def is_signal_type(obj: Any) -> bool:
 
 @dataclass(frozen=True)
 class TagSpec:
-    """What :func:`requires`, :func:`provides` and :func:`clears` put inside an
-    ``Annotated[...]`` contract: tag names to add to the contract's guarantees (or
-    requirements) and tag names it clears."""
+    """What :func:`requires`, :func:`accepts`, :func:`provides`, :func:`may_provide`
+    and :func:`clears` put inside an ``Annotated[...]`` contract: tag names
+    required or guaranteed (``meta``), read if present (``accepts``), sometimes
+    attached (``maybe``), cleared, and value types for any of them."""
 
     meta: frozenset[str] = frozenset()
     cleared: frozenset[str] = frozenset()
+    optional: frozenset[str] = frozenset()
+    maybe: frozenset[str] = frozenset()
+    tag_types: frozenset[tuple[str, Any]] = frozenset()
 
     def apply(self, t: Any) -> Any:
         if isinstance(t, TupleType):
@@ -554,19 +599,117 @@ class TagSpec:
             return StreamType(self.apply(t.item))
         if not isinstance(t, SignalType):
             return t
-        return t.with_(meta=t.meta | self.meta, cleared=t.cleared | self.cleared)
+        return t.with_(
+            meta=t.meta | self.meta,
+            cleared=t.cleared | self.cleared,
+            optional=t.optional | self.optional,
+            maybe=t.maybe | self.maybe,
+            tag_types=_merge_types(t.tag_types, self.tag_types),
+        )
 
 
-def requires(*names: str) -> TagSpec:
+def _typed(types: dict[str, Any]) -> frozenset[tuple[str, Any]]:
+    for name, typ in types.items():
+        ok = isinstance(typ, type) or (
+            isinstance(typ, tuple)
+            and bool(typ)
+            and all(isinstance(t, type) for t in typ)
+        )
+        if not ok:
+            raise TypeError(
+                f"tag {name!r}: a value type is a class or a tuple of classes"
+            )
+    return frozenset(types.items())
+
+
+def _merge_types(
+    a: frozenset[tuple[str, Any]], b: frozenset[tuple[str, Any]]
+) -> frozenset[tuple[str, Any]]:
+    """Value types from both; on the same name, ``b`` wins."""
+    merged = dict(a)
+    merged.update(dict(b))
+    return frozenset(merged.items())
+
+
+def _type_name(typ: Any) -> str:
+    if isinstance(typ, tuple):
+        return "|".join(_type_name(t) for t in typ)
+    return getattr(typ, "__name__", repr(typ))
+
+
+def tag_type_ok(value_or_type: Any, typ: Any, is_type: bool = False) -> bool:
+    """Whether a tag value (or, with ``is_type``, a declared type) satisfies ``typ``:
+    like ``isinstance`` / ``issubclass``, with numeric widening (int -> float ->
+    complex, bool excluded) and Enum classes matched by member value (a tag stores
+    an enum member as its value)."""
+    import enum
+    import numbers
+
+    alts = typ if isinstance(typ, tuple) else (typ,)
+    for t in alts:
+        if t is object:
+            return True
+        if is_type:
+            got = (
+                value_or_type if isinstance(value_or_type, tuple) else (value_or_type,)
+            )
+            if all(_subtype(g, t) for g in got):
+                return True
+            continue
+        v = value_or_type
+        if isinstance(t, type) and issubclass(t, enum.Enum):
+            if isinstance(v, t) or v in {m.value for m in t}:
+                return True
+            continue
+        if isinstance(v, bool) and t not in (bool, int):
+            continue
+        if isinstance(v, t):
+            return True
+        if t is float and isinstance(v, numbers.Integral) and not isinstance(v, bool):
+            return True
+        if t is complex and isinstance(v, numbers.Real) and not isinstance(v, bool):
+            return True
+    return False
+
+
+def _subtype(got: Any, want: Any) -> bool:
+    if got is want or (want is float and got is int):
+        return True
+    if want is complex and got in (int, float):
+        return True
+    try:
+        return issubclass(got, want)
+    except TypeError:
+        return False
+
+
+def requires(*names: str, **types: Any) -> TagSpec:
     """Checker-legible tag requirement for an input contract:
-    ``x: Annotated[Sig[float, N], requires("speech")]``."""
-    return TagSpec(meta=frozenset(names))
+    ``x: Annotated[Sig[float, N], requires("speech", track=int)]``: the tags must
+    be there, and ``track``'s value must be an int."""
+    return TagSpec(meta=frozenset(names) | frozenset(types), tag_types=_typed(types))
 
 
-def provides(*names: str) -> TagSpec:
+def accepts(*names: str, **types: Any) -> TagSpec:
+    """Checker-legible optional tags for an input contract:
+    ``x: Annotated[Sig[float, N], accepts("snr_db", clipped=bool)]``: read when
+    they are there, never required; a present one must have the declared type."""
+    return TagSpec(
+        optional=frozenset(names) | frozenset(types), tag_types=_typed(types)
+    )
+
+
+def provides(*names: str, **types: Any) -> TagSpec:
     """Checker-legible tag guarantee for an output contract:
-    ``-> Annotated[Sig[float, N], provides("speech")]``."""
-    return TagSpec(meta=frozenset(names))
+    ``-> Annotated[Sig[float, N], provides("speech", level=float)]``."""
+    return TagSpec(meta=frozenset(names) | frozenset(types), tag_types=_typed(types))
+
+
+def may_provide(*names: str, **types: Any) -> TagSpec:
+    """Checker-legible conditional tags for an output contract:
+    ``-> Annotated[Sig[float, N], may_provide("crc_fail")]``: sometimes attached,
+    never guaranteed; typed when present."""
+    return TagSpec(maybe=frozenset(names) | frozenset(types), tag_types=_typed(types))
 
 
 def clears(*names: str) -> TagSpec:
@@ -679,6 +822,14 @@ def unify(produced: Any, required: Any, env: Env | None = None, where: str = "")
         raise TypeMismatch(
             f"{where}: needs tag(s) {'|'.join(sorted(missing))}, producer guarantees {have}"
         )
+    if required.tag_types and produced.tag_types:
+        made = dict(produced.tag_types)
+        for name, want in required.tag_types:
+            got = made.get(name)
+            if got is not None and not tag_type_ok(got, want, is_type=True):
+                raise TypeMismatch(
+                    f"{where}: tag {name!r} is {_type_name(got)}, needs {_type_name(want)}"
+                )
 
     if required.shape is not None and produced.shape is not None:
         if len(produced.shape) != len(required.shape):
@@ -755,6 +906,7 @@ def narrow(produced: Any, required: Any, where: str = "") -> Any:
             p.rate if p.rate is not None else r.rate,
             p.units if p.units is not None else r.units,
             p.meta | r.meta,
+            tag_types=_merge_types(r.tag_types, p.tag_types),
         )
 
     return merge(produced, required)
@@ -803,7 +955,120 @@ def cleared_names(t: Any) -> frozenset[str]:
     return t.cleared if isinstance(t, SignalType) else frozenset()
 
 
-def carry_from(out: Any, produced: Any) -> Any:
+def tag_types_of(t: Any) -> frozenset[tuple[str, Any]]:
+    """Every declared tag value type in a contract, across tuple items."""
+    if isinstance(t, TupleType):
+        out: frozenset[tuple[str, Any]] = frozenset()
+        for i in t.items:
+            out = _merge_types(out, tag_types_of(i))
+        return out
+    if isinstance(t, StreamType):
+        return tag_types_of(t.item)
+    return t.tag_types if isinstance(t, SignalType) else frozenset()
+
+
+def accepted_names(t: Any) -> frozenset[str]:
+    """Every tag name a contract reads if present, across tuple items."""
+    if isinstance(t, TupleType):
+        return frozenset().union(*(accepted_names(i) for i in t.items))
+    if isinstance(t, StreamType):
+        return accepted_names(t.item)
+    return t.optional if isinstance(t, SignalType) else frozenset()
+
+
+@dataclass(frozen=True)
+class TagPolicy:
+    """How a block passes on the tags its input frames carry (``@block(tags=...)``):
+    ``mode`` is ``"carry"`` (all of them, the default), ``"none"``, ``"declared"``
+    (those its input contract requires or accepts), ``"keep"`` or ``"drop"`` (with
+    ``names``); ``spans="drop"`` drops inherited spanned tags; ``merge`` combines
+    several input frames: ``"union"``, ``"intersection"`` or ``"first"``. Tags the
+    block attaches itself are never filtered."""
+
+    mode: str = "carry"
+    names: frozenset[str] = frozenset()
+    spans: str = "carry"
+    merge: str = "union"
+
+    def __post_init__(self) -> None:
+        if self.mode not in ("carry", "none", "declared", "keep", "drop"):
+            raise ValueError(
+                "tags= is 'carry', 'none', 'declared', keep(...) or drop(...)"
+            )
+        if self.spans not in ("carry", "drop"):
+            raise ValueError("spans= is 'carry' or 'drop'")
+        if self.merge not in ("union", "intersection", "first"):
+            raise ValueError("merge= is 'union', 'intersection' or 'first'")
+
+    @property
+    def is_default(self) -> bool:
+        return self.mode == "carry" and self.spans == "carry" and self.merge == "union"
+
+    def passes(self, name: str, declared: frozenset[str]) -> bool:
+        """Whether an inherited tag of this name is carried on."""
+        if self.mode == "carry":
+            return True
+        if self.mode == "none":
+            return False
+        if self.mode == "declared":
+            return name in declared
+        if self.mode == "keep":
+            return name in self.names
+        return name not in self.names  # drop
+
+    def combine(self, groups: list[frozenset[str]]) -> frozenset[str]:
+        """The names several inputs pass on together, by ``merge``."""
+        if not groups:
+            return frozenset()
+        if self.merge == "first":
+            return groups[0]
+        if self.merge == "intersection":
+            return frozenset.intersection(*groups)
+        return frozenset().union(*groups)
+
+    @staticmethod
+    def of(
+        tags: Any = "carry", spans: str = "carry", merge: str = "union"
+    ) -> TagPolicy:
+        if isinstance(tags, TagPolicy):
+            return TagPolicy(tags.mode, tags.names, spans, merge)
+        return TagPolicy(str(tags), frozenset(), spans, merge)
+
+
+def keep(*names: str) -> TagPolicy:
+    """A propagation policy carrying only these inherited tags:
+    ``@block(tags=keep("calibrated"))``."""
+    return TagPolicy("keep", frozenset(names))
+
+
+def drop(*names: str) -> TagPolicy:
+    """A propagation policy carrying every inherited tag but these:
+    ``@block(tags=drop("raw"))``."""
+    return TagPolicy("drop", frozenset(names))
+
+
+def inherited_under(
+    policy: TagPolicy | None, groups: list[Any], declared_in: Any = None
+) -> tuple[frozenset[str], frozenset[tuple[str, Any]]]:
+    """What a block carries from the contracts ``groups`` (one per input) under
+    ``policy``: the tag names and their value types."""
+    policy = policy or TagPolicy()
+    names = policy.combine([tag_names(g) for g in groups])
+    declared = (
+        tag_names(declared_in) | accepted_names(declared_in)
+        if declared_in is not None
+        else frozenset()
+    )
+    names = frozenset(n for n in names if policy.passes(n, declared))
+    types: frozenset[tuple[str, Any]] = frozenset()
+    for g in groups:
+        types = _merge_types(types, tag_types_of(g))
+    return names, frozenset((n, t) for n, t in types if n in names)
+
+
+def carry_from(
+    out: Any, produced: Any, policy: TagPolicy | None = None, declared_in: Any = None
+) -> Any:
     """``out`` once it carries what ``produced`` guarantees: port by port when both
     are tuples of the same length (a tuple-to-tuple block keeps each port's tags to
     itself), else everything the producer guarantees onto every output."""
@@ -813,22 +1078,44 @@ def carry_from(out: Any, produced: Any) -> Any:
         and len(out.items) == len(produced.items)
     ):
         return TupleType(
-            tuple(carry_from(o, p) for o, p in zip(out.items, produced.items))
+            tuple(
+                carry_from(o, p, policy, declared_in)
+                for o, p in zip(out.items, produced.items)
+            )
         )
-    return carry_tags(out, tag_names(produced))
+    groups = (
+        list(produced.items)
+        if isinstance(produced, TupleType)
+        and policy is not None
+        and policy.merge != "union"
+        else [produced]
+    )
+    names, types = inherited_under(policy, groups, declared_in)
+    return carry_tags(out, names, types)
 
 
-def carry_tags(out: Any, inherited: frozenset[str]) -> Any:
+def carry_tags(
+    out: Any,
+    inherited: frozenset[str],
+    types: frozenset[tuple[str, Any]] = frozenset(),
+) -> Any:
     """A block's output contract once the tags its inputs carry are added, minus
-    those it clears: what a consumer can rely on."""
+    those it clears: what a consumer can rely on. ``types`` are the inherited tags'
+    value types; the block's own declarations win."""
     if isinstance(out, TupleType):
-        return TupleType(tuple(carry_tags(i, inherited) for i in out.items))
+        return TupleType(tuple(carry_tags(i, inherited, types) for i in out.items))
     if isinstance(out, StreamType):
-        return StreamType(carry_tags(out.item, inherited))
+        return StreamType(carry_tags(out.item, inherited, types))
     if not isinstance(out, SignalType):
         return out
-    carried = out.meta | (inherited - out.cleared)
-    return out if carried == out.meta else out.with_(meta=carried)
+    passed = inherited - out.cleared
+    carried = out.meta | passed
+    typed = _merge_types(
+        frozenset((n, t) for n, t in types if n in passed), out.tag_types
+    )
+    if carried == out.meta and typed == out.tag_types:
+        return out
+    return out.with_(meta=carried, tag_types=typed)
 
 
 def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:

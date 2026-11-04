@@ -183,7 +183,11 @@ because they would be meaningless otherwise. Tags are united at joins, clipped
 to each frame's window when a stream is re-framed or sliced, and record the
 block that attached them. A contract can require, provide or clear a tag
 (`Annotated[Sig[float, N], requires("speech")]`); requirements are checked
-against the producer's guarantees when the graph is built.
+against the producer's guarantees when the graph is built. `accepts(...)`
+names tags an input reads if they are there, `may_provide(...)` tags an output
+sometimes attaches, and each takes value types (`requires(track=int)`).
+`@block(tags="none" | "declared" | keep(...) | drop(...), spans=, merge=)` sets
+what a block passes on of the tags it receives.
 
 Errors are first-class data, not control flow. When a map block raises, the
 runtime attaches an error `Issue` (with the exception and the provenance node

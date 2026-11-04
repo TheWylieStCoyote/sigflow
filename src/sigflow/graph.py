@@ -326,7 +326,10 @@ class Block(Node):
         # Tags the producer guarantees reach the output unless the contract clears
         # them; start from the declared output so an earlier placement's tags go.
         out_type = carry_from(
-            _declared_tags(out_type, self.defn.out_type), upstream.out_type
+            _declared_tags(out_type, self.defn.out_type),
+            upstream.out_type,
+            self.defn.tag_policy,
+            self.defn.in_type,
         )
         if self.in_type == in_type and self.out_type == out_type:
             return self
@@ -415,7 +418,9 @@ def _declared_tags(t: Any, declared: Any) -> Any:
     if isinstance(t, StreamType) and isinstance(declared, StreamType):
         return StreamType(_declared_tags(t.item, declared.item))
     if isinstance(t, SignalType) and isinstance(declared, SignalType):
-        return t if t.meta == declared.meta else t.with_(meta=declared.meta)
+        if t.meta == declared.meta and t.tag_types == declared.tag_types:
+            return t
+        return t.with_(meta=declared.meta, tag_types=declared.tag_types)
     return t
 
 

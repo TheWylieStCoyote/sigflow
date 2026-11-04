@@ -75,10 +75,34 @@ def asr(
 - `requires(name)` on an input: frames must carry the tag. It is checked when
   the graph is built, against what the producer *guarantees*, and at run time
   with the other checks.
+- `accepts(name)` on an input: the block reads the tag when it is there. It
+  is never required, so a producer that does not provide it is fine.
 - `provides(name)` on an output: the block attaches the tag. The promise is
   checked at run time like the output's dtype and shape.
+- `may_provide(name)` on an output: the block sometimes attaches the tag. It
+  guarantees nothing, but it says what downstream blocks may look for.
 - `clears(name)` on an output: the tag is not carried on; the runtime drops
   it from the block's output frames.
+
+Each of the first four also takes **value types** by keyword:
+
+```python
+@block
+def demod(
+    x: Annotated[Sig[complex, N], requires("synced", track=int), accepts(snr_db=float)],
+) -> Annotated[Sig[int, N], provides(bits=int), may_provide(crc_fail=bool)]: ...
+```
+
+A type is a class or a tuple of classes, checked like `isinstance`, with
+numeric widening (an `int` satisfies `float`) and `Enum` classes matched by
+member value, since a tag stores an enum member's value. When the graph is
+built, a type the producer declares for a required or accepted tag must fit
+the consumer's (`tag 'track' is str, needs int`); a tag guaranteed without a
+type is accepted and checked at run time. At run time every typed tag on the
+frame is checked, on the input for `requires` and `accepts` and on the output
+for `provides` and `may_provide`, whenever it is present. Guaranteed types
+travel downstream like guaranteed names, so a block that knows nothing of
+`track` still passes its type on.
 
 As values (`inputs=`, `outputs=`, `from_iterable(type=...)`) the same is
 spelled on the type object: `SignalType(float, (N,)).provides("speech")`.
@@ -103,6 +127,27 @@ guarantees none`. This holds through fan-outs, zips, port selection,
 `when`/`switch` branches, reused subgraphs and `Graph` wiring. A source
 declares what its frames carry with
 `from_iterable(..., type=SignalType(float, (N,)).provides("speech"))`.
+
+## Tag propagation
+
+By default a block passes on every tag its input frames carry, minus what it
+clears. A block can choose otherwise:
+
+```python
+@block(tags="none")                     # pass on nothing it inherited
+@block(tags="declared")                 # only tags its input contract requires or accepts
+@block(tags=keep("calibrated", "seq"))  # only these
+@block(tags=drop("raw"))                # all but these
+@block(spans="drop")                    # inherited spanned tags stop here
+@block(merge="intersection")            # several input frames: only tags all of them carry
+```
+
+`merge` decides how the frames feeding one output combine: the parts of a
+tuple input, or the frames a stream block consumed for one output. It is
+`"union"` by default, `"intersection"` or `"first"`. The policy shapes what an
+output guarantees when the graph is built and what an output frame carries at
+run time, in the same way. Tags the block attaches itself are never filtered
+by it, and `clears(...)` still applies on top.
 
 ## Ports
 

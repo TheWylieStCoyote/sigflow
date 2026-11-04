@@ -49,11 +49,12 @@ from .frame import Frame
 from .types import (
     SignalType,
     StreamType,
+    TagPolicy,
     TupleType,
     as_type,
     carry_tags,
+    inherited_under,
     is_signal_type,
-    tag_names,
 )
 
 __all__ = ["BlockDef", "Framed", "InputSpec", "block", "lift", "source", "tap"]
@@ -199,10 +200,14 @@ class BlockDef:
         ratio: Any = None,
         labels: bool | None = None,
         preserve_type: bool = False,
+        tags: Any = "carry",
+        spans: str = "carry",
+        merge: str = "union",
     ) -> None:
         self.fn = fn
         self.labels = labels  # None: follow the run (or sigflow.default_labels())
         self.preserve_type = preserve_type
+        self.tag_policy = TagPolicy.of(tags, spans, merge)
         self.refine = refine
         self.total = total
         self.ratio_spec = ratio  # see sigflow.ratio: "1:1", "N:1", (4, 1), callable
@@ -263,12 +268,13 @@ class BlockDef:
         if tap:
             self.out_type = self.in_type
         elif self.inputs:
-            # tags the inputs carry reach the output unless the contract clears them
-            inherited = frozenset().union(
-                *(tag_names(spec.type) for spec in self.inputs)
+            # tags the inputs carry reach the output under the block's policy,
+            # unless the contract clears them
+            inherited, types = inherited_under(
+                self.tag_policy, [spec.type for spec in self.inputs], self.in_type
             )
             if inherited:
-                self.out_type = carry_tags(self.out_type, inherited)
+                self.out_type = carry_tags(self.out_type, inherited, types)
 
         # by default sample-level annotations survive a map block only if the
         # declared output shape has the same leading dimension as the input
@@ -457,6 +463,9 @@ class BlockDef:
             tap=self.tap,
             labels=self.labels,
             preserve_type=self.preserve_type,
+            tags=TagPolicy(self.tag_policy.mode, self.tag_policy.names),
+            spans=self.tag_policy.spans,
+            merge=self.tag_policy.merge,
             doc=self.__doc__,
             refine=self.refine,
             total=self.total,
@@ -628,6 +637,16 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       carries its input's tags. As values (``inputs=``,
                       ``outputs=``, ``from_iterable(type=)``) the same is spelled
                       ``SignalType(...).requires(...)`` / ``.provides`` / ``.clears``
+        tags:         what the block passes on of the tags its input frames carry:
+                      ``"carry"`` (all, the default), ``"none"`` (only what it
+                      attaches itself), ``"declared"`` (those its input contract
+                      requires or accepts), ``keep("a", ...)`` or
+                      ``drop("a", ...)``. Tags it attaches are never filtered;
+                      ``clears(...)`` still applies
+        spans:        ``"drop"``: inherited spanned tags are not passed on
+        merge:        several input frames feeding one output (the parts of a tuple
+                      input, the frames a stream block consumed): ``"union"`` of
+                      their tags (default), ``"intersection"`` or ``"first"``
         preserve_type: a single-input map block that returns what it was given,
                       as far as the contract is concerned (a CPU/GPU transfer):
                       placed after a producer, its input and output contract

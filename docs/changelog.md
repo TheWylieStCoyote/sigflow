@@ -92,6 +92,14 @@ New
   editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
   `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which
   also works with a blocking `run(g, monitor=mon)`.
+- Tag contracts in signatures: `accepts(...)` declares tags an input reads when
+  present, `may_provide(...)` tags an output sometimes attaches, and
+  `requires` / `accepts` / `provides` / `may_provide` take value types by
+  keyword (`requires(track=int)`), checked when the graph is built against the
+  producer's declarations and at run time on the frame. A block's propagation
+  policy is `@block(tags="carry" | "none" | "declared" | keep(...) | drop(...),
+  spans="carry" | "drop", merge="union" | "intersection" | "first")`, applied
+  statically and at run time. The plan is in `design/tag-contracts.md`.
 - Live diagram: `run.diagram()` displays the graph's diagram refreshed while a
   background run goes, with frames in and out on every block, errors in red, a
   state colour on the border and frame counts on the edges;

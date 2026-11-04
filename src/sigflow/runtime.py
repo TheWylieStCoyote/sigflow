@@ -436,6 +436,7 @@ class Runner:
                     node.name, {**node.config, **cfg}, (prov,) if prov else (), seqs[i]
                 )
                 seqs[i] += 1
+                received = frame
                 if isinstance(result, Frame):
                     frame = _stamp_tags(result.evolve(prov=prov), node.name, (frame,))
                     value = result.data
@@ -445,6 +446,10 @@ class Runner:
                         frame = _clear_samples(frame)
                     if d.framed or i == len(nodes) - 1:
                         frame = frame.evolve(data=value, prov=prov)
+                if not d.tag_policy.is_default:
+                    frame = _apply_policy(
+                        frame, (received,), d.tag_policy, _declared_names(d)
+                    )
                 frame = _drop_cleared(frame, node.out_type)
                 if st.watchers or _holding(control, st):
                     if not (frame.data is value and frame.prov is prov):
@@ -1208,6 +1213,7 @@ class Runner:
                 node.out_type,
                 stats,
                 keep_samples=d.keep_samples,
+                defn=d,
             )  # provenance records the values used
             seq += 1
             kept = await self._held(stats, out)
@@ -1297,6 +1303,7 @@ class Runner:
                         node.out_type,
                         stats,
                         keep_samples=False,
+                        defn=d,
                     )
                     seq += 1
                     kept = await self._held(stats, produced)
@@ -1330,6 +1337,7 @@ class Runner:
                         node.out_type,
                         stats,
                         keep_samples=False,
+                        defn=d,
                     )
                     seq += 1
                     kept = await self._held(stats, produced)
@@ -1528,6 +1536,7 @@ class Runner:
                     inner.out_type,
                     stats,
                     keep_samples=d.keep_samples,
+                    defn=d,
                 )
                 seq += 1
                 kept = await self._held(stats, out)
@@ -1699,6 +1708,7 @@ class Runner:
         out_type: Any,
         stats: Any,
         keep_samples: bool = False,
+        defn: Any = None,
     ) -> Frame:
         prov = Provenance(op, params, tuple(p.prov for p in parents if p.prov), seq)
         if isinstance(result, Frame):
@@ -1718,6 +1728,8 @@ class Runner:
                 tags=ann["tags"],
             )
             out = _port_tags(out, result, parents)
+        if defn is not None and not defn.tag_policy.is_default:
+            out = _apply_policy(out, parents, defn.tag_policy, _declared_names(defn))
         out = _drop_cleared(out, out_type)
         # runtime contract check
         checked = self.opts.check == "all" or (
@@ -2021,6 +2033,26 @@ def _check_tags(out_type: Any, frame: Frame, where: str) -> None:
             f"{where}: contract guarantees tag(s) {'|'.join(sorted(missing))}, "
             f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
         )
+    _check_tag_values(out_type, frame, where)
+
+
+def _check_tag_values(t: Any, frame: Frame, where: str, prefix: str = "") -> None:
+    """Every tag the frame carries whose value the contract types must have a value
+    of that type (provided, may-provide, required or accepted alike)."""
+    from .types import _type_name, tag_type_ok, tag_types_of
+
+    types = tag_types_of(t)
+    if not types or not frame.tags:
+        return
+    for name, want in types:
+        if name not in frame.tags:
+            continue
+        value = frame.tags[name]
+        if not tag_type_ok(value, want):
+            raise TypeMismatch(
+                f"{prefix}{where}: tag {name!r} is {value!r} "
+                f"({type(value).__name__}), contract says {_type_name(want)}"
+            )
 
 
 def _check_required(in_type: Any, frame: Frame, where: str) -> None:
@@ -2043,6 +2075,58 @@ def _check_required(in_type: Any, frame: Frame, where: str) -> None:
             f"runtime check failed: {where}: needs tag(s) {'|'.join(sorted(missing))}, "
             f"frame carries {'|'.join(sorted(frame.tags.whole().names)) or 'none'}"
         )
+    _check_tag_values(in_type, frame, where, prefix="runtime check failed: ")
+
+
+def _declared_names(defn: Any) -> frozenset[str]:
+    """The tags a block's input contract requires or accepts."""
+    from .types import accepted_names
+
+    return tag_names(defn.in_type) | accepted_names(defn.in_type)
+
+
+def _checks_input(t: Any) -> bool:
+    """Whether a block's input contract asks anything of the frame's tags."""
+    from .types import tag_types_of
+
+    return bool(tag_names(t)) or bool(tag_types_of(t))
+
+
+def _apply_policy(
+    frame: Frame, parents: tuple[Frame, ...], policy: Any, declared: frozenset[str]
+) -> Frame:
+    """What a block passes on of its inputs' tags (its ``tags=``, ``spans=`` and
+    ``merge=`` options). Tags the block attached itself, those no input frame
+    carried, are kept whatever the policy."""
+    if policy is None or policy.is_default or not frame.tags:
+        return frame
+    inputs = parents[0].parts if len(parents) == 1 and parents[0].parts else parents
+    inherited_ids = {id(t) for p in parents for t in p.tags} | {
+        id(t) for p in inputs for t in p.tags
+    }
+    inherited_names = {t.name for p in parents for t in p.tags} | {
+        t.name for p in inputs for t in p.tags
+    }
+    combined = policy.combine([p.tags.names for p in inputs]) if inputs else frozenset()
+
+    def keeps(t: Any) -> bool:
+        attached = id(t) not in inherited_ids and (
+            t.name not in inherited_names or t.origin != ""
+        )
+        if attached:
+            return True
+        if t.name not in combined:
+            return False
+        if policy.spans == "drop" and t.span is not None:
+            return False
+        return policy.passes(t.name, declared)
+
+    kept = [t for t in frame.tags if keeps(t)]
+    if len(kept) == len(frame.tags):
+        return frame
+    from dataclasses import replace
+
+    return replace(frame, tags=Tags(kept))
 
 
 def _select_frame(f: Frame, node: Select) -> Frame:
