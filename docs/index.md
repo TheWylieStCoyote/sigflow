@@ -591,7 +591,11 @@ first frame, blue when it produced since the last refresh, amber while paused,
 red with errors, green once the run is over); edges carry the count of frames
 that travelled them and a status line sits below. `run.controls(diagram=True)`
 puts it in the control panel, and `g.draw(stats=run.monitor)` is a still of the
-same thing after any run, for a report.
+same thing after any run, for a report. Edges with a queue carry its depth, and
+a full one turns amber, which is backpressure: the block after it is the slow
+one. Blocks show their throughput while the run goes. `g.draw(frame=out[7])`
+draws the path one frame took through the graph, the branch a router sent it
+down, and for a failed frame the block where it broke.
 
 ### Progress and status
 

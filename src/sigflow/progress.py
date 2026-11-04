@@ -32,6 +32,27 @@ class Stats:
 
 
 @dataclass
+class EdgeQueue:
+    """A queue the runtime keeps between two nodes, as the live diagram sees it."""
+
+    queue: Any
+    capacity: int  # 0: unbounded
+    peak: int = 0  # the deepest it has been
+
+    @property
+    def depth(self) -> int:
+        try:
+            return int(self.queue.qsize())
+        except Exception:
+            return 0
+
+    def note(self) -> None:
+        """Called after a put: keep the high-water mark."""
+        n = self.depth
+        self.peak = max(self.peak, n)
+
+
+@dataclass
 class Monitor:
     """Collects live statistics for a run. Pass ``monitor=`` to ``run`` to keep it."""
 
@@ -45,6 +66,7 @@ class Monitor:
     _pending: dict[str, list[Any]] = field(default_factory=dict)  # watchers by name
     _pending_nodes: dict[Any, list[Any]] = field(default_factory=dict)  # by identity
     _pending_holds: dict[str, list[Any]] = field(default_factory=dict)
+    _edges: dict[tuple[Any, Any], EdgeQueue] = field(default_factory=dict)
     _pending_hold_nodes: dict[Any, list[Any]] = field(default_factory=dict)
 
     def stats(self, name: str, node: Any = None) -> Stats:
@@ -68,6 +90,19 @@ class Monitor:
             s.holds.extend(self._pending_holds.pop(shown, ()))
             s.holds.extend(self._pending_hold_nodes.pop(key[1], ()))
         return s
+
+    def edge(self, src: Any, dst: Any, queue: Any) -> EdgeQueue:
+        """Register the queue between the nodes with ids ``src`` and ``dst``."""
+        eq = EdgeQueue(queue, int(getattr(queue, "maxsize", 0) or 0))
+        self._edges[(src, dst)] = eq
+        return eq
+
+    def queue_between(self, src: Any, dst: Any) -> EdgeQueue | None:
+        """The queue from node ``src`` to node ``dst`` (objects or ids), if there is one:
+        edges inside a fused chain of map blocks have none."""
+        a = src if isinstance(src, int) else getattr(src, "id", id(src))
+        b = dst if isinstance(dst, int) else getattr(dst, "id", id(dst))
+        return self._edges.get((a, b))
 
     def hold_at(self, name: str, bp: Any, node: Any = None) -> None:
         """Register a breakpoint on the node shown as ``name`` (or on ``node`` by

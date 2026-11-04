@@ -231,13 +231,15 @@ class Node:
 
         return graph_html(self)
 
-    def draw(self, types: bool = True, stats: Any = None) -> Any:
+    def draw(self, types: bool = True, stats: Any = None, frame: Any = None) -> Any:
         """SVG diagram of the graph (displays inline in Jupyter; ``.save(path)`` to write
         it). With ``stats=run.monitor`` every block carries the frames it took in and put
-        out, its errors and a state colour: a still of what ``run.diagram()`` shows live."""
+        out, its errors, a state colour and each queue's peak depth: a still of what
+        ``run.diagram()`` shows live. With ``frame=`` the path that frame took through
+        the graph stands out, the rest fades, and a failed frame's block is red."""
         from .draw import Diagram
 
-        return Diagram(self, types=types, stats=stats)
+        return Diagram(self, types=types, stats=stats, frame=frame)
 
     def report(self, title: str | None = None, fmt: str = "html") -> str:
         """Documentation of this graph (diagram + typed table + block docstrings); see

@@ -14,6 +14,26 @@ status line. It needs no ipywidgets. `run.controls(diagram=True)` adds the same
 picture to the panel, and `g.draw(stats=run.monitor)` is a still of it after a
 run.
 
+Where the runtime keeps a queue between two blocks, the edge carries a bar of
+its depth against its capacity, and a full queue turns the edge amber: that is
+backpressure, and the block after the edge is the slow one. Queues sit where a
+graph branches or joins (fan-outs, zips, `Graph` wiring); a straight chain of
+map blocks is fused and passes frames along without a queue, so its edges show
+counts only. A queue only backs up when the slow block yields while it works:
+an `async` block, a threaded one, or a process pool. A block that blocks the
+event loop holds everything back with it, and no queue fills. While a run goes
+every block also shows its throughput in frames per second, and a still after
+a run shows each queue's peak depth.
+
+`g.draw(frame=out[7])` draws the path one frame took instead: the blocks and
+edges it passed through stand out with its sequence number at each, everything
+else fades, a router shows the branch it went down, and for a failed frame the
+block where it broke is red. `live.highlight(frame)` does the same on a live
+diagram and `live.highlight(None)` goes back to the counts. The path is found
+by matching the frame's lineage against the graph, so two blocks with the same
+name are told apart by where they sit. With `provenance="roots"` lineage keeps
+only the sources, so the path shows the source and the final block.
+
 `run.probe("fft")` watches one block without editing the graph: `probe.latest`
 is the newest frame the block put out, `probe.history` the recent ones,
 `probe.on(fn)` runs a callback per frame, `probe.plot(plot.spectrum())` feeds

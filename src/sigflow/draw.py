@@ -6,6 +6,7 @@
     print(g.to_dot())        # for `dot -Tpng` or the graphviz Python package
 
     g.draw(stats=run.monitor)   # a still with each block's frame counts and errors
+    g.draw(frame=out[7])        # the path one frame took through the graph
     run.diagram()               # the live picture of a running graph (see LiveDiagram)
 
 Layout is structural: pipelines flow left to right, fan-out / zip / merge
@@ -57,6 +58,9 @@ _STATE = {
     "break": "#7c3aed",  # holding a frame at a breakpoint
 }
 _CAPTION_H = 18  # space under a live diagram for its status line
+_PATH = "#0f172a"  # edges a frame travelled
+_FADED = "0.22"  # opacity of what a frame did not touch
+_FULL = 0.9  # a queue this full is backpressure
 
 
 @dataclass
@@ -85,6 +89,7 @@ class Badge:
     time: float = 0.0
     state: str | None = None
     name: str = ""  # the node's name in the monitor's table
+    rate: float | None = None  # frames out per second since the previous picture
 
 
 @dataclass
@@ -359,11 +364,17 @@ class Diagram:
     live picture of a run (:class:`LiveDiagram`) is this, refreshed."""
 
     def __init__(
-        self, node: Any, types: bool = True, stats: Any = None, live: bool = False
+        self,
+        node: Any,
+        types: bool = True,
+        stats: Any = None,
+        live: bool = False,
+        frame: Any = None,
     ) -> None:
         self.node = node
         self.types = types
         self.monitor = stats
+        self.frame = frame  # draw the path this frame took
         self.live = live or stats is not None
         env = None
         try:
@@ -379,10 +390,88 @@ class Diagram:
 
     @property
     def svg(self) -> str:
+        path = self.path(self.frame) if self.frame is not None else None
         if self.monitor is None:
-            return self.render(None)
+            return self.render(None, path=path, failed_at=_failed_at(self.frame))
         counts = self.counts(self.monitor)
-        return self.render(self.badges(counts, None, "done"), caption=self.caption())
+        return self.render(
+            self.badges(counts, None, "done"),
+            caption=self.caption(),
+            queues=self.queues(self.monitor, peak=True),
+            path=path,
+            failed_at=_failed_at(self.frame),
+        )
+
+    # -- the path of one frame -------------------------------------------- #
+    def path(self, frame: Any) -> dict[int, Any]:
+        """The boxes ``frame`` passed through, each with the lineage record it left
+        there: its lineage matched against the diagram, nearest upstream box first,
+        so two blocks of the same name are told apart by where they sit. Records
+        with no box of their own (a feedback loop's pairs) are looked through."""
+        prov = getattr(frame, "prov", None)
+        if not prov:
+            return {}
+        c = self.cell
+        boxes = {b.id: b for b in c.boxes}
+        preds: dict[int, list[int]] = {}
+        for a, b, _ in c.edges:
+            preds.setdefault(b, []).append(a)
+        memo: dict[tuple[int, int], dict[int, Any] | None] = {}
+
+        def upstream(bid: int) -> list[int]:
+            """Every box upstream of ``bid``, nearest first."""
+            seen: list[int] = []
+            todo = list(preds.get(bid, ()))
+            while todo:
+                a = todo.pop(0)
+                if a not in seen:
+                    seen.append(a)
+                    todo.extend(preds.get(a, ()))
+            return seen
+
+        def match(p: Any, bid: int) -> dict[int, Any] | None:
+            key = (p.id, bid)
+            if key in memo:
+                return memo[key]
+            memo[key] = None  # a cycle (feedback) cannot match through itself
+            if not _same(boxes[bid], p):
+                return None
+            found: dict[int, Any] = {bid: p}
+            for parent in p.parents:
+                link(parent, bid, found, 0)
+            memo[key] = found
+            return found
+
+        def link(parent: Any, bid: int, found: dict[int, Any], depth: int) -> None:
+            for a in upstream(bid):
+                sub = match(parent, a)
+                if sub:
+                    found.update(sub)
+                    return
+            if depth < 8:  # a record with no box: its parents may have one
+                for grand in parent.parents:
+                    link(grand, bid, found, depth + 1)
+
+        best: dict[int, Any] = {}
+        for box in c.boxes:
+            got = match(prov, box.id)
+            if got and len(got) > len(best):
+                best = got
+        return best
+
+    def queues(self, monitor: Any, peak: bool = False) -> dict[tuple[int, int], Any]:
+        """The queue on each drawn edge, by ``(box, box)``, as ``(depth, capacity)``;
+        ``peak`` uses the deepest each has been instead of the depth now."""
+        out: dict[tuple[int, int], Any] = {}
+        boxes = {b.id: b for b in self.cell.boxes}
+        for a, b, _ in self.cell.edges:
+            na, nb = boxes[a].node, boxes[b].node
+            if na is None or nb is None:
+                continue
+            eq = monitor.queue_between(na, nb)
+            if eq is not None:
+                out[(a, b)] = (eq.peak if peak else eq.depth, eq.capacity, eq.peak)
+        return out
 
     # -- live overlay ------------------------------------------------------ #
     def counts(self, monitor: Any) -> dict[int, Badge]:
@@ -433,9 +522,17 @@ class Diagram:
             line += f" · {mon.errors} error{'s' if mon.errors != 1 else ''}"
         return line
 
-    def render(self, badges: dict[int, Badge] | None, caption: str = "") -> str:
+    def render(
+        self,
+        badges: dict[int, Badge] | None,
+        caption: str = "",
+        queues: dict[tuple[int, int], Any] | None = None,
+        path: dict[int, Any] | None = None,
+        failed_at: str | None = None,
+    ) -> str:
         c = self.cell
         m = 16
+        on_path = set(path) if path else set()
         W, H = c.w + 2 * m, c.h + 2 * m + (_CAPTION_H if self.live else 0)
         boxes = {bx.id: bx for bx in c.boxes}
         parts = [
@@ -480,15 +577,35 @@ class Diagram:
             else:
                 d = f"M{x1:.1f},{y1:.1f} C{cx:.1f},{y1:.1f} {cx:.1f},{y2:.1f} {x2:.1f},{y2:.1f}"
                 ly = (y1 + y2) / 2 - 4
+            queue = queues.get((a, b_id)) if queues is not None else None
+            stroke, width, opacity = "#6b7280", 1.4, "1"
+            tip = ""
+            if queue is not None:
+                depth, cap, peak = queue
+                tip = (
+                    f"queue {depth}" + (f" of {cap}" if cap else "") + f", peak {peak}"
+                )
+                if cap and depth >= _FULL * cap:
+                    stroke, width = _STATE["paused"], 2.2  # full: backpressure
+            if path is not None:
+                if a in on_path and b_id in on_path:
+                    stroke, width = _PATH, 2.6
+                else:
+                    opacity = _FADED
             parts.append(
-                f"<path d='{d}' fill='none' stroke='#6b7280' stroke-width='1.4' marker-end='url(#sf-arrow)'/>"
+                f"<path d='{d}' fill='none' stroke='{stroke}' stroke-width='{width}' "
+                f"opacity='{opacity}' marker-end='url(#sf-arrow)'>"
+                + (f"<title>{html.escape(tip)}</title>" if tip else "")
+                + "</path>"
             )
+            if queue is not None and path is None:
+                parts.append(_queue_bar(cx, ly + 15, *queue[:2]))
             if label.startswith("["):
                 parts.append(
                     f"<text x='{cx:.1f}' y='{ly:.1f}' text-anchor='middle' font-size='9' "
                     f"fill='#6b7280'>{html.escape(label)}</text>"
                 )
-            if badges is not None and a in badges and badges[a].out:
+            if badges is not None and a in badges and badges[a].out and path is None:
                 # frames that travelled this edge: what its producer put out
                 parts.append(
                     f"<text x='{cx:.1f}' y='{ly + 11:.1f}' text-anchor='middle' font-size='9' "
@@ -501,43 +618,62 @@ class Diagram:
             width = 1.2 if b.kind == "join" else 1.4
             if badge is not None and badge.state is not None:
                 stroke, width = _STATE[badge.state], 2.2
+            opacity = "1"
+            record = path.get(b.id) if path else None
+            if path is not None:
+                if record is None:
+                    opacity = _FADED
+                elif (
+                    failed_at is not None and getattr(b.node, "name", None) == failed_at
+                ):
+                    stroke, width = _STATE["error"], 2.6  # where the frame broke
+                else:
+                    stroke, width = _PATH, 2.2
             if b.kind == "join":
                 parts.append(
+                    f"<g opacity='{opacity}'>"
                     f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w}' height='{b.h}' rx='13' "
                     f"fill='{_FILL['join']}' stroke='{stroke}' stroke-width='{width}'/>"
                     f"<text x='{x + b.w / 2:.1f}' y='{y + b.h / 2 + 4:.1f}' text-anchor='middle' "
                     f"font-size='9' fill='#111827'>{html.escape(b.label)}</text>"
                 )
-                if badge is not None:
-                    parts.append(_pill(x + b.w, y, f"{badge.inp}→{badge.out}", stroke))
+                if badge is not None and path is None:
+                    # a join counts what it emits; its inputs are its branches' outputs
+                    parts.append(_pill(x + b.w, y, _flow(badge, True), stroke))
+                if record is not None and record.seq is not None:
+                    parts.append(_pill(x + b.w, y, f"#{record.seq}", stroke))
+                parts.append("</g>")
                 continue
-            flow = (
-                f"{badge.out}"
-                if badge is not None and b.kind == "source"
-                else (f"{badge.inp}→{badge.out}" if badge is not None else "")
-            )
             tip = b.tip
             if badge is not None:
                 tip += f"\nin {badge.inp}, out {badge.out}, errors {badge.errors}"
                 if badge.out:
                     tip += f", {badge.time / badge.out * 1000:.2f} ms per frame"
+                if badge.rate is not None:
+                    tip += f", {badge.rate:.1f} frames/s"
+            if record is not None:
+                tip += f"\nthis frame: {record.op} #{record.seq}"
             parts.append(
-                f"<g><title>{html.escape(tip)}</title>"
+                f"<g opacity='{opacity}'><title>{html.escape(tip)}</title>"
                 f"<rect x='{x:.1f}' y='{y:.1f}' width='{b.w:.1f}' height='{b.h}' rx='6' "
                 f"fill='{_FILL[b.kind]}' stroke='{stroke}' stroke-width='{width}'/>"
             )
-            if badge is not None:
-                parts.append(_pill(x + b.w, y, flow, stroke))
-                if badge.errors:
-                    parts.append(
-                        _pill(
-                            x + b.w,
-                            y + b.h,
-                            f"✕ {badge.errors}",
-                            _STATE["error"],
-                            fill=True,
-                        )
+            if record is not None and record.seq is not None:
+                parts.append(_pill(x + b.w, y, f"#{record.seq}", stroke))
+            elif badge is not None:
+                parts.append(
+                    _pill(x + b.w, y, _flow(badge, b.kind == "source"), stroke)
+                )
+            if badge is not None and path is None and badge.errors:
+                parts.append(
+                    _pill(
+                        x + b.w,
+                        y + b.h,
+                        f"✕ {badge.errors}",
+                        _STATE["error"],
+                        fill=True,
                     )
+                )
             lines: list[tuple[str, float, str, str]] = [(b.label, 12, "#111827", "600")]
             if b.sub:
                 lines.append((b.sub, 10, "#374151", "400"))
@@ -573,6 +709,55 @@ class Diagram:
         return f"<Diagram of {self.node.name!r}: {len(self.cell.boxes)} nodes>"
 
 
+def _flow(badge: Badge, source: bool) -> str:
+    text = f"{badge.out}" if source else f"{badge.inp}→{badge.out}"
+    if badge.rate:
+        text += f" · {badge.rate:.0f}/s"
+    return text
+
+
+def _queue_bar(cx: float, y: float, depth: int, capacity: int) -> str:
+    """A queue's depth under its edge: a bar against its capacity, or a count."""
+    if not capacity:
+        if not depth:
+            return ""
+        return (
+            f"<text x='{cx:.1f}' y='{y + 4:.1f}' text-anchor='middle' font-size='8' "
+            f"fill='#6b7280'>q {depth}</text>"
+        )
+    w = 28.0
+    frac = min(depth / capacity, 1.0)
+    colour = _STATE["paused"] if frac >= _FULL else "#2563eb"
+    return (
+        f"<rect x='{cx - w / 2:.1f}' y='{y:.1f}' width='{w}' height='5' rx='2' fill='#e5e7eb'/>"
+        f"<rect x='{cx - w / 2:.1f}' y='{y:.1f}' width='{w * frac:.1f}' height='5' rx='2' "
+        f"fill='{colour}'/>"
+    )
+
+
+def _same(box: _Box, record: Any) -> bool:
+    """Whether a lineage record was left by the node a box draws."""
+    node = box.node
+    name = getattr(node, "name", None)
+    if name is None:
+        return False
+    op = record.op
+    if op == name or op.startswith(
+        name + "["
+    ):  # routers: when(...)[then], switch(...)[k]
+        return True
+    kind = type(node).__name__
+    return (kind == "Fanout" and op == "fanout") or (kind == "Zip" and op == "zip")
+
+
+def _failed_at(frame: Any) -> str | None:
+    """The block a failed frame broke at, by name."""
+    if frame is None or not getattr(frame, "failed", False):
+        return None
+    errors = frame.errors
+    return errors[-1].origin if errors else None
+
+
 def _pill(right: float, cy: float, text: str, colour: str, fill: bool = False) -> str:
     """A small rounded label whose right edge sits at ``right``, centred on ``cy``."""
     w = len(text) * 5.6 + 10
@@ -592,29 +777,65 @@ class LiveDiagram:
     Each box shows the frames it took in and put out, errors in red, and a border
     for its state: grey before its first frame, blue when it produced since the
     last refresh, amber while paused, red with errors, green once the run is over.
-    Edges carry the count of frames that travelled them; a status line sits below.
-    Every refresh re-renders the whole SVG from the layout computed once, so the
-    picture never moves. ``svg`` is the current picture; ``show()`` displays it in
-    a notebook and keeps it fresh until the run finishes or ``close()``."""
+    Edges carry the count of frames that travelled them, and where the runtime
+    keeps a queue between two blocks, its depth as a bar; a full queue turns the
+    edge amber, which is backpressure: the block after it is the slow one. While
+    the run goes each box shows its throughput, in frames per second. A status
+    line sits below. ``highlight(frame)`` draws the path one frame took instead,
+    ``highlight(None)`` goes back. Every refresh re-renders the whole SVG from the
+    layout computed once, so the picture never moves. ``svg`` is the current
+    picture; ``show()`` displays it in a notebook and keeps it fresh until the run
+    finishes or ``close()``."""
 
     def __init__(self, run: Any, refresh: float = 0.5, types: bool = True) -> None:
         self.run = run
         self.refresh = refresh
         self.diagram = Diagram(run.graph, types=types, live=True)
         self._previous: dict[int, tuple[int, int]] | None = None
+        self._previous_at: float | None = None
         self._handle: Any = None
         self._closed = False
+        self.frame: Any = None  # draw this frame's path
+
+    def highlight(self, frame: Any) -> LiveDiagram:
+        """Draw the path ``frame`` took through the graph (None: the live counts)."""
+        self.frame = frame
+        self._update()
+        return self
 
     @property
     def svg(self) -> str:
         """The picture now; boxes that moved since the previous call are active."""
         counts = self.diagram.counts(self.run.monitor)
         held_at = getattr(self.run, "held_at", None)
-        badges = self.diagram.badges(counts, self._previous, self.run.state, held_at)
+        state = self.run.state
+        badges = self.diagram.badges(counts, self._previous, state, held_at)
+        now = time.monotonic()
+        if (
+            self._previous is not None
+            and self._previous_at is not None
+            and state
+            in (
+                "running",
+                "break",
+            )
+        ):
+            dt = now - self._previous_at
+            if dt > 0:
+                for bid, badge in badges.items():
+                    before = self._previous.get(bid)
+                    if before is not None:
+                        badge.rate = (badge.out - before[1]) / dt
         self._previous = {k: (b.inp, b.out) for k, b in counts.items()}
+        self._previous_at = now
         self.diagram.monitor = self.run.monitor
+        path = self.diagram.path(self.frame) if self.frame is not None else None
         return self.diagram.render(
-            badges, caption=self.diagram.caption(self.run.state, held_at)
+            badges,
+            caption=self.diagram.caption(state, held_at),
+            queues=self.diagram.queues(self.run.monitor),
+            path=path,
+            failed_at=_failed_at(self.frame),
         )
 
     def html(self) -> str:
@@ -664,8 +885,10 @@ class LiveDiagram:
         return f"<LiveDiagram of {self.run.graph.name!r}: {self.run.state}>"
 
 
-def draw(node: Any, types: bool = True, stats: Any = None) -> Diagram:
-    return Diagram(node, types=types, stats=stats)
+def draw(
+    node: Any, types: bool = True, stats: Any = None, frame: Any = None
+) -> Diagram:
+    return Diagram(node, types=types, stats=stats, frame=frame)
 
 
 def to_dot(node: Any, types: bool = True) -> str:

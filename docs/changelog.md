@@ -82,7 +82,13 @@ New
   state colour on the border and frame counts on the edges;
   `run.controls(diagram=True)` adds it to the control panel and
   `g.draw(stats=run.monitor)` renders the same still after any run
-  (`Monitor.lookup(node)` finds a node's stats).
+  (`Monitor.lookup(node)` finds a node's stats). Edges with a runtime queue
+  show its depth, a full queue turns the edge amber (backpressure), blocks
+  show their throughput while running, and a still shows each queue's peak
+  (`Monitor.queue_between(a, b)`). `g.draw(frame=f)` and
+  `live.highlight(f)` draw the path one frame took, matched from its lineage,
+  with the router branch it took and, for a failed frame, the block where it
+  broke.
 - Tags, a fourth annotation level: `frame.tag("speech", segment=3)`,
   `frame.tag("burst", span=(1.2, 1.5))`, `frame.untag(...)`, `frame.mask(name)`,
   `frame.tags.at(t)`; `"speech" in frame` and `frame["segment"]` look tags up

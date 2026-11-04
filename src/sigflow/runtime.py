@@ -505,6 +505,12 @@ class Runner:
             queues[(dst, slot)] = asyncio.Queue(self.opts.queue_size if bounded else 0)
         for r in g.outputs:
             out_qs[r.name] = asyncio.Queue(self.opts.queue_size)
+        # the live diagram shows each queue's depth on the edge it serves
+        watched: dict[tuple[str, int], Any] = {}
+        for src, dst, slot in g.edges:
+            a, b = _end_id(g.members[src.name], last=True), _end_id(g.members[dst])
+            if a is not None and b is not None:
+                watched[(dst, slot)] = self.mon.edge(a, b, queues[(dst, slot)])
         tasks: list[asyncio.Task] = []
         failure: asyncio.Future = (
             asyncio.get_running_loop().create_future()
@@ -539,6 +545,9 @@ class Runner:
                         if sel is not None:
                             item = _select_frame(f, sel)
                         await queues[(dst, slot)].put(item)
+                        eq = watched.get((dst, slot))
+                        if eq is not None:
+                            eq.note()
                     for q in outs:
                         await q.put(f)
             except BaseException as e:
@@ -1889,6 +1898,18 @@ def _port_tags(out: Frame, result: Any, parents: tuple[Frame, ...]) -> Frame:
         for d, p in zip(result, before)
     )
     return replace(out, parts=parts)
+
+
+def _end_id(member: Any, last: bool = False) -> Any:
+    """The id of the node at the start (or end) of a graph member, as the diagram
+    and the monitor know it; None for the graph's own input."""
+    from .builder import Chain, _Input
+
+    if isinstance(member, _Input):
+        return None
+    if isinstance(member, Chain):
+        return _end_id(member.stages[-1 if last else 0], last)
+    return getattr(member, "id", id(member))
 
 
 def _holding(control: Any, stats: Any) -> bool:
