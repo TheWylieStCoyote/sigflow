@@ -14,7 +14,7 @@ from . import io
 from .block import BlockDef, Framed, block, lift, source, tap
 from .builder import Graph
 from .collect import gather
-from .control import Breakpoint, Knob, Probe, Run
+from .control import Breakpoint, Button, Knob, Probe, Run, commit, runs, stop_all
 from .device import to_device, to_host
 from .dims import (
     A,
@@ -160,6 +160,10 @@ __all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "Knob",
     "Probe",
     "Breakpoint",
+    "Button",
+    "commit",
+    "runs",
+    "stop_all",
     "dashboard",
     "require_widgets",
     "io",

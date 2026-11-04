@@ -66,6 +66,21 @@ New
   the members as parts, annotations and tags merged as at a join, a warning
   on a group released before it was complete. The mirror of a detector plus
   `per_key`; the example gathers every track's result per spectrum frame.
+- Notebook inputs: knobs pick their widget from their value (entry fields for
+  unbounded numbers, `widget="log"` / `"stepper"`, range sliders for pairs,
+  `Enum` dropdowns, `multiple=True` multi-selects); `parse=` and `pattern=`
+  validate input and a refused value marks the widget and leaves the knob
+  unchanged; `group=` sections the panel; `Button(label, fn)` actions;
+  `commit()` changes several knobs atomically for the blocks reading them;
+  `run.controls(debug=True)` adds probe and breakpoint pickers.
+- Notebook runs: a registry (`sigflow.runs()`, `stop_all()`), `start(name=,
+  replace=True)` and `run.close()`, so re-running a cell leaves no run, panel,
+  diagram or probe behind; `run.timeline` records knob changes with the frame
+  they happened at, `run.replay()` applies a recorded timeline to another run,
+  `run.report()` is a static summary that survives saving the notebook, and
+  `display=False` builds panels and diagrams headless. CI executes the
+  live-control notebook. A knob set from code with a widget attached no
+  longer notifies its listeners twice.
 - Breakpoints: `run.break_when("fft", pred)`, `break_at(name, seq)`,
   `tag=`, `every=`, `once=` and `run.break_on_error()` hold the graph on a
   frame at the block that produced it, before the next block receives it;

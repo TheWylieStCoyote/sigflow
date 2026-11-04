@@ -64,6 +64,10 @@ jobs:
       - run: cd examples && python make_notebook.py && jupyter nbconvert --to notebook --execute sigflow_tour.ipynb --output /tmp/tour.ipynb
         env:
           MPLBACKEND: Agg
+      - name: Execute the live-control notebook (background runs, panels, inputs)
+        run: cd examples && python make_live_notebook.py && jupyter nbconvert --to notebook --execute live_control.ipynb --output /tmp/live.ipynb --ExecutePreprocessor.timeout=180
+        env:
+          MPLBACKEND: Agg
   docs:
     runs-on: ubuntu-latest
     steps:

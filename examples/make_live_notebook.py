@@ -209,11 +209,53 @@ run8.held               # the frame the graph is holding; Step in the panel hold
 code("""run8.step(); run8.wait_break(5); print(run8.status())
 run8.stop()""")
 
-md("""## 8. Tidy up and look back
+md("""## 8. Inputs, debugging and a report
+
+Knobs pick their widget from their value: a number without bounds is an **entry field**, a pair of
+numbers a **range slider**, an `Enum` a dropdown of its members, `choices=..., multiple=True` a
+multi-select. `parse=` turns typed text into a value and refuses what it cannot read (a red border
+says why); `group=` puts knobs in a labelled section, and a `Button` runs an action. `commit()` changes
+several knobs at once, so no block ever sees half of a change. `debug=True` adds pickers to probe a
+block or set a breakpoint with a condition on the frame `f`. `name=..., replace=True` stops the
+previous run of the same name, so re-running this cell never leaves one behind.""")
+code("""import enum
+import sigflow
+from sigflow import Button, commit
+
+class Window(enum.Enum):
+    HANN = "hann"
+    HAMMING = "hamming"
+
+def to_hz(text):
+    text = text.strip().lower()
+    return float(text.rstrip("k")) * (1e3 if text.endswith("k") else 1)
+
+tone_hz = Knob("3k", "tone", parse=to_hz)                         # type 2.5k, 800, ...
+band    = Knob((-60.0, 0.0), "dB range", min=-120.0, max=20.0, group="display")
+win     = Knob(Window.HANN, "window", group="display")
+reset   = Button("reset gain", lambda: commit((gain, 1.0)))
+
+@source
+def tuned(rate: float = 48_000, n: int = 1024, frames: int = 2000, f=tone_hz) -> Iterator[Sig[float, N]]:
+    for k in range(frames):
+        t = (np.arange(n) + k * n) / rate
+        yield Frame(np.sin(2 * np.pi * float(f.value) * t), meta={"seq": k}, stream={"rate": rate})
+        time.sleep(0.005)
+
+run8 = (tuned() >> dsp.scale(gain=gain) >> dsp.rms).start(name="inputs", replace=True)
+run8.controls(knobs=[tone_hz, gain, band, win, reset], debug=True, diagram=True)""")
+code("""time.sleep(1.5)
+tone_hz.value = "5k"                  # code goes through the same parser
+commit((gain, 0.5))
+time.sleep(0.5)
+run8.stop()
+print([(c.knob, c.value, c.frame) for c in run8.timeline])   # every change, with its frame
+run8.report()                                                 # static: survives saving""")
+
+md("""## 9. Tidy up and look back
 
 A stopped run keeps its frames, snapshots, recording, monitor and lineage.""")
-code("""for r in (run1, run2, run3, *runs.values()):
-    r.stop()
+code("""sigflow.stop_all()                                      # every run still going, panels too
 print({k: r.state for k, r in {"run1": run1, "run2": run2, "run3": run3, **runs}.items()})
 f = run2.latest
 print(f, "| tone was at %.0f Hz" % f["freq_hz"], "| lineage:", [n.op for n in f.prov.chain()])

@@ -571,6 +571,17 @@ output type with dimensions resolved, and carry the full signature as a hover
 tooltip. `g.to_dot()` gives Graphviz source for `dot` or the `graphviz`
 package. `g` on its own still renders the typed node table.
 
+Knobs pick their widget from their value: entry fields for unbounded numbers,
+range sliders for pairs, dropdowns for choices and `Enum` members,
+multi-selects, and text with `parse=` / `pattern=` validation that refuses bad
+input on the widget; `Button("reset", fn)` is an action, `group=` sections the
+panel, and `commit(...)` changes several knobs at once. `run.controls(debug=True)`
+adds pickers to probe a block or break on it. `g.start(name=..., replace=True)`
+stops the previous run of that name, so re-running a cell leaves nothing
+behind; `sigflow.runs()` and `stop_all()` see every run. `run.timeline` records
+knob changes with their frame and `replay()` applies them to another run;
+`run.report()` is a static summary that survives saving the notebook.
+
 `run.probe("fft")` watches one block of a background run without editing the
 graph: the newest frame it put out (`probe.latest`), the recent ones, a
 callback per frame, a plot block fed as if it sat after the block, and

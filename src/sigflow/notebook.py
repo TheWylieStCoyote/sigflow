@@ -215,3 +215,103 @@ def report(node: Any, title: str | None = None, fmt: str = "html") -> str:
         f"<th style='{_TD}'>inputs</th><th style='{_TD}'>output</th><th style='{_TD}'>configuration</th>"
         f"<th style='{_TD}'>what it does</th></tr>{rows}</table></div>"
     )
+
+
+class RunReport:
+    """A static summary of a run (``run.report()``): plain HTML, so it survives saving
+    and sharing the notebook, unlike live widgets. It holds the run's state and
+    totals, the diagram with every block's counts and each queue's peak, the block
+    table, the knobs with their final values and the changes made during the run,
+    the breakpoints and probes and what they saw, and the latest frame. ``html`` is
+    the page; ``save(path)`` writes it."""
+
+    def __init__(self, run: Any) -> None:
+        self.run = run
+        self.html = self._render()
+
+    def _render(self) -> str:
+        from .draw import Diagram
+
+        run, mon = self.run, self.run.monitor
+        esc = html.escape
+        head = (
+            f"<h3 style='font-family:system-ui,sans-serif;margin:4px 0'>{esc(run.name)}</h3>"
+            f"<div style='font-family:monospace'>{esc(run.status())} · "
+            f"{mon.produced} produced · {mon.errors} error(s)</div>"
+        )
+        try:
+            diagram = Diagram(run.graph, stats=mon).svg
+        except Exception as e:
+            diagram = f"<i>no diagram: {esc(str(e))}</i>"
+        sections = [
+            head,
+            f"<div style='overflow:auto;background:white;padding:4px'>{diagram}</div>",
+            _section("Blocks", monitor_html(mon)),
+        ]
+        knobs = run.knobs()
+        if knobs:
+            rows = "".join(
+                f"<tr><td style='{_TD}'>{esc(name)}</td><td style='{_TD}'>{esc(_short(k.value))}</td></tr>"
+                for name, k in knobs.items()
+            )
+            sections.append(
+                _section(
+                    "Knobs",
+                    f"<table style='{_CSS}'><tr><th style='{_TD}'>knob</th>"
+                    f"<th style='{_TD}'>final value</th></tr>{rows}</table>",
+                )
+            )
+        if run.timeline:
+            rows = "".join(
+                f"<tr><td style='{_TD}'>{c.t:.2f}s</td><td style='{_TD}'>{c.frame}</td>"
+                f"<td style='{_TD}'>{esc(c.knob)}</td><td style='{_TD}'>{esc(_short(c.value))}</td></tr>"
+                for c in run.timeline
+            )
+            sections.append(
+                _section(
+                    f"Knob changes ({len(run.timeline)})",
+                    f"<table style='{_CSS}'><tr><th style='{_TD}'>time</th>"
+                    f"<th style='{_TD}'>at frame</th><th style='{_TD}'>knob</th>"
+                    f"<th style='{_TD}'>value</th></tr>{rows}</table>",
+                )
+            )
+        watching = [esc(repr(bp)) for bp in run.breakpoints] + [
+            esc(f"probe {p.name}: {p.count} frames, {p.failed} failed")
+            for p in run.probes
+        ]
+        if watching:
+            sections.append(_section("Breakpoints and probes", "<br>".join(watching)))
+        latest = run.latest
+        if latest is not None:
+            sections.append(_section("Latest frame", frame_html(latest)))
+        if run.exception is not None:
+            sections.append(
+                _section(
+                    "Failed",
+                    f"<span style='color:#c33'>{esc(repr(run.exception))}</span>",
+                )
+            )
+        return (
+            f"<div style='font-family:system-ui,sans-serif'>{''.join(sections)}</div>"
+        )
+
+    def _repr_html_(self) -> str:
+        return self.html
+
+    def save(self, path: str) -> str:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                f"<!doctype html><meta charset='utf-8'><title>{html.escape(self.run.name)}</title>"
+            )
+            fh.write(self.html)
+        return path
+
+    def __repr__(self) -> str:
+        return f"<RunReport {self.run.name!r}: {self.run.state}>"
+
+
+def _section(title: str, body: str) -> str:
+    return (
+        f"<h4 style='font-family:system-ui,sans-serif;margin:10px 0 4px'>{html.escape(title)}</h4>"
+        f"{body}"
+    )

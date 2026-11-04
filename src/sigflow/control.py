@@ -20,18 +20,52 @@ import asyncio
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .frame import Frame
 
-__all__ = ["Breakpoint", "Control", "Knob", "Probe", "Run", "live"]
+__all__ = [
+    "Breakpoint",
+    "Button",
+    "Control",
+    "Knob",
+    "KnobChange",
+    "Probe",
+    "Run",
+    "commit",
+    "live",
+    "runs",
+    "stop_all",
+]
+
+# Knob values a block reads in one call are read under this lock, and commit()
+# changes several knobs under it, so a block never sees half of a change.
+_COMMIT = threading.RLock()
+
+
+class InvalidValue(ValueError):
+    """A value a knob refuses (``parse`` failed, ``pattern`` did not match, not
+    one of ``choices``)."""
 
 
 class Knob:
     """A tunable configuration value: ``scale(gain=Knob(1.0))``. Map blocks read it on
     every call, so changing ``knob.value`` (or dragging ``knob.slider()``) takes effect
     while the graph runs. Stream blocks receive the Knob object itself and should read
-    ``knob.value`` inside their loop (or just use ``float(knob)`` / ``knob()``)."""
+    ``knob.value`` inside their loop (or just use ``float(knob)`` / ``knob()``).
+
+    The widget follows the value: a number with ``min``/``max`` is a slider, without
+    them an entry field; a bool a toggle; ``choices`` a dropdown (``multiple=True``:
+    a multi-select, the value a tuple); an ``Enum`` member a dropdown of its members;
+    a pair of numbers a two-handle range slider; anything else a text field.
+    ``widget=`` overrides: ``"slider"``, ``"entry"``, ``"log"`` (a log slider),
+    ``"stepper"`` (an integer entry with arrows) or ``"text"``. ``parse=`` turns typed
+    text into a value and may raise to refuse it (such a knob always gets a text
+    field: ``Knob("48k", parse=to_hz)``); ``pattern=`` is a regular expression
+    a text value must match; a refused value leaves the knob as it was and shows the
+    reason on the widget (``knob.error``). ``group=`` puts the knob in a labelled
+    section of the control panel. :func:`commit` changes several knobs at once."""
 
     def __init__(
         self,
@@ -41,14 +75,65 @@ class Knob:
         max: float | None = None,
         step: float | None = None,
         choices: Any = None,
+        *,
+        widget: str | None = None,
+        parse: Callable[[Any], Any] | None = None,
+        pattern: str | None = None,
+        multiple: bool = False,
+        group: str | None = None,
     ) -> None:
-        self._value = value
+        import enum
+
+        if widget not in (None, "slider", "entry", "log", "stepper", "text"):
+            raise ValueError(
+                "widget must be 'slider', 'entry', 'log', 'stepper' or 'text'"
+            )
+        if isinstance(value, enum.Enum) and choices is None:
+            choices = list(type(value))
         self.name = name
         self.min, self.max, self.step = min, max, step
         self.choices = list(choices) if choices is not None else None
+        self.widget_kind = widget
+        self.parse = parse
+        self.pattern = pattern
+        self.multiple = multiple
+        self.group = group
+        self.error: str | None = None  # why the last refused value was refused
         self._lock = threading.Lock()
         self._widget: Any = None
+        self._show: Callable[[Any], Any] | None = None  # value -> the widget's value
+        self._echo = False  # updating the widget from code: ignore its echo
         self._listeners: list[Callable[[Any], None]] = []
+        self._value = self.check(value)
+
+    def check(self, v: Any) -> Any:
+        """``v`` as this knob would hold it, or :class:`InvalidValue` saying why not:
+        ``parse`` applied to text, ``pattern`` matched, ``choices`` respected."""
+        import re
+
+        if self.parse is not None and isinstance(v, str):
+            try:
+                v = self.parse(v)
+            except Exception as e:
+                raise InvalidValue(f"{self.name or 'value'}: {e}") from None
+        if (
+            self.pattern is not None
+            and isinstance(v, str)
+            and re.fullmatch(self.pattern, v) is None
+        ):
+            raise InvalidValue(
+                f"{self.name or 'value'}: {v!r} does not match {self.pattern!r}"
+            )
+        if self.choices is not None:
+            picked = tuple(v) if self.multiple else (v,)
+            for item in picked:
+                if item not in self.choices:
+                    raise InvalidValue(
+                        f"{self.name or 'value'}: {item!r} is not one of the choices"
+                    )
+            if self.multiple:
+                v = picked
+        return v
 
     @property
     def value(self) -> Any:
@@ -57,25 +142,53 @@ class Knob:
 
     @value.setter
     def value(self, v: Any) -> None:
+        v = self.check(v)
         with self._lock:
             self._value = v
-        if self._widget is not None and self._widget.value != v:
+        self.error = None
+        w = self._widget
+        if w is not None:
             try:
-                self._widget.value = v
-            except Exception:
+                shown = self._show(v) if self._show is not None else v
+                if w.value != shown:
+                    self._echo = True
+                    try:
+                        w.value = shown
+                    finally:
+                        self._echo = False
+            except Exception:  # the widget may be closed
                 pass
-        for fn in self._listeners:
-            fn(v)
+        self._notify(v)
 
-    def _set_from_widget(self, v: Any) -> None:
+    def _set_from_widget(self, v: Any) -> bool:
+        """A value typed or picked in the widget: refused values leave the knob as
+        it was and set ``error``. True when the value was taken."""
+        if self._echo:  # the widget repeating a value just set from code
+            return True
+        try:
+            v = self.check(v)
+        except InvalidValue as e:
+            self.error = str(e)
+            return False
         with self._lock:
             self._value = v
-        for fn in self._listeners:
+        self.error = None
+        self._notify(v)
+        return True
+
+    def _notify(self, v: Any) -> None:
+        for fn in list(self._listeners):
             fn(v)
 
     def on_change(self, fn: Callable[[Any], None]) -> Knob:
         """Call ``fn(new_value)`` whenever the knob changes (from code or a widget)."""
         self._listeners.append(fn)
+        return self
+
+    def off_change(self, fn: Callable[[Any], None]) -> Knob:
+        """Stop calling ``fn`` on changes."""
+        if fn in self._listeners:
+            self._listeners.remove(fn)
         return self
 
     def widget(self) -> Any:
@@ -96,6 +209,10 @@ class Knob:
     def __repr__(self) -> str:
         return f"Knob({self.value!r}{', ' + self.name if self.name else ''})"
 
+    @property
+    def label(self) -> str:
+        return self.name or "value"
+
     def slider(
         self,
         min: float | None = None,
@@ -115,8 +232,98 @@ class Knob:
 
 
 def live(config: Any) -> dict:
-    """Resolve Knob values in a configuration mapping (used by the runtime per call)."""
-    return {k: (v.value if isinstance(v, Knob) else v) for k, v in config.items()}
+    """Resolve Knob values in a configuration mapping (used by the runtime per call).
+    The values are read together, so a :func:`commit` is seen whole or not at all."""
+    with _COMMIT:
+        return {k: (v.value if isinstance(v, Knob) else v) for k, v in config.items()}
+
+
+def commit(*pairs: tuple[Knob, Any], **_: Any) -> None:
+    """Change several knobs at once: ``commit((low, 300.0), (high, 3400.0))``. A block
+    call reads all of them before or all of them after, never a mix; every value is
+    checked first, so a refused one changes nothing."""
+    checked = [(k, k.check(v)) for k, v in pairs]
+    with _COMMIT:
+        for k, v in checked:
+            k.value = v
+
+
+class Button:
+    """An action in the control panel: ``Button("reset", reset_filter)`` calls
+    ``reset_filter()`` when pressed. ``press()`` does the same from code; ``presses``
+    counts them. A function that raises leaves its message in ``error``."""
+
+    def __init__(self, label: str, fn: Callable[[], Any], icon: str = "") -> None:
+        self.label, self.fn, self.icon = label, fn, icon
+        self.presses = 0
+        self.error: str | None = None
+        self.group: str | None = None
+
+    def press(self) -> Any:
+        self.presses += 1
+        try:
+            result = self.fn()
+        except Exception as e:
+            self.error = f"{type(e).__name__}: {e}"
+            return None
+        self.error = None
+        return result
+
+    def widget(self) -> Any:
+        from .ui import button_widget
+
+        return button_widget(self)
+
+    def __repr__(self) -> str:
+        return f"Button({self.label!r}, presses={self.presses})"
+
+
+@dataclass(frozen=True)
+class KnobChange:
+    """One change of a knob during a run: when (seconds since the run started), at
+    which frame (how many the run had produced), which knob, and the value."""
+
+    t: float
+    frame: int
+    knob: str
+    value: Any
+
+
+# --------------------------------------------------------------------------- #
+# Runs a kernel has started (notebooks re-run cells)
+# --------------------------------------------------------------------------- #
+
+_RUNS: list[Run] = []
+_RUNS_LOCK = threading.Lock()
+
+
+def runs(all: bool = False) -> list[Run]:
+    """The runs started in this process that are still going (``all=True``: every
+    run started, finished ones included)."""
+    with _RUNS_LOCK:
+        started = list(_RUNS)
+    return started if all else [r for r in started if not r.finished]
+
+
+def stop_all() -> list[Run]:
+    """Stop every run still going, close its panel, diagram and probes; returns them."""
+    stopped = runs()
+    for r in stopped:
+        r.close()
+    return stopped
+
+
+def _stop_at_exit() -> None:  # pragma: no cover - interpreter shutdown
+    for r in runs():
+        try:
+            r.control.stop()
+        except Exception:
+            pass
+
+
+import atexit as _atexit
+
+_atexit.register(_stop_at_exit)
 
 
 class Control:
@@ -503,13 +710,30 @@ class Probe:
 
 
 class Run:
-    """Handle on a graph running in a background thread with its own event loop."""
+    """Handle on a graph running in a background thread with its own event loop.
+
+    Every run is registered (:func:`runs`, :func:`stop_all`). ``name`` defaults to the
+    graph's name; ``replace=True`` first stops and closes a run still going under the
+    same name, so re-running a notebook cell does not leave the previous run behind.
+    The knobs in the graph's configuration are watched: ``timeline`` lists every
+    change with the frame it happened at."""
 
     def __init__(
-        self, graph: Any, paused: bool = False, keep: int | None = None, **options: Any
+        self,
+        graph: Any,
+        paused: bool = False,
+        keep: int | None = None,
+        name: str | None = None,
+        replace: bool = False,
+        **options: Any,
     ) -> None:
         from .progress import Monitor
 
+        self.name = name or graph.name
+        if replace:
+            for old in runs():
+                if old.name == self.name:
+                    old.close()
         self.graph = graph
         self.keep = keep  # max frames to retain (None = all)
         self.control = Control()
@@ -528,12 +752,118 @@ class Run:
         self._done = threading.Event()
         self._cancelled = False
         self._ui: Any = None
+        self.panel: Any = None
+        self.live_diagram: Any = None
+        self.started = time.monotonic()
+        self.timeline: list[KnobChange] = []
+        self._watched: list[tuple[Knob, Callable[[Any], None]]] = []
+        for label, knob in self.knobs().items():
+            self._watch(label, knob)
+        with _RUNS_LOCK:
+            _RUNS.append(self)
         if paused:
             self.control.pause()
         self._thread = threading.Thread(
             target=self._main, name="sigflow-run", daemon=True
         )
         self._thread.start()
+
+    # -- knobs and their timeline --------------------------------------------- #
+    def knobs(self) -> dict[str, Knob]:
+        """The knobs in the graph's configuration, by name: the knob's own name, else
+        ``block.parameter``."""
+        found: dict[str, Knob] = {}
+        for node in self.graph.nodes():
+            for param, v in dict(getattr(node, "config", {}) or {}).items():
+                if isinstance(v, Knob) and all(v is not k for k in found.values()):
+                    found[v.name or f"{node.name}.{param}"] = v
+        return found
+
+    def _watch(self, label: str, knob: Knob) -> None:
+        def record(v: Any, label: str = label) -> None:
+            self.timeline.append(
+                KnobChange(
+                    time.monotonic() - self.started, self.monitor.produced, label, v
+                )
+            )
+
+        knob.on_change(record)
+        self._watched.append((knob, record))
+
+    def timeline_records(self) -> list[dict[str, Any]]:
+        """The timeline as JSON-ready records (``json.dump`` them to keep a session)."""
+        from .persist import _jsonable
+
+        return [
+            {"t": c.t, "frame": c.frame, "knob": c.knob, "value": _jsonable(c.value)}
+            for c in self.timeline
+        ]
+
+    def replay(self, timeline: Any, by: str = "frame") -> threading.Thread:
+        """Apply a recorded timeline (``KnobChange`` items or their records) to this
+        run's knobs, each change when this run reaches the same frame (``by="frame"``)
+        or the same time (``by="time"``). Knobs are matched by name; returns the
+        thread doing it."""
+        knobs = self.knobs()
+        changes = [
+            c if isinstance(c, KnobChange) else KnobChange(**c) for c in timeline
+        ]
+
+        def apply() -> None:
+            for c in changes:
+                knob = knobs.get(c.knob)
+                if knob is None:
+                    continue
+                while not self.finished:
+                    reached = (
+                        self.monitor.produced >= c.frame
+                        if by == "frame"
+                        else time.monotonic() - self.started >= c.t
+                    )
+                    if reached:
+                        break
+                    time.sleep(0.005)
+                if self.finished:
+                    return
+                value = tuple(c.value) if isinstance(c.value, list) else c.value
+                try:
+                    knob.value = value
+                except InvalidValue:
+                    pass
+
+        t = threading.Thread(target=apply, name="sigflow-replay", daemon=True)
+        t.start()
+        return t
+
+    def close(self) -> Run:
+        """Stop the run and release what watches it: the panel and its refresh
+        thread, the live diagram, probes, breakpoints and knob listeners."""
+        if not self.finished:
+            self.stop()
+        for attr in ("panel", "live_diagram"):
+            thing = getattr(self, attr, None)
+            if thing is not None:
+                try:
+                    thing.close()
+                except Exception:
+                    pass
+        for probe in list(self.probes):
+            probe.close()
+        for bp in list(self.breakpoints):
+            bp.remove()
+        for knob, fn in self._watched:
+            knob.off_change(fn)
+        self._watched = []
+        return self
+
+    def report(self) -> Any:
+        """A static summary of the run that survives saving the notebook: the diagram
+        with its counts and queue peaks, the block table, the knobs and their
+        changes, breakpoints and probes, and the latest frame. See
+        :class:`~sigflow.notebook.RunReport`."""
+        from .notebook import RunReport
+
+        return RunReport(self)
 
     # -- execution --------------------------------------------------------- #
     def _main(self) -> None:
@@ -758,16 +1088,21 @@ class Run:
         return probe
 
     # -- notebook UI ------------------------------------------------------- #
-    def diagram(self, refresh: float = 0.5, types: bool = True) -> Any:
+    def diagram(
+        self, refresh: float = 0.5, types: bool = True, display: bool | None = None
+    ) -> Any:
         """The graph's diagram, live: frame counts, errors and a state colour on every
         block, refreshed while the run goes (kept as ``run.live_diagram``). In a
-        notebook it is displayed and None is returned; elsewhere the
-        :class:`~sigflow.draw.LiveDiagram` is returned, its ``svg`` always current."""
+        notebook it is displayed and None is returned; elsewhere, or with
+        ``display=False``, the :class:`~sigflow.draw.LiveDiagram` is returned, its
+        ``svg`` always current."""
         from .draw import LiveDiagram
         from .progress import _in_notebook
 
+        if self.live_diagram is not None:
+            self.live_diagram.close()
         self.live_diagram = LiveDiagram(self, refresh=refresh, types=types)
-        if not _in_notebook():
+        if display is False or (display is None and not _in_notebook()):
             return self.live_diagram
         self.live_diagram.show()
         return None
@@ -781,6 +1116,8 @@ class Run:
         width: int = 520,
         title: str | None = None,
         diagram: bool = False,
+        debug: bool = False,
+        display: bool = True,
     ) -> Any:
         """Display an interactive panel for this run (kept as ``run.panel``):
 
@@ -788,15 +1125,19 @@ class Run:
         a throttle slider (max source frames per second), a progress bar, one control per
         Knob in ``knobs`` (slider, toggle, dropdown or text), the figures of the plot blocks
         in ``plots`` refreshed live, with ``diagram=True`` the live diagram of the graph,
-        and the per-block status table.
+        with ``debug=True`` pickers to probe a block and to set breakpoints, and the
+        per-block status table. ``knobs`` may hold :class:`Button` actions too; knobs
+        with a ``group`` are shown in labelled sections. A panel shown again replaces
+        the previous one. ``display=False`` builds the panel without showing it or
+        refreshing it on a timer (``panel.render()`` refreshes it), for tests and CI.
 
         Needs ``ipywidgets`` in the kernel; otherwise a status line and instructions appear."""
         from .ui import ControlPanel, have_widgets
 
         if not have_widgets():
             return self._html_controls(refresh)
-        from IPython.display import display
-
+        if self.panel is not None:
+            self.panel.close()
         self.panel = ControlPanel(
             self,
             plots=plots,
@@ -806,9 +1147,15 @@ class Run:
             width=width,
             title=title,
             diagram=diagram,
+            debug=debug,
+            auto=display,
         )
+        if not display:
+            return self.panel
+        from IPython.display import display as show
+
         self.widget = self.panel.widget
-        display(self.widget)
+        show(self.widget)
         return None
 
     def _html_controls(self, refresh: float) -> Any:

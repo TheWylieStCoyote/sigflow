@@ -65,5 +65,61 @@ choices=[...])`; a map block declared with one re-reads it on every call,
 sources read `knob.value` themselves; `knob.on_change(fn)` chains knobs; plot
 options accept knobs. Provenance records the values actually used.
 
+## Inputs
+
+A knob picks its widget from its value:
+
+| knob | widget |
+|---|---|
+| a number with `min` and `max` | a slider (`widget="log"`: a log slider) |
+| a number without bounds | an entry field (`widget="stepper"`: an integer entry with arrows) |
+| a pair of numbers, `Knob((300.0, 3400.0), min=0, max=24000)` | a two-handle range slider |
+| `choices=[...]` | a dropdown; with `multiple=True` a multi-select, the value a tuple |
+| an `Enum` member | a dropdown of its members; the block gets the member |
+| a bool | a toggle |
+| anything else, or any knob with `parse=` | a text field |
+
+`parse=` turns typed text into a value (`Knob("48k", parse=to_hz)`) and may
+raise to refuse it; `pattern=` is a regular expression a text value must
+match. A refused value leaves the knob as it was, gives the widget a red
+border with the reason as its tooltip, and sets `knob.error`; setting a bad
+value from code raises `InvalidValue`. `group="filter"` puts knobs in a
+labelled section of the panel. `Button("reset", fn)` is an action:
+`run.controls(knobs=[..., Button(...)])`. `commit((low, 300.0), (high, 3400.0))`
+changes several knobs at once: a block reads all of the new values or none of
+them, and a refused value changes nothing.
+
+`run.controls(debug=True)` adds pickers: choose a block and **Probe** it (its
+latest frame shows below), or **Break** on it with a condition written in
+Python over `f`, the frame (`f["snr"] < 3`), and an optional tag picked from
+the tags seen so far; **Clear** removes those breakpoints.
+
+## Re-running cells
+
+Every run is registered. `g.start(name="demo", replace=True)` stops and
+closes a run still going under that name first, so re-running a cell does
+not leave the previous run, its panel, its diagram or its probes behind.
+`sigflow.runs()` lists the runs still going, `sigflow.stop_all()` stops them,
+and `run.close()` stops one and releases everything watching it. Showing
+`run.controls()` or `run.diagram()` again replaces the previous one, and runs
+still going are stopped when the kernel exits.
+
+## Keeping a session
+
+`run.timeline` records every change of a knob in the graph during the run:
+when, at which frame, which knob, and the value (`run.timeline_records()` is
+JSON-ready). `other_run.replay(records)` applies them to another run's knobs
+at the same frames (`by="time"`: at the same times), which turns an
+interactive session into something repeatable. `run.report()` is a static
+summary for after the run: the diagram with every block's counts and each
+queue's peak, the block table, the knobs and their changes, breakpoints and
+probes, and the latest frame. It is plain HTML, so unlike live widgets it
+survives saving and sharing the notebook; `report.save("run.html")` writes it.
+
+`run.controls(display=False)` and `run.diagram(display=False)` build the
+panel or diagram without showing it or refreshing it on a timer
+(`panel.render()` refreshes it), for tests and scripts. CI executes
+`examples/live_control.ipynb` end to end.
+
 `examples/live_control.ipynb` walks through all of it; run it top to bottom in
 a live kernel.
