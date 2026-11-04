@@ -92,6 +92,11 @@ New
   editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
   `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which
   also works with a blocking `run(g, monitor=mon)`.
+- `parallel(..., backend="loky")` (`pip install sigflow[parallel]`): a process
+  pool that needs no `if __name__ == "__main__":` guard and runs blocks defined
+  in a script or a notebook cell, lambdas included, by sending their definition
+  by value; workers are reused between runs. Backends live in `sigflow.pools`,
+  and an unknown or uninstalled backend is refused when the graph is built.
 - Every Python sample in the README runs as written, and `tests/test_readme.py`
   runs each one as its own script (a sample that shows an error must raise
   exactly that error). The zip sample was wrong as written: `>>` binds tighter

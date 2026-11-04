@@ -1464,7 +1464,6 @@ class Runner:
         self, node: Parallel, upstream: AsyncIterator[Frame]
     ) -> AsyncIterator[Frame]:
         """Submit frames to a pool, keep a window of in-flight futures, yield results in order."""
-        import concurrent.futures as cf
         from collections import deque
 
         inner = node.inner
@@ -1473,11 +1472,10 @@ class Runner:
         needs = bool(tag_names(inner.in_type))  # input tag requirements
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
-        pool = (
-            cf.ProcessPoolExecutor(node.workers, mp_context=_worker_context())
-            if node.backend == "process"
-            else cf.ThreadPoolExecutor(node.workers)
-        )
+        from .pools import executor, job
+
+        pool = executor(node.backend, node.workers)
+        target, leading = job(node.backend, d, call, self.opts.labels)
         loop = asyncio.get_running_loop()
         pending: deque = deque()  # (frame, future | None)
         seq = 0
@@ -1560,11 +1558,12 @@ class Runner:
                     try:
                         fut = loop.run_in_executor(
                             pool,
-                            _call_block,
-                            d if node.backend == "process" else call,
+                            _job_call,
+                            target,
+                            leading,
                             f.data,
                             cfg,
-                            self.opts.labels,
+                            self.opts.labels if node.backend == "process" else None,
                         )
                     except BrokenProcessPool as e:
                         raise _broken_pool(inner.name) from e
@@ -1868,6 +1867,15 @@ def _worker_context() -> Any:
         return multiprocessing.get_context("forkserver")
     except ValueError:  # no fork server on this platform
         return multiprocessing.get_context("spawn")
+
+
+def _job_call(
+    target: Any, leading: tuple, data: Any, cfg: dict, labels: bool | None
+) -> Any:
+    """Worker side of a pool job: ``target(*leading, data, cfg[, labels])``."""
+    if labels is None:
+        return target(*leading, data, cfg)
+    return target(*leading, data, cfg, labels)
 
 
 def _call_block(target: Any, data: Any, cfg: dict, labels: bool = False) -> Any:

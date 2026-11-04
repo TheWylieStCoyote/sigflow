@@ -524,6 +524,10 @@ interpreter) and import the main module, so the block must be importable
 `if __name__ == "__main__":`; otherwise every worker starts the graph again
 and the run stops with an error saying so. `backend="thread"` has neither
 requirement and suits blocks that release the GIL (NumPy, SciPy).
+`backend="loky"` (`pip install sigflow[parallel]`) is a process pool without
+either restriction: no main guard, and blocks defined in a script or a notebook
+cell, lambdas included, are sent to the workers by value. Its workers stay up
+between runs, so a notebook pays the start-up once.
 
 ```python
 import numpy as np
