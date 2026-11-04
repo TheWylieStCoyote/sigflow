@@ -29,6 +29,7 @@ nav:
       - Runs: concepts/runs.md
   - Guide:
       - Composing graphs: guide/composing.md
+      - A variable number of signals: guide/per-signal.md
       - Labelled arrays (xarray): guide/xarray.md
       - Array backends and GPU: guide/array-backends.md
       - Time, units and slicing: guide/time-units-slicing.md

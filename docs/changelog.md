@@ -61,6 +61,11 @@ New
   failed frames, pass through. Outputs carry provenance `per_key(...)[key]`.
   `examples/25_per_signal.py` detects a varying number of tones in a spectrum
   and processes each through its own stateful graph.
+- `gather(by, count= | lag= | ttl=, order=, ordered=, incomplete=)`: a stream
+  block that folds the frames sharing a key back into one tuple frame with
+  the members as parts, annotations and tags merged as at a join, a warning
+  on a group released before it was complete. The mirror of a detector plus
+  `per_key`; the example gathers every track's result per spectrum frame.
 - Tags, a fourth annotation level: `frame.tag("speech", segment=3)`,
   `frame.tag("burst", span=(1.2, 1.5))`, `frame.untag(...)`, `frame.mask(name)`,
   `frame.tags.at(t)`; `"speech" in frame` and `frame["segment"]` look tags up

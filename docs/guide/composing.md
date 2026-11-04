@@ -98,3 +98,26 @@ instance. Outputs merge in completion order, each with provenance
 `per_key(...)[key]`, and a key's own frames keep their order. The detector
 upstream is the natural place to assign keys: a stream block that yields one
 frame per detection and tags it with a stable track id.
+
+## Collecting the results back
+
+`gather(by, ...)` is the mirror image: it folds the frames that share a key
+back into one tuple frame, with the members as `parts`:
+
+```python
+grouped = detect >> per_key("track", per_signal) >> gather("seq", count="n_detections", order="track")
+```
+
+A group is released when it is complete: `count=` names an annotation (or
+gives a number, or a callable) saying how many members it has; `lag=1`
+releases a group when the next one starts; `ttl=` is the backstop after that
+many frames without a new member, and the end of the stream releases what is
+left. A group released early carries a warning issue, or is dropped with
+`incomplete="drop"`. Members arrive in completion order; `order="track"` sorts
+them and records the order in `meta["members"]`; `ordered=True` emits groups
+in the order they started. A failed frame never reaches a stream block, so a
+group missing one is released incomplete with a warning while the failed frame
+travels on by itself. `gather` is an ordinary stream block, so a collector
+with rules of its own is written the same way. The whole pattern, detector,
+`per_key` and collector, with custom collectors for markers, windows and time,
+is in [A variable number of signals](per-signal.md).

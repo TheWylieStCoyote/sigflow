@@ -14,7 +14,18 @@ from collections.abc import Iterator
 
 import numpy as np
 
-from sigflow import Frame, Framed, Lineage, Sig, Stream, block, per_key, run, source
+from sigflow import (
+    Frame,
+    Framed,
+    Lineage,
+    Sig,
+    Stream,
+    block,
+    gather,
+    per_key,
+    run,
+    source,
+)
 from sigflow.dims import N
 
 RATE = 8000.0
@@ -87,7 +98,9 @@ def detect(
                 tid, next_id = next_id, next_id + 1
             tracks[tid] = f0
             lo, hi = max(k - 4, 0), min(k + 5, BINS)
-            yield f.evolve(data=db[lo:hi]).annotate(f0_hz=f0, track=tid, bins=(lo, hi))
+            yield f.evolve(data=db[lo:hi]).annotate(
+                f0_hz=f0, track=tid, bins=(lo, hi), n_detections=len(peaks)
+            )
 
 
 @block
@@ -138,6 +151,17 @@ def main() -> None:
         "\nLineage: every per-signal frame leads back to the spectrum frame it came from:"
     )
     print(" ", lineage.sources_of(out[-1:]))
+
+    # --- collecting the results back per spectrum frame -------------------------
+    collected = run(
+        graph >> gather("seq", count="n_detections", order="track"), on_error="raise"
+    )
+    print("\nGathered: one frame per spectrum frame, every track's result as a part:")
+    for g in [f for f in collected if f["group"] in (10, 30)]:
+        parts = ", ".join(
+            f"track {p['track']}: {float(p.data):.1f} dB" for p in g.parts
+        )
+        print(f"  frame {g['group']:2d}: {len(g.parts)} signal(s) -> {parts}")
 
 
 if __name__ == "__main__":

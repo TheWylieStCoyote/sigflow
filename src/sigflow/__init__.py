@@ -13,6 +13,7 @@ frames = (sigflow.from_iterable([np.ones(4), np.ones(4)], Sig[float, N]) >> scal
 from . import io
 from .block import BlockDef, Framed, block, lift, source, tap
 from .builder import Graph
+from .collect import gather
 from .control import Knob, Run
 from .device import to_device, to_host
 from .dims import (
@@ -145,6 +146,7 @@ __all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "default_labels",
     "switch",
     "per_key",
+    "gather",
     "Ratio",
     "RatioMismatch",
     "from_iterable",
