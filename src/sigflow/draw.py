@@ -178,6 +178,10 @@ class _Layout:
                 [self.layout(node.otherwise)] if node.otherwise is not None else []
             )
             return self.column(cells, "when", node, broadcast=True)
+        if type(node).__name__ == "PerKey":
+            return self.column(
+                [self.layout(node.body)], "per key", node, broadcast=True
+            )
         if type(node).__name__ == "Switch":
             members = _members(node)
             cells = [self.layout(b) for b in members]
@@ -303,6 +307,8 @@ class _Layout:
 def _members(node: Any) -> list[Any]:
     if type(node).__name__ == "When":
         return [node.then] + ([node.otherwise] if node.otherwise is not None else [])
+    if type(node).__name__ == "PerKey":
+        return [node.body]
     if type(node).__name__ == "Switch":
         return node._all()
     return getattr(node, "branches", None) or getattr(node, "parts", None) or []

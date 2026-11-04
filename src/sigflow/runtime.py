@@ -41,6 +41,7 @@ from .graph import (
     Merge,
     Node,
     Parallel,
+    PerKey,
     Pipeline,
     Select,
     Slice,
@@ -218,6 +219,8 @@ class Runner:
             if node.kind == "stream":
                 return self._stream_block(node, upstream)
             return self._map_block(node, upstream)
+        if isinstance(node, PerKey):
+            return self._per_key(node, upstream)  # type: ignore[arg-type]
         if isinstance(node, Merge):
             return self._merge(node)
         if isinstance(node, Parallel):
@@ -815,6 +818,117 @@ class Runner:
             for t in [rt, *tasks]:
                 t.cancel()
             for t in [rt, *tasks]:
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+    async def _per_key(
+        self, node: PerKey, upstream: AsyncIterator[Frame]
+    ) -> AsyncIterator[Frame]:
+        """One instance of the body per key, made when the key is first seen: a real
+        stream fed by its own queue, closed after ``ttl`` input frames without its
+        key. Outputs merge in completion order."""
+        stats = self.mon.stats(node.name, node)
+        outq: asyncio.Queue = asyncio.Queue()
+        inqs: dict[Any, asyncio.Queue] = {}
+        tasks: dict[Any, asyncio.Task] = {}
+        last_seen: dict[Any, int] = {}
+        live = [0]  # tasks that have not put their _DONE yet (router included)
+
+        async def feed(q: asyncio.Queue) -> AsyncIterator[Frame]:
+            async for f in _drain(q):
+                yield f
+
+        async def drive(label: str, body: Node, q: asyncio.Queue) -> None:
+            try:
+                async for f in self.compile(body, feed(q)):
+                    await outq.put((label, f))
+            except BaseException as e:
+                await outq.put(("error", e))
+                raise
+            finally:
+                await outq.put(_DONE)
+
+        def open_instance(key: Any) -> asyncio.Queue:
+            q: asyncio.Queue = asyncio.Queue(maxsize=self.opts.queue_size)
+            inqs[key] = q
+            tasks[key] = asyncio.create_task(
+                drive(repr(key), _own_instance(node.body), q)
+            )
+            live[0] += 1
+            return q
+
+        async def close_instance(key: Any) -> None:
+            q = inqs.pop(key)
+            last_seen.pop(key, None)
+            tasks.pop(key)
+            await q.put(_DONE)  # the body finishes on its own; its _DONE is counted
+
+        async def router() -> None:
+            n = 0
+            try:
+                async for f in upstream:
+                    stats.inp += 1
+                    n += 1
+                    if f.failed:
+                        await outq.put(("pass", f))
+                        continue
+                    try:
+                        key = node.key_of(f)
+                    except Exception as e:
+                        issue = Issue(
+                            f"{type(e).__name__}: {e}", "error", node.name, e, f.prov
+                        )
+                        await outq.put(
+                            ("pass", f.evolve(data=MISSING, issues=f.issues + (issue,)))
+                        )
+                        continue
+                    if key is None:
+                        await outq.put(("pass", f))
+                        continue
+                    q = inqs.get(key)
+                    if q is None:
+                        q = open_instance(key)
+                    last_seen[key] = n
+                    await q.put(f)
+                    if node.ttl is not None:
+                        stale = [
+                            k for k, seen in last_seen.items() if n - seen >= node.ttl
+                        ]
+                        for k in stale:
+                            await close_instance(k)
+            except BaseException as e:
+                await outq.put(("error", e))
+                raise
+            finally:
+                for q in list(inqs.values()):
+                    await q.put(_DONE)
+                await outq.put(_DONE)
+
+        rt = asyncio.create_task(router())
+        live[0] += 1
+        seq = 0
+        try:
+            while live[0]:
+                it = await outq.get()
+                if it is _DONE:
+                    live[0] -= 1
+                    continue
+                label, f = it
+                if label == "error":
+                    raise f
+                stats.out += 1
+                yield f.evolve(
+                    prov=Provenance(
+                        f"{node.name}[{label}]", {}, (f.prov,) if f.prov else (), seq
+                    )
+                )
+                seq += 1
+        finally:
+            for t in [rt, *tasks.values()]:
+                t.cancel()
+            for t in [rt, *tasks.values()]:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
@@ -1611,6 +1725,32 @@ class _SubPipe:
             await self.task
         except (asyncio.CancelledError, Exception):
             pass
+
+
+def _own_instance(body: Node) -> Node:
+    """A copy of ``body`` with blocks and state of its own: every leaf is cloned, and
+    a block whose function is a stateful object (``Stateful``, anything with
+    ``state()`` / ``restore()``) gets a deep copy of it, so instances made for
+    different keys never share state."""
+    import copy
+
+    from .graph import fresh
+    from .xarray import adapt
+
+    seen = {id(n) for n in body.nodes()}  # mark everything: fresh() then clones it all
+    instance = fresh(body, seen)
+    for leaf in instance.nodes():
+        if not isinstance(leaf, Block):
+            continue
+        defn, fn = leaf.defn, leaf.defn.fn
+        if not (hasattr(fn, "state") and hasattr(fn, "restore")):
+            continue
+        own = object.__new__(type(defn))  # not copy(): a BlockDef pickles by re-import
+        own.__dict__.update(defn.__dict__)
+        own.fn = copy.deepcopy(fn)
+        own.adapted = adapt(own)
+        leaf.defn = own
+    return instance
 
 
 def _worker_context() -> Any:

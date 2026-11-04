@@ -54,6 +54,13 @@ New
   A manually triggered GPU CI workflow (`.github/workflows/gpu.yml`) runs the
   device and xarray tests on a self-hosted runner; the docs gained a backend
   support matrix (**Guide → Array backends and GPU**).
+- `per_key(key, body, ttl=)`: dynamic keyed routing. One instance of `body`
+  per distinct key, created when the key is first seen, each a real stream
+  with state of its own (stream blocks and `Stateful` objects alike), closed
+  after `ttl` input frames without its key. Frames whose key is `None`, and
+  failed frames, pass through. Outputs carry provenance `per_key(...)[key]`.
+  `examples/25_per_signal.py` detects a varying number of tones in a spectrum
+  and processes each through its own stateful graph.
 - Tags, a fourth annotation level: `frame.tag("speech", segment=3)`,
   `frame.tag("burst", span=(1.2, 1.5))`, `frame.untag(...)`, `frame.mask(name)`,
   `frame.tags.at(t)`; `"speech" in frame` and `frame["segment"]` look tags up

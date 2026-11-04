@@ -77,3 +77,24 @@ demod = switch(
     default=log_unknown,
 )
 ```
+
+## One instance per key
+
+`switch` needs its branches up front. When the keys are only known at run
+time, such as the signals a detector finds in a spectrum, `per_key(key, body)`
+makes one instance of `body` per distinct key, the first time the key is seen:
+
+```python
+tracked = detect >> per_key("track", per_signal, ttl=50)
+```
+
+Each instance is a real stream that only ever sees its own frames, so a body
+with memory, a running average, a PLL, a `Stateful` object, keeps that memory
+per signal. `key` is an annotation name or a callable on the frame; a frame
+whose key is `None`, and a failed frame, pass through untouched. `ttl=50`
+closes an instance after fifty input frames without its key, so a signal that
+disappears releases its state; if the key comes back it gets a fresh
+instance. Outputs merge in completion order, each with provenance
+`per_key(...)[key]`, and a key's own frames keep their order. The detector
+upstream is the natural place to assign keys: a stream block that yields one
+frame per detection and tags it with a stable track id.

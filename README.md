@@ -244,6 +244,10 @@ selector is a callable on the frame or an annotation name — and its branches
 are whole pipelines that only see their own frames, run concurrently, may
 re-frame or keep state, and merge back into one stream with provenance
 `switch(...)[key]`; `ordered=True` keeps input order for 1:1 branches.
+`per_key(key, body, ttl=)` is the dynamic form: one instance of `body` per
+distinct key, made when the key is first seen and closed after `ttl` frames
+without it, so a variable number of detected signals can each run through a
+stateful per-signal graph.
 
 A source-less graph is also a function: `front_end(x)`, `front_end([x1, x2])`
 or `front_end(frames)` run it over in-memory data and return frames (lineage

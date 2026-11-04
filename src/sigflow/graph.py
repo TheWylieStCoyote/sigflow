@@ -66,6 +66,7 @@ __all__ = [
     "from_iterable",
     "merge",
     "parallel",
+    "per_key",
     "port",
     "switch",
     "validate",
@@ -933,6 +934,77 @@ def switch(
     return Switch(selector, nodes, dflt, ordered, name)
 
 
+class PerKey(Node):
+    """Dynamic keyed routing (built by :func:`per_key`): one instance of ``body`` per
+    distinct key, created when the key is first seen, each a real stream that only
+    ever sees its own frames, so stateful per-signal processing works for a number
+    of signals that is not known in advance. Outputs merge in completion order with
+    provenance ``per_key(...)[key]``. An instance whose key has not been seen for
+    ``ttl`` input frames is closed (its generators finish, its state is released);
+    a key that comes back gets a new instance. A frame whose key is None passes
+    through untouched."""
+
+    def __init__(
+        self,
+        selector: Any,
+        body: Node,
+        ttl: int | None = None,
+        name: str | None = None,
+    ) -> None:
+        if body.in_type is None:
+            raise TypeMismatch("per_key() needs a body that accepts input")
+        self.key_of = (
+            (lambda f, k=selector: f.get(k)) if isinstance(selector, str) else selector
+        )
+        self.selector = selector
+        self.body = body
+        self.ttl = ttl
+        self.in_type = body.in_type
+        self.out_type = body.out_type
+        self.port_names = tuple(getattr(body, "port_names", ()))
+        sel = (
+            selector
+            if isinstance(selector, str)
+            else getattr(selector, "__name__", "selector")
+        )
+        self.name = name or f"per_key({sel})"
+
+    def ratio_for(self, in_type: Any) -> Ratio:
+        return Ratio.ANY  # as many instances as keys, each with the body's rate
+
+    def validate(self, env: Env | None = None) -> Env:
+        return self.body.validate(env if env is not None else Env())
+
+    def accept(self, produced: Any, env: Env, where: str) -> None:
+        self.body.accept(produced, env, f"{where} [per key]")
+
+    def resolve_ports(self, upstream: Node) -> Node:
+        body = self.body.resolve_ports(upstream)
+        if body is self.body:
+            return self
+        return PerKey(self.selector, body, self.ttl, self.name)
+
+    def nodes(self) -> list[Node]:
+        return self.body.nodes()
+
+    def describe(self, indent: str = "") -> str:
+        ttl = f", ttl={self.ttl}" if self.ttl is not None else ""
+        return (
+            f"{indent}{self.name}{ttl}: {describe(self.in_type)} -> {describe(self.out_type)}\n"
+            + self.body.describe(indent + "  × ")
+        )
+
+
+def per_key(
+    key: Any, body: Any, ttl: int | None = None, name: str | None = None
+) -> PerKey:
+    """Route each frame to its own instance of ``body``, one per distinct key:
+    ``per_key("track", per_signal, ttl=50)``. ``key`` is an annotation name or a
+    callable on the :class:`Frame`; ``ttl`` closes an instance after that many
+    input frames without its key. See :class:`PerKey`."""
+    return PerKey(key, as_node(body), ttl, name)
+
+
 class Align(Node):
     """Timestamp join (built by :func:`align`): pairs frames from several sources whose
     start times agree within ``tolerance`` seconds, dropping unmatched older frames.
@@ -1324,6 +1396,8 @@ def fresh(node: Node, seen: set[int]) -> Node:
             node.tag,
             node.passthrough,
         )
+    if isinstance(node, PerKey):
+        return PerKey(node.selector, fresh(node.body, seen), node.ttl, node.name)
     return node
 
 
