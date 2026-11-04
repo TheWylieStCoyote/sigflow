@@ -8,6 +8,9 @@ with generators. It depends only on NumPy, SciPy and matplotlib.
 guides, one page per example, and the changelog.
 
 ```python
+from collections.abc import Iterator
+from typing import Literal
+
 import numpy as np
 from sigflow import block, Sig, Stream, run
 from sigflow.dims import N, T
@@ -131,6 +134,8 @@ to `N` in `scale` — and become equal only where edges meet. Validation is a
 union-find unification run while the graph is built, so
 
 ```python
+from sigflow import dsp, linalg
+
 (dsp.sine(n=64) & dsp.sine(n=128)) >> linalg.dot
 # TypeMismatch: (sine & sine) -> dot[1] axis 0: dimension 'N' is 64 but here needs 128
 ```
@@ -156,8 +161,10 @@ multiply along a pipeline (`g.ratio`, shown as `[1:4]` by `describe()`), and
 the branches of a fan-out or zip must be compatible, so
 
 ```python
-sine(n=1024) >> (dsp.chunk(256) | dsp.rms)
-# RatioMismatch: fan-out: chunk emits 1:4 frames per input but rms emits 1:1 ...
+from sigflow import dsp
+
+dsp.sine(n=1024) >> (dsp.chunk(256) | dsp.rms)
+# RatioMismatch: fan-out: chunk emits 1:4 frames per input but rms emits 1:1
 ```
 
 fails when the graph is built rather than silently stopping at the shortest
@@ -218,14 +225,17 @@ One frame's `trace()` answers "where did this come from"; `Lineage` answers the
 questions you ask about a whole run:
 
 ```python
-from sigflow import Lineage
+from sigflow import Lineage, dsp, run
 
+g = dsp.sine(n=1024, frames=20) >> dsp.scale(gain=2.0) >> dsp.to_complex >> dsp.fft
 L = Lineage(run(g, on_error="mark"))
 L.failed()  # frames that failed
-L.through("fft", n=1024)  # frames whose lineage passed through fft with that config
-L.descendants_of("io.raw", seq=8)  # every output that descends from source frame 8
+L.through("scale", gain=2.0)  # frames whose lineage passed through scale with that config
+L.descendants_of("sine", seq=8)  # every output that descends from source frame 8
 L.blame()  # failures grouped by (origin block, source block, source seq)
 L.configs("scale")  # the distinct configurations a block ran with
+a = run(dsp.sine(n=8, frames=1) >> dsp.scale(gain=2.0) >> dsp.rms)[0]
+b = run(dsp.sine(n=8, frames=1) >> dsp.scale(gain=3.0))[0]
 Lineage.diff(a, b)  # {"scale.gain": (2.0, 3.0), "rms": ("present", "absent")}
 print(L.table())  # per-block frame / failed / warning counts
 ```
@@ -268,6 +278,25 @@ are made, cycles are rejected (use `feedback()`), a producer may feed any
 number of consumers, and multi-input members receive their inputs zipped.
 
 ```python
+import numpy as np
+from sigflow import Graph, Sig, block, dsp, linalg, run
+from sigflow.dims import N, T
+
+src = dsp.noise(n=8, frames=64) >> dsp.buffer(count=16)  # 16 x 8 snapshots
+eigh = block(  # np.linalg.eigh with named output ports
+    np.linalg.eigh,
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
+)
+
+
+@block
+def summarize(
+    vals: Sig[float, N], vecs: Sig[T, tuple[N, N]], raw: Sig[float, tuple[N, N]]
+) -> Sig[dict]:
+    return {"top": float(vals[-1]), "trace": float(np.trace(raw)), "n": vecs.shape[0]}
+
+
 g = Graph("diamond")
 cov = g.add(src >> linalg.covariance, "cov")
 e = g.add(eigh)  # named ports vals / vecs
@@ -276,6 +305,7 @@ g.connect(cov, e).connect(e["vals"], s, "vals").connect(e["vecs"], s, "vecs").co
     cov, s, "raw"
 )
 g.output(s)  # several outputs -> a tuple
+run(g)[-1].data  # {"top": ..., "trace": ..., "n": 8}
 ```
 
 A graph with `g.input(type)` instead of sources is a reusable node; `g.draw()`
@@ -330,6 +360,15 @@ A node with a tuple output — a fan-out, a zip, or a block that returns several
 signals — exposes **output ports**, selected with the subscript operator:
 
 ```python
+import numpy as np
+from sigflow import Sig, block, dsp, linalg, plot
+from sigflow.dims import N, T
+
+src = dsp.noise(n=64)
+cov = src >> dsp.buffer(count=16) >> linalg.covariance
+fft, power_db, rms, peak = dsp.to_complex >> dsp.fft, dsp.power_db, dsp.rms, dsp.peak
+mats = cov
+
 cov >> linalg.eigh[0] >> plot.line()  # eigenvalues only
 src >> (fft >> power_db | rms | peak)["rms"]  # a fan-out branch by name
 src >> (fft >> power_db | rms | peak)[0, 2]  # a tuple of two ports; [1:] also works
@@ -346,6 +385,35 @@ port selectors — `port(key)` is a selection that resolves to a typed `Select`
 once it is placed after a tuple-typed node, including inside a branch:
 
 ```python
+import numpy as np
+from sigflow import Sig, block, dsp, linalg, port
+from sigflow.dims import M, N, T
+
+eigh = dsp.noise(n=8) >> dsp.buffer(count=16) >> linalg.covariance >> block(
+    np.linalg.eigh,
+    inputs=Sig[T, tuple[N, N]],
+    outputs={"vals": Sig[float, N], "vecs": Sig[T, tuple[N, N]]},
+)
+
+
+@block
+def model_order(vals: Sig[float, N]) -> Sig[int, tuple[()]]:
+    return int(np.sum(vals > 0.1 * vals.max()))
+
+
+@block
+def noise_subspace(vecs: Sig[T, tuple[N, N]], order: Sig[int, tuple[()]]) -> Sig[T, tuple[N, M]]:
+    return vecs[:, : vecs.shape[1] - int(order)]
+
+
+@block
+def validate(x: Sig[float, N]) -> Sig[float, N]:
+    assert np.isfinite(x).all()
+    return x
+
+
+a, b, c = (dsp.sine(n=16, freq=f) for f in (500.0, 1000.0, 2000.0))
+
 (
     eigh >> (port("vecs") | port("vals") >> model_order) >> noise_subspace
 )  # (vecs, order) -> block
@@ -361,6 +429,10 @@ no ports and `[]` raises, which keeps the door open for data slicing later.
 The same operator reads frames and lineage:
 
 ```python
+from sigflow import dsp, run
+
+f = run(dsp.sine(n=64, frames=3) >> dsp.to_complex >> dsp.fft >> (dsp.power_db | dsp.rms))[-1]
+
 f["rate"]  # annotation lookup: frame-level, then stream-level, then sample-level
 f.get("snr", None)  # with a default;  "rate" in f
 f[1]  # part 1 of a tuple frame (from a fan-out / zip), with its own provenance
@@ -377,13 +449,26 @@ Graphs are immutable values built from operators, and a graph is a node like
 any other, so graphs connect exactly the way blocks do:
 
 ```python
+import numpy as np
+from sigflow import Sig, block, dsp, from_iterable, run
+from sigflow.dims import N
+
+rx, ref = dsp.noise(n=256, frames=4), dsp.sine(n=256, frames=4)
+
+
+@block
+def compare(a: Sig[complex, N], b: Sig[complex, N]) -> Sig[float, tuple[()]]:
+    return float(np.abs(np.vdot(a, b)))
+
+
 front = dsp.window >> dsp.to_complex >> dsp.fft  # no source: a reusable sub-graph
 back = dsp.power_db >> dsp.rms
 
 dsp.sine(n=256) >> front >> back  # chain graphs
-(rx >> front) & (ref >> front) >> compare  # zip two graphs
-src >> (front | front >> back)  # a graph as a fan-out branch
-from_iterable(g1, type=g1.out_type) >> g2  # feed one run's output into another
+((rx >> front) & (ref >> front)) >> compare  # zip two graphs (`>>` binds tighter than `&`)
+rx >> (front | front >> back)  # a graph as a fan-out branch
+g1, g2 = rx >> front, back
+from_iterable(run(g1), type=g1.out_type) >> g2  # feed one run's output into another
 ```
 
 The join is type-checked like any edge. A sub-graph may be used several times
@@ -417,6 +502,10 @@ hopping through a worker thread — and falls back to a thread otherwise (or whe
 declared `threaded=True`, which is right for a block that blocks on I/O).
 
 ```python
+from sigflow import dsp, run
+
+g = dsp.sine(n=1024, frames=100) >> dsp.scale(gain=2.0) >> dsp.rms
+
 run(
     g, provenance="roots"
 )  # keep only the source frames behind each output (replay still works)
@@ -428,14 +517,28 @@ run(g, provenance="off")  # no lineage at all: fastest for very long runs
 `parallel(block, workers=4)` wraps a data-only map block so its frames are
 computed on a pool while the graph sees an ordinary 1:1 block — results come
 out in order, provenance and annotations are attached as usual, and a failing
-frame becomes a failed frame rather than killing the pool.
+frame becomes a failed frame rather than killing the pool. With the default
+`backend="process"` the workers start from a fork server (or a fresh
+interpreter) and import the main module, so the block must be importable
+(defined at module level) and a script must run its graph under
+`if __name__ == "__main__":`; otherwise every worker starts the graph again
+and the run stops with an error saying so. `backend="thread"` has neither
+requirement and suits blocks that release the GIL (NumPy, SciPy).
 
 ```python
-g = (
-    io.raw("capture.cfile", np.complex64, n=1 << 16)
-    >> parallel(heavy_dsp, workers=4)
-    >> plot.waterfall()
-)
+import numpy as np
+from sigflow import dsp, io, parallel, plot, run
+
+heavy_dsp = dsp.power_db  # parallel() wraps one module-level map block
+
+if __name__ == "__main__":  # process workers import this script: run behind this line
+    np.zeros(1 << 18, np.complex64).tofile("capture.cfile")  # four frames of samples
+    g = (
+        io.raw("capture.cfile", np.complex64, n=1 << 16)
+        >> parallel(heavy_dsp, workers=4)
+        >> plot.waterfall()
+    )
+    run(g)
 ```
 
 `backend="process"` (the default) needs a picklable, module-level block — blocks

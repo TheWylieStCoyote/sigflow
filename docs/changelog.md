@@ -92,6 +92,14 @@ New
   editing the graph: `latest`, `history`, `count`, `on(fn)`, `plot(block)`,
   `wait(n)`, `show()` and `close()`. Built on `Monitor.watch(name, fn)`, which
   also works with a blocking `run(g, monitor=mon)`.
+- Every Python sample in the README runs as written, and `tests/test_readme.py`
+  runs each one as its own script (a sample that shows an error must raise
+  exactly that error). The zip sample was wrong as written: `>>` binds tighter
+  than `&`, so it now parenthesises the zip.
+- A `parallel(..., backend="process")` whose worker dies now stops the run
+  with an error naming the usual cause: since workers start from a fork
+  server they import the main module, so a script must run its graph under
+  `if __name__ == "__main__":` (the README says so too).
 - `examples/26_graph_checks.py` walks through what `Graph.connect` checks on
   the spot and what `validate()` checks later; one `connect` now emits a
   `TagWarning` once instead of once per re-check pass.

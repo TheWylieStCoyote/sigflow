@@ -26,6 +26,7 @@ import queue
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
+from concurrent.futures.process import BrokenProcessPool
 from typing import Any, NoReturn, cast
 
 import numpy as np
@@ -1499,6 +1500,8 @@ class Runner:
                 t0 = time.perf_counter()
                 try:
                     result = await fut
+                except BrokenProcessPool as e:
+                    raise _broken_pool(inner.name) from e
                 except Exception as e:
                     stats.errors += 1
                     if policy == "raise":
@@ -1554,14 +1557,17 @@ class Runner:
                     ):
                         _check_required(inner.in_type, f, f"{inner.name} input")
                     cfg = live(inner.given) if inner.live else dict(inner.given)
-                    fut = loop.run_in_executor(
-                        pool,
-                        _call_block,
-                        d if node.backend == "process" else call,
-                        f.data,
-                        cfg,
-                        self.opts.labels,
-                    )
+                    try:
+                        fut = loop.run_in_executor(
+                            pool,
+                            _call_block,
+                            d if node.backend == "process" else call,
+                            f.data,
+                            cfg,
+                            self.opts.labels,
+                        )
+                    except BrokenProcessPool as e:
+                        raise _broken_pool(inner.name) from e
                     pending.append((f, fut))
                 async for out in emit_ready(block_on_first=len(pending) >= node.window):
                     yield out
@@ -1837,6 +1843,18 @@ def _own_instance(body: Node) -> Node:
         own.adapted = adapt(own)
         leaf.defn = own
     return instance
+
+
+def _broken_pool(name: str) -> RuntimeError:
+    """What a broken process pool most likely means, said where it happens."""
+    return RuntimeError(
+        f"parallel({name}): a process-pool worker died. Workers start from a fork "
+        "server (or a fresh interpreter) and import the main module, so a script "
+        "that runs the graph at import time starts it again in every worker. Put "
+        'the run under `if __name__ == "__main__":`, or use backend="thread". '
+        "(A worker can also die of its own accord: out of memory, a crash in "
+        "native code.)"
+    )
 
 
 def _worker_context() -> Any:
