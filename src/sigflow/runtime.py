@@ -1467,7 +1467,7 @@ class Runner:
         """Submit frames to a pool, keep a window of in-flight futures, yield results in order."""
         from collections import deque
 
-        from .pools import executor, job, resolve
+        from .pools import executor, interpreter_failure, job, resolve
 
         inner = node.inner
         d = inner.defn
@@ -1503,6 +1503,10 @@ class Runner:
                 except BrokenProcessPool as e:
                     raise _broken_pool(inner.name) from e
                 except Exception as e:
+                    if kind == "interpreter":
+                        stop = interpreter_failure(inner.name, e)
+                        if stop is not None:
+                            raise stop from e
                     stats.errors += 1
                     if policy == "raise":
                         raise
@@ -1558,15 +1562,18 @@ class Runner:
                         _check_required(inner.in_type, f, f"{inner.name} input")
                     cfg = live(inner.given) if inner.live else dict(inner.given)
                     try:
-                        fut = loop.run_in_executor(
-                            pool,
-                            _job_call,
-                            target,
-                            leading,
-                            f.data,
-                            cfg,
-                            self.opts.labels if kind == "process" else None,
-                        )
+                        if kind == "interpreter":
+                            fut = target.submit(pool, loop, f.data, cfg)
+                        else:
+                            fut = loop.run_in_executor(
+                                pool,
+                                _job_call,
+                                target,
+                                leading,
+                                f.data,
+                                cfg,
+                                self.opts.labels if kind == "process" else None,
+                            )
                     except BrokenProcessPool as e:
                         raise _broken_pool(inner.name) from e
                     pending.append((f, fut))

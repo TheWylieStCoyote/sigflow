@@ -560,6 +560,17 @@ a block that suits both runs well on either build. `sigflow.pools.gil_enabled()`
 reports the GIL's state. On a free-threaded build, generator stream blocks run in
 a worker thread instead of inline through greenlet, which crashes there.
 
+On Python 3.14 and later, `backend="interpreter"` runs the block in
+sub-interpreters (`concurrent.futures.InterpreterPoolExecutor`): one process,
+a GIL per worker, so pure-Python work such as packet decoding or text parsing
+runs on several cores without process start-up or pickling. Sub-interpreters
+cannot load NumPy, so the block's function must live in a module of plain
+Python (wrap it with `block(fn, inputs=..., outputs=...)` where the graph is
+built), and the frames must carry plain values such as `bytes`, `str`, numbers
+or tuples. `parallel` refuses a lambda, a function from the main script or a
+module that imports NumPy when the graph is built. Data a worker cannot receive,
+or an import it cannot do, stops the run with an error that explains this.
+
 ### Labelled arrays with xarray
 
 Install `python -m pip install -e ".[xarray]"` and an `xarray.DataArray` can be

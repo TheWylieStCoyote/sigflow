@@ -8,6 +8,12 @@
 ``"loky"``          a ``loky`` process pool (``pip install loky``): no main guard
                     needed, and blocks defined in a script or a notebook, lambdas
                     included, are sent to the workers by value.
+``"interpreter"``   Python 3.14's ``InterpreterPoolExecutor``: one process, one
+                    sub-interpreter per worker, each with its own GIL, so pure-Python
+                    work runs in parallel. Sub-interpreters cannot load NumPy, so the
+                    block's function must live in a module that does not import NumPy
+                    (or sigflow), and the frames' data must be plain Python values
+                    (bytes, str, numbers, tuples...). Suits decoding and parsing.
 ``"freethreaded"``  a thread pool that insists on a free-threaded build of Python
                     (3.13t, 3.14t), where threads run Python code in parallel: no
                     pickling, no worker start-up, lambdas and notebook blocks welcome.
@@ -25,9 +31,11 @@ to start it (:func:`executor`), and what to send to a worker for one frame
 from __future__ import annotations
 
 import concurrent.futures as cf
+import functools
 import hashlib
 import sys
 import sysconfig
+import types
 import warnings
 import weakref
 from collections.abc import Callable
@@ -40,11 +48,12 @@ __all__ = [
     "executor",
     "free_threaded",
     "gil_enabled",
+    "interpreter_failure",
     "job",
     "resolve",
 ]
 
-BACKENDS = ("process", "thread", "loky", "freethreaded", "auto")
+BACKENDS = ("process", "thread", "loky", "interpreter", "freethreaded", "auto")
 
 
 def free_threaded() -> bool:
@@ -67,20 +76,30 @@ def available(backend: str) -> bool:
             import loky  # noqa: F401
         except ImportError:
             return False
+    if backend == "interpreter":
+        return hasattr(cf, "InterpreterPoolExecutor")
     if backend == "freethreaded":
         return free_threaded()
     return backend in BACKENDS
 
 
-def check(backend: str) -> None:
-    """Refuse an unknown backend, or one this interpreter cannot run, when the graph is
-    built."""
+def check(backend: str, defn: Any = None) -> None:
+    """Refuse an unknown backend, one this interpreter cannot run, or a block it cannot
+    run, when the graph is built."""
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {', '.join(map(repr, BACKENDS))}")
     if backend == "loky" and not available(backend):
         raise ImportError(
             "parallel(backend='loky') needs the loky package: pip install loky"
         )
+    if backend == "interpreter":
+        if not available(backend):
+            raise RuntimeError(
+                "parallel(backend='interpreter') needs Python 3.14 or later "
+                f"(this is {sys.version.split()[0]})"
+            )
+        if defn is not None:
+            _check_interpreter_block(defn)
     if backend == "freethreaded" and not free_threaded():
         raise RuntimeError(
             "parallel(backend='freethreaded') needs a free-threaded build of Python "
@@ -110,6 +129,8 @@ def executor(kind: str, workers: int) -> Any:
     """Start the pool for a resolved backend."""
     if kind in ("thread", "freethreaded"):
         return cf.ThreadPoolExecutor(workers, thread_name_prefix="sigflow-parallel")
+    if kind == "interpreter":
+        return cf.InterpreterPoolExecutor(workers)  # type: ignore[attr-defined]
     if kind == "loky":
         from loky import get_reusable_executor
 
@@ -128,6 +149,8 @@ def job(kind: str, defn: Any, call: Callable[..., Any], labels: bool) -> tuple:
 
     if kind in ("thread", "freethreaded"):
         return _call_block, (call,)
+    if kind == "interpreter":
+        return _InterpreterJob(defn.fn), ()
     if kind == "loky":
         return _call_shipped, (_ship(defn), labels)
     return _call_block, (defn,)
@@ -208,3 +231,75 @@ def _call_shipped(payload: bytes, labels: bool, data: Any, cfg: dict) -> Any:
             _RECEIVED.clear()
         defn = _RECEIVED[key] = pickle.loads(payload)
     return defn.resolve_call(labels)(data, **cfg)
+
+
+# --------------------------------------------------------------------------- #
+# interpreter: plain functions on plain data
+# --------------------------------------------------------------------------- #
+
+
+def _check_interpreter_block(defn: Any) -> None:
+    """A sub-interpreter imports the block's function by its module path and cannot
+    load NumPy, sigflow, or a function defined in ``__main__`` or a notebook."""
+    fn = defn.fn
+    mod, qual = getattr(fn, "__module__", None), getattr(fn, "__qualname__", "")
+    if defn.labels:
+        raise TypeError(
+            f"parallel({defn.name}, backend='interpreter'): a label-aware block needs "
+            "sigflow (and NumPy) in the worker; sub-interpreters cannot load them"
+        )
+    if not mod or mod in ("__main__", "__mp_main__") or "<" in qual:
+        raise TypeError(
+            f"parallel({defn.name}, backend='interpreter'): the function must be "
+            "importable from a module (not a script's main module, a notebook cell, "
+            "a lambda or a nested function), since each sub-interpreter imports it"
+        )
+    names = vars(sys.modules[mod]) if mod in sys.modules else {}
+    uses = {
+        value.__name__.split(".")[0]
+        for value in names.values()
+        if isinstance(value, types.ModuleType)
+        and value.__name__.split(".")[0] in ("numpy", "sigflow")
+    } | {
+        getattr(value, "__module__", "").split(".")[0]
+        for value in names.values()
+        if callable(value)
+        and getattr(value, "__module__", "").split(".")[0] in ("numpy", "sigflow")
+    }
+    if uses:
+        raise TypeError(
+            f"parallel({defn.name}, backend='interpreter'): {mod} imports "
+            f"{', '.join(sorted(uses))}, which sub-interpreters cannot load. Put the "
+            "function in a module of plain Python and wrap it with "
+            "block(fn, inputs=..., outputs=...) where the graph is built"
+        )
+
+
+class _InterpreterJob:
+    """What a sub-interpreter runs for one frame: the block's function, imported there
+    by its module path, called on the frame's data and the configuration. It is a
+    standard-library ``partial`` on the worker side: nothing of sigflow travels."""
+
+    def __init__(self, fn: Callable[..., Any]) -> None:
+        self.fn = fn
+
+    def submit(self, pool: Any, loop: Any, data: Any, cfg: dict) -> Any:
+        return loop.run_in_executor(pool, functools.partial(self.fn, **cfg), data)
+
+
+def interpreter_failure(name: str, error: BaseException) -> RuntimeError | None:
+    """The error to stop a run with when a sub-interpreter could not even start the
+    job (an import it cannot do, data it cannot receive); None for an ordinary
+    exception raised by the block, which becomes a failed frame."""
+    structural = isinstance(error, ImportError) or type(error).__name__ in (
+        "NotShareableError",
+        "ExecutionFailed",
+    )
+    if not structural:
+        return None
+    return RuntimeError(
+        f"parallel({name}, backend='interpreter'): a sub-interpreter could not run "
+        f"the job ({type(error).__name__}, shown below). Sub-interpreters cannot load NumPy or sigflow, so the "
+        "frames' data must be plain Python values (bytes, str, numbers, tuples) and "
+        "the function must come from a module that imports neither."
+    )

@@ -18,6 +18,13 @@ New
   so each held frame is shown, and released, one at a time. Before, a frame
   held right after another was released could lose its hold state, and the
   run then hung on a frame nothing could release.
+- `parallel(block, backend="interpreter")` (Python 3.14+): the block runs in
+  sub-interpreters through `InterpreterPoolExecutor`, so pure-Python work
+  (decoding, parsing) uses several cores in one process. The function must
+  come from a plain-Python module and the frames must carry plain values,
+  since sub-interpreters cannot load NumPy; `parallel` refuses lambdas,
+  main-script functions and NumPy-importing modules when the graph is built,
+  and a job a worker cannot start stops the run with an explanation.
 - `sigflow.dims`: dimension and dtype-variable symbols (`N`, `M`, `T`, the
   whole alphabet; also exported from `sigflow`). `Sig[float, N]` builds the
   same contract as `Sig[float, "N"]`, which keeps working, but checkers read

@@ -29,6 +29,7 @@ explicit.
 | Plotting and file sinks | Supported | Transfer to the host first | Numeric paths read the values | Materialises |
 | `Frame.save` / `Frame.load` | Supported | Fetched to the host when saved | Values, dims, coords, attrs and name round-trip | Materialises |
 | `parallel(..., backend="process")` | Picklable blocks | Not a placement or scheduling abstraction | Labelled payloads pickle like arrays; the run's `labels` choice reaches the workers | Not a substitute for dask scheduling |
+| `parallel(..., backend="interpreter")` | Not supported: sub-interpreters cannot load NumPy | Not supported | Not supported | Not supported |
 
 For blocks with several operands, give them matching backends: nothing uploads
 or downloads an operand to resolve a mixed expression. Device arrays of other
