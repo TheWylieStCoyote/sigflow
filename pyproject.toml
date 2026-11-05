@@ -17,6 +17,7 @@ dependencies = ["numpy>=1.24", "scipy>=1.10", "matplotlib>=3.7"]
 notebook = ["ipython", "jupyter", "ipywidgets"]
 test = ["pytest"]
 perf = ["greenlet"] # sync generator stream blocks run inline on the event loop
+parallel = ["loky"] # parallel(..., backend="loky"): no main guard, notebook-defined blocks
 zmq = [
   "pyzmq",
   "tornado; sys_platform == 'win32'", # zmq.asyncio on a Windows proactor loop needs it
@@ -32,6 +33,7 @@ dev = [
   "nbconvert",
   "greenlet",
   "pyzmq",
+  "loky",
   "xarray",
   "dask[array]",
   "mkdocs-material",

@@ -1083,10 +1083,11 @@ class Parallel(Node):
     as they arrive and results are yielded *in order*, so the graph sees an ordinary 1:1
     block that uses several cores. ``backend="process"`` needs a picklable function (a
     module-level block) and sends the frame's data to the worker; ``"thread"`` works for
-    anything and helps when the function releases the GIL (NumPy, SciPy);
-    ``"freethreaded"`` is a thread pool for free-threaded Python, where threads run
-    Python code in parallel; ``"auto"`` uses it when the GIL is off and processes
-    otherwise. See :mod:`sigflow.pools`."""
+    anything and helps when the function releases the GIL (NumPy, SciPy); ``"loky"``
+    (``pip install loky``) is a process pool that needs no main guard and takes blocks
+    defined in a script or a notebook; ``"freethreaded"`` is a thread pool for
+    free-threaded Python, where threads run Python code in parallel; ``"auto"`` uses it
+    when the GIL is off and processes otherwise. See :mod:`sigflow.pools`."""
 
     def ratio_for(self, in_type: Any) -> Ratio:
         return self.inner.ratio_for(in_type)

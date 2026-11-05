@@ -44,8 +44,10 @@ def gil_back_on(monkeypatch):
 
 
 def test_unknown_backend_lists_the_choices():
-    with pytest.raises(ValueError, match="'process', 'thread', 'freethreaded', 'auto'"):
+    with pytest.raises(ValueError, match="backend must be one of") as refused:
         parallel(dsp.rms, backend="gpu")
+    assert all(repr(name) in str(refused.value) for name in pools.BACKENDS)
+    assert {"freethreaded", "auto"} <= set(pools.BACKENDS)
 
 
 def test_freethreaded_is_refused_on_a_build_with_a_gil(monkeypatch):
