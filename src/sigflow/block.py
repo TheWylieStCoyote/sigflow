@@ -216,6 +216,7 @@ class BlockDef:
         self.__doc__ = doc or getattr(fn, "__doc__", None)
         self.on_error = on_error
         self.tap = tap
+        self._bound_from: tuple[BlockDef, dict] | None = None  # set by bind()
         functools.update_wrapper(self, fn, updated=())
 
         try:
@@ -490,6 +491,7 @@ class BlockDef:
         )
         new.config = {k: v for k, v in self.config.items() if k not in config}
         new.is_async = self.is_async
+        new._bound_from = (self, dict(config))  # pickles as "that block, bound"
         new.port_names = self.port_names
         return new
 
@@ -520,6 +522,9 @@ class BlockDef:
 
     # -- pickling: by import path, so process pools can call the block ------- #
     def __reduce__(self) -> Any:
+        bound = getattr(self, "_bound_from", None)
+        if bound is not None:  # made with .bind(): rebuild from the original block
+            return (_rebind, bound)
         fn = self.fn
         mod, qual = getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
         if mod and qual and "<" not in qual:
@@ -575,6 +580,11 @@ def _import_block(mod: str, qual: str) -> Any:
     for part in qual.split("."):
         obj = getattr(obj, part)
     return obj if isinstance(obj, BlockDef) else BlockDef(obj)
+
+
+def _rebind(defn: BlockDef, config: dict) -> BlockDef:
+    """Unpickle a block made with ``.bind()``: the original block, bound again."""
+    return defn.bind(**config)
 
 
 def _looks_like_data(x: Any) -> bool:

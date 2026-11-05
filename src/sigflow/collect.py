@@ -10,6 +10,7 @@ fits a graph just as well.
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Callable, Iterator
 from typing import Any
 
@@ -81,14 +82,22 @@ def gather(
     order_of = _getter(order) if order is not None else None
     expected = _expected(count)
 
-    groups: dict[Any, list[Frame]] = {}
-    seen_at: dict[Any, int] = {}
-    started: list[Any] = []  # group keys in the order their first member arrived
-    done: dict[Any, Frame | None] = {}  # released groups waiting (ordered=True)
+    # A key can come back after its group went out, so groups are known by an id of
+    # their own: two groups with the same key are two groups, also while waiting.
+    ids = itertools.count()
+    current: dict[Any, int] = {}  # key -> its open group
+    key_of_group: dict[int, Any] = {}
+    groups: dict[int, list[Frame]] = {}
+    seen_at: dict[int, int] = {}
+    started: list[int] = []  # groups in the order their first member arrived
+    done: dict[int, Frame | None] = {}  # released groups waiting (ordered=True)
 
-    def release(key: Any, partial: bool) -> Frame | None:
-        members = groups.pop(key)
-        seen_at.pop(key, None)
+    def release(gid: int, partial: bool) -> Frame | None:
+        members = groups.pop(gid)
+        seen_at.pop(gid, None)
+        key = key_of_group.pop(gid)
+        if current.get(key) == gid:
+            del current[key]
         if partial and incomplete == "drop":
             return None
         if order_of is not None:
@@ -117,42 +126,43 @@ def gather(
             )
         return out
 
-    def emit(key: Any, partial: bool) -> Iterator[Frame]:
+    def emit(gid: int, partial: bool) -> Iterator[Frame]:
         """Release one group, honouring ``ordered``."""
-        out = release(key, partial)
+        out = release(gid, partial)
         if not ordered:
-            if key in started:
-                started.remove(key)
+            started.remove(gid)
             if out is not None:
                 yield out
             return
-        done[key] = out
+        done[gid] = out
         while started and started[0] in done:
-            head = started.pop(0)
-            ready = done.pop(head)
+            ready = done.pop(started.pop(0))
             if ready is not None:
                 yield ready
 
     for n, f in enumerate(frames):
         key = key_of(f)
-        if key not in groups:
-            groups[key] = []
-            started.append(key)
-        groups[key].append(f)
-        seen_at[key] = n
-        if count is not None and len(groups[key]) >= expected(f):
-            yield from emit(key, partial=False)
+        gid = current.get(key)
+        if gid is None:
+            gid = current[key] = next(ids)
+            key_of_group[gid] = key
+            groups[gid] = []
+            started.append(gid)
+        groups[gid].append(f)
+        seen_at[gid] = n
+        if count is not None and len(groups[gid]) >= expected(f):
+            yield from emit(gid, partial=False)
         if lag is not None:
-            open_keys = [k for k in started if k in groups]
-            for older in open_keys[: max(0, len(open_keys) - lag)]:
-                if older != key:
+            open_groups = [g for g in started if g in groups]
+            for older in open_groups[: max(0, len(open_groups) - lag)]:
+                if older != gid:
                     yield from emit(older, partial=count is not None)
         if ttl is not None:
-            for stale in [k for k, at in seen_at.items() if n - at >= ttl]:
+            for stale in [g for g, at in seen_at.items() if n - at >= ttl]:
                 yield from emit(stale, partial=count is not None)
-    remaining = [k for k in started if k in groups]  # emit() edits ``started``
-    for key in remaining:  # end of stream: nothing more is coming
-        yield from emit(key, partial=count is not None)
+    remaining = [g for g in started if g in groups]  # emit() edits ``started``
+    for gid in remaining:  # end of stream: nothing more is coming
+        yield from emit(gid, partial=count is not None)
 
 
 def _getter(spec: Any) -> Callable[[Frame], Any]:

@@ -207,8 +207,18 @@ def _dumps(defn: Any) -> bytes:
 
 
 def _importable(fn: Any) -> bool:
-    mod, qual = getattr(fn, "__module__", None), getattr(fn, "__qualname__", "")
-    return bool(mod) and mod not in ("__main__", "__mp_main__") and "<" not in qual
+    """Whether a worker can import ``fn`` by its module and qualified name. A
+    ``functools.partial`` (a block made with ``.bind()``) has no qualified name: it
+    goes by value."""
+    mod, qual = getattr(fn, "__module__", None), getattr(fn, "__qualname__", None)
+    return (
+        isinstance(mod, str)
+        and isinstance(qual, str)
+        and bool(mod)
+        and bool(qual)
+        and mod not in ("__main__", "__mp_main__")
+        and "<" not in qual
+    )
 
 
 def _rebuild() -> Any:

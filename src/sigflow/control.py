@@ -618,6 +618,8 @@ class Probe:
 
     # -- what arrives --------------------------------------------------------- #
     def _see(self, frame: Frame) -> None:
+        if self._closed:  # a frame already on its way when close() ran
+            return
         with self._cv:
             self.history.append(frame)
             self.count += 1

@@ -14,6 +14,7 @@ offending nodes, before any data flows.
 
 from __future__ import annotations
 
+import copy
 import itertools
 from collections.abc import Iterable, Mapping
 from typing import Any
@@ -1432,7 +1433,44 @@ def fresh(node: Node, seen: set[int]) -> Node:
         )
     if isinstance(node, PerKey):
         return PerKey(node.selector, fresh(node.body, seen), node.ttl, node.name)
+    if isinstance(node, Switch):
+        new = copy.copy(node)
+        new.branches = {k: fresh(b, seen) for k, b in node.branches.items()}
+        if isinstance(node.default, Node):
+            new.default = fresh(node.default, seen)
+        return new
+    from .builder import Chain, Graph, _Input
+
+    if isinstance(node, Graph):
+        return _fresh_graph(node, seen)
+    if isinstance(node, Chain):
+        chain = copy.copy(node)
+        chain.stages = [fresh(s, seen) for s in node.stages]
+        return chain
+    if isinstance(node, _Input):
+        return copy.copy(node)
     return node
+
+
+def _fresh_graph(g: Any, seen: set[int]) -> Any:
+    """A builder graph with every member made fresh and its edges, outputs and input
+    pointing at the new members: nothing of the original is shared."""
+    from .builder import Ref
+
+    new = copy.copy(g)
+    new.members = {name: fresh(m, seen) for name, m in g.members.items()}
+
+    def rebind(r: Ref) -> Ref:
+        return Ref(new, new.members[r.name], r.name, r.key)
+
+    new.edges = [(rebind(r), consumer, slot) for r, consumer, slot in g.edges]
+    new.outputs = [rebind(r) for r in g.outputs]
+    if g._input is not None:
+        new._input = next(
+            new.members[name] for name, m in g.members.items() if m is g._input
+        )
+    new._env = copy.copy(g._env)
+    return new
 
 
 def _common_ratio(branches: list[Node], in_type: Any, where: str) -> Ratio:

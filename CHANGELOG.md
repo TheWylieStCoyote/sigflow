@@ -214,6 +214,25 @@ Changed
   the classes instead of attached at import time, so editors see them. The
   `draw(ax, data, frame)` callback of `plot.custom` may return a value.
 
+Fixed
+
+- `per_key`: an instance that finishes by itself (`take(1)`, an error) retires
+  its key, and later frames of that key are dropped until `ttl` frames pass
+  without it. Before, the router filled the finished instance's queue and the
+  run waited for ever.
+- `per_key`: a builder `Graph` or `switch` body is copied whole for each key.
+  Before, keys could share a stateful block's state, and the template's blocks
+  were replaced.
+- `gather(ordered=True)`: a key that completed a second group while an earlier
+  group was still waiting overwrote the first; every group now goes out.
+- A block made with `.bind()` runs under `parallel()` with the process and loky
+  backends; it pickles as the original block, bound again.
+- `Probe.close()` detaches a probe placed on a node shown under another name
+  (`scale#2`); a closed probe ignores frames already on their way.
+- `tags="none"`, `keep(...)` and `spans="drop"` also govern inherited tags the
+  block clipped (a slice) or shifted: only tags the block attached itself are
+  kept regardless of the policy.
+
 ## 0.4.0
 
 New

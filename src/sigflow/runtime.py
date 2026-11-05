@@ -861,11 +861,14 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         """One instance of the body per key, made when the key is first seen: a real
         stream fed by its own queue, closed after ``ttl`` input frames without its
-        key. Outputs merge in completion order."""
+        key. Outputs merge in completion order. An instance that finishes on its own
+        (``take(1)``, an error) retires its key: later frames of that key are dropped
+        until ``ttl`` frames pass without it, when the key may start a fresh instance."""
         stats = self.mon.stats(node.name, node)
         outq: asyncio.Queue = asyncio.Queue()
         inqs: dict[Any, asyncio.Queue] = {}
-        tasks: dict[Any, asyncio.Task] = {}
+        running: list[asyncio.Task] = []  # every instance, closed ones included
+        retired: set[Any] = set()  # keys whose instance finished by itself
         last_seen: dict[Any, int] = {}
         live = [0]  # tasks that have not put their _DONE yet (router included)
 
@@ -873,29 +876,33 @@ class Runner:
             async for f in _drain(q):
                 yield f
 
-        async def drive(label: str, body: Node, q: asyncio.Queue) -> None:
+        async def drive(key: Any, body: Node, q: asyncio.Queue) -> None:
             try:
                 async for f in self.compile(body, feed(q)):
-                    await outq.put((label, f))
+                    await outq.put((repr(key), f))
             except BaseException as e:
                 await outq.put(("error", e))
                 raise
             finally:
+                if inqs.get(key) is q:  # finished before being closed: retire the key
+                    del inqs[key]
+                    retired.add(key)
+                _abandon(q)  # nobody reads it any more: free a router waiting on it
                 await outq.put(_DONE)
 
         def open_instance(key: Any) -> asyncio.Queue:
             q: asyncio.Queue = asyncio.Queue(maxsize=self.opts.queue_size)
             inqs[key] = q
-            tasks[key] = asyncio.create_task(
-                drive(repr(key), _own_instance(node.body), q)
-            )
+            running.append(asyncio.create_task(drive(key, _own_instance(node.body), q)))
             live[0] += 1
             return q
 
         async def close_instance(key: Any) -> None:
-            q = inqs.pop(key)
             last_seen.pop(key, None)
-            tasks.pop(key)
+            if key in retired:
+                retired.discard(key)
+                return
+            q = inqs.pop(key)
             await q.put(_DONE)  # the body finishes on its own; its _DONE is counted
 
         async def router() -> None:
@@ -920,11 +927,12 @@ class Runner:
                     if key is None:
                         await outq.put(("pass", f))
                         continue
-                    q = inqs.get(key)
-                    if q is None:
-                        q = open_instance(key)
                     last_seen[key] = n
-                    await q.put(f)
+                    if key not in retired:
+                        q = inqs.get(key)
+                        if q is None:
+                            q = open_instance(key)
+                        await q.put(f)
                     if node.ttl is not None:
                         stale = [
                             k for k, seen in last_seen.items() if n - seen >= node.ttl
@@ -936,7 +944,7 @@ class Runner:
                 raise
             finally:
                 for q in list(inqs.values()):
-                    await q.put(_DONE)
+                    await q.put(_DONE)  # never blocks on an instance that has ended
                 await outq.put(_DONE)
 
         rt = asyncio.create_task(router())
@@ -959,9 +967,11 @@ class Runner:
                 )
                 seq += 1
         finally:
-            for t in [rt, *tasks.values()]:
+            for t in [rt, *running]:
                 t.cancel()
-            for t in [rt, *tasks.values()]:
+            for q in inqs.values():  # an instance cancelled before it ran never
+                _abandon(q)  # abandons its own queue: do it here
+            for t in [rt, *running]:
                 try:
                     await t
                 except (asyncio.CancelledError, Exception):
@@ -2214,14 +2224,17 @@ def _apply_policy(
     inherited_ids = {id(t) for p in parents for t in p.tags} | {
         id(t) for p in inputs for t in p.tags
     }
-    inherited_names = {t.name for p in parents for t in p.tags} | {
-        t.name for p in inputs for t in p.tags
+    # A tag the block attached was stamped with the block's name before this runs;
+    # an inherited tag the block only transformed (clipped by a slice, shifted by
+    # reframing) is a new object that keeps the origin it had upstream.
+    inherited_origins = {(t.name, t.origin) for p in parents for t in p.tags} | {
+        (t.name, t.origin) for p in inputs for t in p.tags
     }
     combined = policy.combine([p.tags.names for p in inputs]) if inputs else frozenset()
 
     def keeps(t: Any) -> bool:
-        attached = id(t) not in inherited_ids and (
-            t.name not in inherited_names or t.origin != ""
+        attached = (
+            id(t) not in inherited_ids and (t.name, t.origin) not in inherited_origins
         )
         if attached:
             return True
@@ -2276,6 +2289,14 @@ def _unique(items: Any) -> tuple:
         if all(it is not o for o in out):
             out.append(it)
     return tuple(out)
+
+
+def _abandon(q: asyncio.Queue) -> None:
+    """Empty a queue whose reader has gone, and keep it empty: a producer waiting to
+    put into it (or that puts later) never blocks on it again."""
+    while not q.empty():
+        q.get_nowait()
+    q._maxsize = 0  # type: ignore[attr-defined]  # unbounded from now on
 
 
 async def _drain(

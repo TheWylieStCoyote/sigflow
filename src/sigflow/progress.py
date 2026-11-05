@@ -151,14 +151,16 @@ class Monitor:
             self._pending.setdefault(name, []).append(fn)
 
     def unwatch(self, name: str, fn: Any) -> None:
-        s = self._stats.get(name)
-        if s is not None and fn in s.watchers:
-            s.watchers.remove(fn)
-        if fn in self._pending.get(name, ()):
-            self._pending[name].remove(fn)
-        for fns in self._pending_nodes.values():
-            if fn in fns:
-                fns.remove(fn)
+        """Stop calling ``fn``, wherever it was attached: a watcher placed by node can
+        sit on a row shown under another name (``fft#2``), so every row is searched."""
+        del name  # kept for callers; the watcher itself is what identifies it
+        for s in self._stats.values():
+            while fn in s.watchers:
+                s.watchers.remove(fn)
+        for pending in (self._pending, self._pending_nodes):
+            for fns in pending.values():
+                while fn in fns:
+                    fns.remove(fn)
 
     @property
     def blocks(self) -> list[Stats]:
