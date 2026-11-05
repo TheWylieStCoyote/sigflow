@@ -546,6 +546,16 @@ pickle by import path, so anything defined in a module works; `backend="thread"`
 works for lambdas and notebook-defined blocks, and pays off when the function
 releases the GIL (NumPy and SciPy do).
 
+On a free-threaded build of Python (`python3.13t`, `python3.14t`) threads run
+Python code in parallel, so a thread pool speeds up pure-Python blocks too,
+without pickling or worker start-up. `backend="freethreaded"` is that thread
+pool: it is refused on a build with a GIL, and warns if an extension module
+without free-threading support has turned the GIL back on.
+`backend="auto"` uses it when the GIL is off and `"process"` otherwise, so
+a block that suits both runs well on either build. `sigflow.pools.gil_enabled()`
+reports the GIL's state. On a free-threaded build, generator stream blocks run in
+a worker thread instead of inline through greenlet, which crashes there.
+
 ### Labelled arrays with xarray
 
 Install `python -m pip install -e ".[xarray]"` and an `xarray.DataArray` can be

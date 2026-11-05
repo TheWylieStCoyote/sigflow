@@ -4,6 +4,20 @@
 
 New
 
+- Free-threaded Python (3.13t, 3.14t): `parallel(block,
+  backend="freethreaded")` runs the block on a thread pool that insists on a
+  build without a GIL, where pure-Python blocks use several cores; it warns if
+  an extension module has turned the GIL back on. `backend="auto"` picks it
+  when the GIL is off and `"process"` otherwise. `sigflow.pools` holds the
+  backends, with `free_threaded()` and `gil_enabled()`. CI runs the suite on
+  3.14t.
+- On a free-threaded build, synchronous generator stream blocks run in a
+  worker thread instead of inline via greenlet, which crashes there
+  (greenlet 3.5 on 3.14t).
+- Breakpoints on two branches no longer trample each other: holds take turns,
+  so each held frame is shown, and released, one at a time. Before, a frame
+  held right after another was released could lose its hold state, and the
+  run then hung on a frame nothing could release.
 - `sigflow.dims`: dimension and dtype-variable symbols (`N`, `M`, `T`, the
   whole alphabet; also exported from `sigflow`). `Sig[float, N]` builds the
   same contract as `Sig[float, "N"]`, which keeps working, but checkers read

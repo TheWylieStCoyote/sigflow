@@ -638,7 +638,8 @@ def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
                       stall asynchronous sources running alongside it. Sync
                       generator stream blocks: force the worker-thread driver
                       (the default runs them inline on the loop via greenlet when
-                      it is installed, which is much faster but must not block)
+                      it is installed, which is much faster but must not block;
+                      free-threaded builds of Python always use the thread)
         labels:       ``True``: an ``xarray.DataArray`` input is lined up with the
                       input contract, the body gets the bare array, and outputs
                       are rebuilt as labelled arrays from the output contract

@@ -140,11 +140,11 @@ def test_sync_generator_stream_block_runs_inline_or_threaded():
     out = run(ramp() >> pairs)
     assert [float(f.data[0]) for f in out] == [1, 3, 5, 7, 9]
     run(ramp() >> where)
-    try:
-        import greenlet  # noqa: F401
+    from sigflow import runtime
 
+    if runtime._greenlet is not None:  # installed, and not a free-threaded build
         assert set(seen) == {main}  # inline on the event loop
-    except ImportError:
+    else:
         assert set(seen) != {main}
     seen.clear()
     run(

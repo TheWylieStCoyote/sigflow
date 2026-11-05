@@ -350,12 +350,14 @@ class Control:
         self.on_hold: Callable[[], None] | None = None  # UI refresh
         self._release: asyncio.Event | None = None
         self._verdict: tuple[str, Any] = ("go", None)
+        self._hold_turn: asyncio.Lock | None = None  # one held frame at a time
 
     # -- runtime side ------------------------------------------------------ #
     def attach(self, loop: asyncio.AbstractEventLoop) -> None:
         self._loop = loop
         self._gate = asyncio.Event()
         self._release = asyncio.Event()
+        self._hold_turn = asyncio.Lock()
         if (
             not self._paused or self._steps > 0
         ):  # step() may have been called before attach
@@ -386,7 +388,17 @@ class Control:
     async def hold(self, name: str, frame: Frame, by: Any) -> Frame | None:
         """Called by the runtime when a breakpoint matched: keep ``frame`` here, at
         node ``name``, until :meth:`release`. Returns the frame to pass on (the same,
-        a replacement, or None to drop it)."""
+        a replacement, or None to drop it). Holds take turns: a breakpoint met on
+        another branch while a frame is held waits, and holds its frame once this
+        one is released."""
+        if self._hold_turn is None:
+            self._hold_turn = asyncio.Lock()
+        async with self._hold_turn:
+            if self.stop_requested:
+                raise asyncio.CancelledError
+            return await self._hold(name, frame, by)
+
+    async def _hold(self, name: str, frame: Frame, by: Any) -> Frame | None:
         if self._release is None:
             self._release = asyncio.Event()
         with self._lock:

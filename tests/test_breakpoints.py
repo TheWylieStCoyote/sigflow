@@ -134,12 +134,14 @@ def test_stop_while_held_and_stream_and_join_breaks():
     handle = forked.start(paused=True)
     handle.break_at("fanout", seq=1)
     handle.break_when("chunk", lambda f: f.prov.seq == 0)
-    handle.resume()
-    held = handle.wait_break(5.0)
-    assert handle.held_at == "chunk" and isinstance(held.data, np.ndarray)
-    handle.resume()
-    held = handle.wait_break(5.0)
-    assert handle.held_at == "fanout" and isinstance(held.data, tuple)
+    kinds = {"chunk": np.ndarray, "fanout": tuple}
+    seen = set()
+    for _ in kinds:  # the branches race, so either break may come first
+        handle.resume()
+        held = handle.wait_break(5.0)
+        assert held is not None and isinstance(held.data, kinds[handle.held_at])
+        seen.add(handle.held_at)
+    assert seen == set(kinds)
     handle.resume()
     handle.wait()
     assert handle.state == "done"

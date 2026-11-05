@@ -22,6 +22,11 @@ jobs:
           - python: "3.15"
             numpy: "numpy<2"
         include:
+          # free-threaded CPython: the suite runs with the GIL off, and greenlet
+          # (perf extra) is installed but left unused there
+          - os: ubuntu-latest
+            python: "3.14t"
+            numpy: "numpy>=2"
           - os: windows-latest
             python: "3.12"
             numpy: "numpy>=2"

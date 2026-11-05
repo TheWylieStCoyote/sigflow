@@ -52,6 +52,7 @@ from .graph import (
     When,
     Zip,
 )
+from .pools import free_threaded as _free_threaded
 from .progress import Monitor, Reporter
 from .types import Env, TypeMismatch, tag_names
 
@@ -1464,8 +1465,9 @@ class Runner:
         self, node: Parallel, upstream: AsyncIterator[Frame]
     ) -> AsyncIterator[Frame]:
         """Submit frames to a pool, keep a window of in-flight futures, yield results in order."""
-        import concurrent.futures as cf
         from collections import deque
+
+        from .pools import executor, resolve
 
         inner = node.inner
         d = inner.defn
@@ -1473,11 +1475,8 @@ class Runner:
         needs = bool(tag_names(inner.in_type))  # input tag requirements
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
-        pool = (
-            cf.ProcessPoolExecutor(node.workers, mp_context=_worker_context())
-            if node.backend == "process"
-            else cf.ThreadPoolExecutor(node.workers)
-        )
+        kind = resolve(node.backend, inner.name)  # "auto" picks per interpreter
+        pool = executor(kind, node.workers)
         loop = asyncio.get_running_loop()
         pending: deque = deque()  # (frame, future | None)
         seq = 0
@@ -1561,7 +1560,7 @@ class Runner:
                         fut = loop.run_in_executor(
                             pool,
                             _call_block,
-                            d if node.backend == "process" else call,
+                            d if kind == "process" else call,
                             f.data,
                             cfg,
                             self.opts.labels,
@@ -2275,10 +2274,19 @@ async def _drain(
         yield _unwrap(it)
 
 
-try:
-    import greenlet as _greenlet
-except ImportError:  # pragma: no cover - optional
-    _greenlet = None
+def _load_greenlet() -> Any:
+    """greenlet when installed, except on free-threaded builds, where it crashes
+    (greenlet 3.5 on 3.14t): generator stream blocks then use the thread driver."""
+    if _free_threaded():
+        return None
+    try:
+        import greenlet
+    except ImportError:  # pragma: no cover - optional
+        return None
+    return greenlet
+
+
+_greenlet: Any = _load_greenlet()
 
 
 async def _run_inline_stream(
