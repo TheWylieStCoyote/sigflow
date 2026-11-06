@@ -1,0 +1,283 @@
+# What the docs say about each example, beyond its docstring.
+#
+# docs/build_docs.py turns this and each script's docstring into a page: goal (the
+# docstring's first line), what to install, how to run it, the graph, the expected
+# output, design decisions and limitations. The index groups the examples by
+# learning path. tests/test_docs.py checks every examples/NN_*.py has an entry here
+# and every entry a script.
+#
+#   path         one of the [paths] keys
+#   needs        extras or interpreters beyond the base install ("" or omitted: none)
+#   decisions    why the example is built the way it is
+#   limitations  what it leaves out or simplifies
+
+[paths]
+basics = "Basics: blocks, operators, running, testing"
+contracts = "Contracts: types, rates, units, tags and checks"
+streaming = "Streaming and routing: feedback, keys, per-signal graphs, lifecycle"
+debugging = "Debugging and reproducibility: lineage, live inspection, replay, checkpoints"
+backends = "Backends and devices: processes, threads, GPUs, labelled arrays"
+applications = "Applications: complete signal chains"
+
+[examples.01_basics]
+path = "basics"
+decisions = [
+  "Blocks are plain typed functions, so the same code is called directly and placed in a graph.",
+  "A deliberately wrong wiring shows a build-time type error before any data moves.",
+]
+limitations = ["Synthetic signals only; no files or devices."]
+
+[examples.02_mixed_async]
+path = "basics"
+decisions = [
+  "A synchronous generator and an asynchronous ticker share one graph, so the runtime's async core is visible.",
+  "`zip` pairs frames in lock step while `merge` interleaves them as they arrive.",
+]
+limitations = ["The async source is a timer, not real telemetry."]
+
+[examples.03_plots_and_linalg]
+path = "basics"
+decisions = [
+  "Plots are taps: they draw every frame and pass it on, so they sit anywhere in a chain.",
+  "Linear-algebra blocks carry symbolic shapes, so a dimension mismatch fails when the graph is built.",
+]
+limitations = ["Writes GIFs and SVGs; open them to see the result, nothing is shown on screen."]
+
+[examples.04_qpsk_link]
+path = "applications"
+decisions = [
+  "Stateful DSP (pulse shaping, frequency estimation, phase tracking) is written as plain generators.",
+  "The estimated frequency offset rides along as frame metadata instead of a side channel.",
+]
+limitations = ["A simulated channel and short runs: a teaching modem, not a production receiver."]
+
+[examples.05_pulse_doppler_radar]
+path = "applications"
+decisions = [
+  "Frames are 2-D (pulses x range cells), and symbolic dimensions check the whole chain at build time.",
+  "Detections are frame metadata and a sample-level mask, so plots and trackers read the same frame.",
+]
+limitations = ["Simulated targets; the tracker is deliberately simple."]
+
+[examples.06_sensor_fusion]
+path = "applications"
+decisions = [
+  "A blocking IMU source runs in a thread (`threaded=True`) next to an async GPS source, merged into one event stream.",
+  "A corrupt GPS fix becomes a failed frame the filter never sees, instead of an exception.",
+]
+limitations = ["Simulated IMU and GPS; a small Kalman filter, not a navigation-grade one."]
+
+[examples.07_audio_activity]
+path = "applications"
+decisions = [
+  "Overlapping re-framing carries the sample rate and units through the chain.",
+  "A two-threshold state machine is a stateful stream block that annotates frames with segment ids.",
+]
+limitations = ["Synthetic audio; the detector's thresholds are set by hand."]
+
+[examples.08_extending]
+path = "contracts"
+decisions = [
+  "Rate and units are part of the contract, so a 48 kHz block refuses a 44.1 kHz stream before running.",
+  "The three error policies run side by side on the same flaky block.",
+]
+limitations = ["Wraps one SciPy filter as the library example; others follow the same pattern."]
+
+[examples.09_subspace_doa]
+path = "applications"
+decisions = [
+  "Named output ports route an eigen-decomposition's values and vectors to different consumers that rejoin.",
+  "Shape symbols flow from snapshots x sensors to the covariance and the noise subspace.",
+]
+limitations = ["A simulated array with ideal sensors: no calibration or coupling errors."]
+
+[examples.10_lineage_forensics]
+path = "debugging"
+decisions = [
+  "Anomalies are attributed after the run from provenance alone, with nothing instrumented up front.",
+  "`f.prov[...]`, `f[i]` and `Lineage` queries answer which source frame, block and configuration caused each one.",
+]
+limitations = ["The faults are injected on a schedule, so the attribution is known to be right."]
+
+[examples.11_real_io]
+path = "applications"
+needs = ["zmq (optional section)"]
+decisions = [
+  "File sinks are context managers that write on close, so a sink can sit anywhere in a chain.",
+  "Two graphs talk over a UDP socket, and provenance records the file and offset each frame came from.",
+]
+limitations = ["Writes and reads files in the working directory; the socket is loopback only."]
+
+[examples.12_multirate_channelizer]
+path = "contracts"
+decisions = [
+  "A resampler's output rate is derived from its configuration (`refine=`), so rate mismatches fail at build time.",
+  "The channelizer emits one tuple frame of N channels per input frame, keeping the fan-out 1:1.",
+]
+limitations = ["A synthetic multi-tone input; the filter design is kept simple."]
+
+[examples.13_feedback_loops]
+path = "streaming"
+decisions = [
+  "`feedback()` closes a loop over a whole pipeline, so the LMS update and filter are separate blocks.",
+  "Loop state is a typed signal, and each output's lineage includes the previous iteration.",
+]
+limitations = ["A loop runs one frame at a time, in order, so its body cannot be parallelised."]
+
+[examples.14_parameter_sweep]
+path = "backends"
+decisions = [
+  "Each configuration's graph is built inside a worker from a factory function, so only the configuration is pickled.",
+  "Concurrent `start()` runs in one process show the thread-based alternative.",
+]
+limitations = ["A small grid and short runs, so the curve is coarse."]
+
+[examples.15_robustness]
+path = "streaming"
+decisions = [
+  "A watchdog source restarts a flaky device and annotates frames with the restart count.",
+  "`when()` sends low-SNR frames down a cheaper, more robust path, and both paths rejoin.",
+]
+limitations = ["The device failures are simulated."]
+
+[examples.16_recorded_analysis]
+path = "basics"
+decisions = [
+  "A source-less graph is applied to slices of a recording like a function: `front_end(frames[100:120])`.",
+  "The same graph serves the live run and the offline analysis.",
+]
+limitations = ["The slider section runs headless; in a notebook it drives a widget."]
+
+[examples.17_video_frames]
+path = "applications"
+decisions = [
+  "Frames are (H, W) images with symbolic 2-D shapes checked end to end.",
+  "A motion mask is a sample-level annotation, kept or dropped depending on whether a block keeps the leading dimension.",
+]
+limitations = ["Synthetic video at a small size."]
+
+[examples.18_testing_pipelines]
+path = "basics"
+decisions = [
+  "Blocks are tested as plain functions and graphs on fixed frames, with `check=\"all\"` as an assertion.",
+  "Runs under pytest and as a script.",
+]
+limitations = ["Shows the patterns on small fixtures; scale them to your own chains."]
+
+[examples.19_graph_report]
+path = "debugging"
+decisions = [
+  "The report is generated from the graph: diagram, typed table and every block's docstring.",
+  "One HTML page per graph and an index make a small docs site from a script.",
+]
+limitations = ["Static reports of graphs; for a run's live state see example 28."]
+
+[examples.20_builder_time_replay]
+path = "debugging"
+decisions = [
+  "Units, slicing, the time axis, an explicit `Graph`, replay and checkpoints in one chain, as they meet in practice.",
+  "`replay()` reproduces one output frame from a saved file.",
+]
+limitations = ["Covers many features briefly; examples 26, 29 and 30 go deeper on several."]
+
+[examples.21_routing_and_rates]
+path = "streaming"
+decisions = [
+  "`switch()` branches are real streams that may window, buffer or keep state, unlike `when()`.",
+  "Blocks declare frame ratios, so branches at different rates are refused when the graph is built.",
+]
+limitations = ["The classifier is told the modulation; real classification is out of scope."]
+
+[examples.22_cpu_gpu]
+path = "backends"
+needs = ["cupy and a CUDA device (the GPU section is skipped without them)"]
+decisions = [
+  "Transfers are explicit `to_device()` / `to_host()` blocks, so it is visible where data moves.",
+  "The GPU spectrum is compared with a NumPy reference.",
+]
+limitations = ["A small spectrum computation, so it runs anywhere; a real workload keeps more on the device."]
+
+[examples.23_xarray_blocks]
+path = "backends"
+needs = ["xarray (the labelled part is skipped without it)"]
+decisions = [
+  "Block bodies stay NumPy functions; the block lines a DataArray up with its contract and relabels the result.",
+  "`default_labels()` turns labels on for library blocks without changing them.",
+]
+limitations = ["Labels are dropped by NumPy-based re-framing; reframe before labelling."]
+
+[examples.24_tags]
+path = "contracts"
+decisions = [
+  "Tags are labels the runtime carries, whole-frame or over a time span.",
+  "A recogniser requires the `speech` tag in its contract and clears it on the way out.",
+]
+limitations = ["Predates propagation policies and typed tags; example 32 covers those."]
+
+[examples.25_per_signal]
+path = "streaming"
+decisions = [
+  "A detector yields one frame per detection, and `per_key` runs a stateful per-signal graph per track.",
+  "`gather` folds every track's result back into one frame per spectrum frame.",
+]
+limitations = [
+  "Every spectrum frame holds at least one signal; example 31 covers empty, failed and late detections.",
+  "Measures spectrum statistics, not signal samples.",
+]
+
+[examples.26_graph_checks]
+path = "contracts"
+decisions = [
+  "Each wiring attempt is checked on the spot, and a refused connect leaves the graph unchanged.",
+  "The one thing checked later, a pipeline member, is shown with `validate()`.",
+]
+limitations = ["Shows the checks one at a time on tiny graphs."]
+
+[examples.27_parallel_backends]
+path = "backends"
+needs = ["loky, Python 3.14+ and a free-threaded build for some backends (skipped otherwise)"]
+decisions = [
+  "One pure-Python workload, from a module without NumPy, runs on every backend, sub-interpreters included.",
+  "Results are checked against a serial run, so every backend is shown to agree.",
+]
+limitations = ["Timings depend on the machine and the number of cores."]
+
+[examples.28_debug_a_live_run]
+path = "debugging"
+decisions = [
+  "The problem is found, held and fixed on a live run, without editing the graph.",
+  "The run ends with a static HTML report and explicit cleanup.",
+]
+limitations = ["Scripted; in a notebook the same steps use the control panel."]
+
+[examples.29_checkpoint_resume]
+path = "debugging"
+decisions = [
+  "The graph comes from a factory, so the resumed run has fresh objects, as a new process would.",
+  "The resumed outputs are compared with an uninterrupted reference run.",
+]
+limitations = ["A seeded source; an unseeded or live source cannot be resumed exactly."]
+
+[examples.30_stream_lifecycle]
+path = "streaming"
+decisions = [
+  "The source logs when it opens and releases, so each way of ending a stream is observable.",
+  "Shows the async case with and without `contextlib.aclosing`.",
+]
+limitations = ["A pretend device; real devices may block in calls that a stop cannot interrupt."]
+
+[examples.31_empty_and_late_detections]
+path = "streaming"
+decisions = [
+  "An empty scan yields a marker frame, so every scan has an output.",
+  "Delays per track make results arrive out of order, to show how `gather` orders and releases groups.",
+]
+limitations = ["Delays are simulated with sleeps, so the exact order varies a little between runs."]
+
+[examples.32_tag_policies_and_ports]
+path = "contracts"
+decisions = [
+  "One receiver chain shows required, optional, produced and possible tags with typed values.",
+  "Policies and per-port `carries()` decide what each block and port passes on.",
+]
+limitations = ["Bursts are random symbols; the CRC failures are scheduled."]

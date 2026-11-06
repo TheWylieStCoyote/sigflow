@@ -16,8 +16,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e ".[docs]"
-      - run: python docs/build_docs.py && mkdocs build --strict
+      # the published pages show each example's output, graph and figures, so the
+      # examples run during the build and need their optional dependencies
+      - run: python -m pip install -e ".[docs,parallel,xarray,zmq]"
+      - run: python docs/build_docs.py --run-examples && mkdocs build --strict
+        env:
+          MPLBACKEND: Agg
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site

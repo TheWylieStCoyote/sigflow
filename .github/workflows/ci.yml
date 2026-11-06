@@ -81,4 +81,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[docs]"
+      # quick: pages without example output (the examples job runs every script)
       - run: python docs/build_docs.py && mkdocs build --strict

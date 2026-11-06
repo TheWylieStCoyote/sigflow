@@ -12,11 +12,15 @@ async for f in g:
 r = g.start()  # in the background: a Run handle
 ```
 
-`run()` and `start()` take the same options: `on_error=` (override every
+Every way of running takes the same core options: `on_error=` (override every
 block's policy), `check=`, `strict=True` (fail when fan-out / zip branches
-produce different frame counts), `provenance=`, `progress=True`, `sink=fn`
-(called for every frame as it arrives), `collect=False`, `keep=N` (ring buffer
-for endless streams), `resume=` (a checkpoint).
+produce different frame counts), `provenance=`, `queue_size=`, `labels=`,
+`monitor=` and `resume=` (a checkpoint). `run()` and `start()` also take
+`sink=fn` (called for every frame as it arrives), `collect=False` and
+`progress=True`. Only `start()` keeps a bounded buffer,
+`keep=N`, for endless streams; it also takes `paused=`, `name=` and
+`replace=`. An option an entry point does not take is an error.
+[Running graphs](../reference/running.md) has the full table.
 
 ## The scheduler
 

@@ -120,6 +120,8 @@ def prov_to_dict(p: Provenance) -> dict:
 
 
 def prov_from_dict(d: dict) -> Provenance:
+    """Rebuild a :class:`Provenance` graph from the dict ``Provenance.to_dict()``
+    makes (shared ancestors stay shared)."""
     by_id: dict[int, Provenance] = {}
     pending = {n["id"]: n for n in d["nodes"]}
 
@@ -198,6 +200,8 @@ def save_frame(f: Frame, path: str) -> str:
 
 
 def load_frame(path: str) -> Frame:
+    """Read a frame written by ``Frame.save``: data, annotations, tags and
+    provenance (a ``DataArray`` payload comes back labelled)."""
     z = np.load(path, allow_pickle=False)
     record = json.loads(str(z["__record__"]))
     if record["kind"] == "tuple":
@@ -263,7 +267,9 @@ def _tags_load(records: Any) -> Tags:
 
 
 class ReplayMismatch(RuntimeError):
-    pass
+    """:func:`replay` could not reproduce the frame: the target has no provenance,
+    the graph's source configuration differs from the recorded one, or no output
+    frame descends from the same source frames."""
 
 
 def replay(graph: Any, target: Any, strict: bool = True, **options: Any) -> Frame:
@@ -342,6 +348,8 @@ class Checkpoint:
 
 
 def load_checkpoint(path: str) -> Checkpoint:
+    """Read a :class:`Checkpoint` written by ``Checkpoint.save`` or
+    ``Run.checkpoint(path)``. It is a pickle: load only checkpoints you made."""
     with open(path, "rb") as fh:
         return pickle.load(fh)
 
@@ -369,6 +377,9 @@ def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
 
 
 def restore(graph: Any, ck: Checkpoint) -> None:
+    """Put the states recorded in ``ck`` back into the graph's stateful blocks, by
+    block name. ``run(graph, resume=ck)`` calls it and also skips the source frames
+    already emitted."""
     from .graph import Block
 
     for n in graph.nodes():

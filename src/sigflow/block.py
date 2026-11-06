@@ -143,6 +143,8 @@ def _classify(annotation: Any) -> tuple[Any, bool, bool] | None:
     return None
 
 
+ON_ERROR = ("propagate", "raise", "drop")  # what a block does with an exception
+
 _ITERATORS = (
     collections.abc.Iterator,
     collections.abc.AsyncIterator,
@@ -214,6 +216,10 @@ class BlockDef:
         self.threaded = threaded
         self.name = name or getattr(fn, "__name__", type(fn).__name__)
         self.__doc__ = doc or getattr(fn, "__doc__", None)
+        if on_error not in ON_ERROR:
+            raise ValueError(
+                f"on_error must be one of {', '.join(map(repr, ON_ERROR))}"
+            )
         self.on_error = on_error
         self.tap = tap
         self._bound_from: tuple[BlockDef, dict] | None = None  # set by bind()
@@ -623,7 +629,7 @@ def _same_leading(in_t: Any, out_t: Any) -> bool:
 def block(fn: Callable[..., Any] | None = None, /, **options: Any) -> Any:
     """Declare a block.
 
-    Usable bare (``@block``), with options (``@block(on_error="skip")``) or as
+    Usable bare (``@block``), with options (``@block(on_error="drop")``) or as
     a wrapper for existing code
     (``block(scipy.signal.hilbert, inputs=Sig[float, N], outputs=Sig[complex, N])``).
 

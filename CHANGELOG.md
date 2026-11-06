@@ -4,6 +4,18 @@
 
 New
 
+- Documentation: a Getting started section (installation with a table of the
+  optional extras, a first graph); an API reference generated from the code;
+  a *Running graphs* page with every option of every entry point; guides on
+  parallel backends, streams and their lifecycle, debugging a running graph,
+  and a full persistence guide. Example pages now show what to install, the
+  command, a diagram of the graph, the expected output, the figures and
+  reports the example writes, design decisions and limitations, and the
+  index groups them into learning paths. `CONTRIBUTING.md` says which pages
+  are generated and how.
+- Examples 27-32: every `parallel()` backend on one workload, debugging a live
+  run, checkpoint and resume, the stream lifecycle, empty / failed / late
+  per-signal detections, and tag policies and ports.
 - Free-threaded Python (3.13t, 3.14t): `parallel(block,
   backend="freethreaded")` runs the block on a thread pool that insists on a
   build without a GIL, where pure-Python blocks use several cores; it warns if
@@ -180,6 +192,14 @@ New
 
 Changed
 
+- `on_error` must be `"propagate"`, `"raise"` or `"drop"`, in `run()` and in
+  `@block(...)`; any other value is a `ValueError`. Before, a misspelt policy
+  such as `"mark"` or `"skip"` silently behaved like `"propagate"`.
+- `iterate()` / `iterate_sync()` / `for f in graph` refuse an option they do
+  not take (`TypeError`), as `run()` does; before, they ignored it.
+  `start()` checks its options when called, not later in its thread.
+- `iterate()` and `iterate_sync()` are annotated as the generators they
+  return, so `contextlib.aclosing` / `closing` type-check.
 - Declared rates and units are checked when a graph is built even when the
   produced shape is unknown; before, an unknown shape skipped those checks
   until run time.
@@ -216,6 +236,8 @@ Changed
 
 Fixed
 
+- `sigflow.__version__` comes from the installed package, so it matches
+  `pyproject.toml` (it said 0.4.0).
 - `per_key`: an instance that finishes by itself (`take(1)`, an error) retires
   its key, and later frames of that key are dropped until `ttl` frames pass
   without it. Before, the router filled the finished instance's queue and the

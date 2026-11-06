@@ -1175,6 +1175,9 @@ class Merge(Node):
 
 
 def merge(*parts: Any) -> Merge:
+    """Interleave several sources' frames in the order they arrive: ``merge(imu,
+    gps)``. Unlike ``zip`` (``&``) nothing waits for a partner; each frame keeps its
+    own provenance. The output type is the parts' common type."""
     return Merge(as_node(p) for p in parts)
 
 

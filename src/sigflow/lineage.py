@@ -23,6 +23,11 @@ __all__ = ["Lineage"]
 
 
 class Lineage:
+    """An index over many frames' provenance, for questions across a run: which
+    outputs failed, which went through a block (with a given configuration), which
+    descend from a source frame, where failures came from (``blame``), and how two
+    lineages differ (``diff``). Build it from a run's output: ``Lineage(run(g))``."""
+
     def __init__(self, frames: Iterable[Frame]) -> None:
         self.frames = list(frames)
         self._by_op: dict[str, list[int]] = defaultdict(list)  # op -> frame indices

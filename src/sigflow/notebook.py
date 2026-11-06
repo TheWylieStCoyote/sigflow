@@ -15,6 +15,7 @@ _TD = "padding:2px 10px;border-bottom:1px solid #8884;"
 
 
 def graph_html(node: Any) -> str:
+    """An HTML table of a graph's blocks and their types, as a notebook shows it."""
     from .graph import Block, Fanout, Merge, Pipeline, Source, Zip
 
     rows: list[str] = []
@@ -74,6 +75,7 @@ def graph_html(node: Any) -> str:
 
 
 def monitor_html(mon: Any) -> str:
+    """A run monitor as HTML: progress bar, state and per-block counts."""
     pct = mon.percent
     state = "running" if mon.running else "done"
     if pct is not None:
@@ -100,6 +102,8 @@ def monitor_html(mon: Any) -> str:
 
 
 def frame_html(frame: Any) -> str:
+    """A frame as HTML: a preview of its data, its annotations, tags, issues and
+    provenance."""
     import numpy as np
 
     d = frame.data

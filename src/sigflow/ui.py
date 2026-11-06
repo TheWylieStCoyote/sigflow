@@ -45,6 +45,8 @@ _HELP = (
 
 
 def have_widgets() -> bool:
+    """Whether ``ipywidgets`` can be imported (the control panel and knob widgets
+    need it)."""
     try:
         import ipywidgets  # noqa: F401
 

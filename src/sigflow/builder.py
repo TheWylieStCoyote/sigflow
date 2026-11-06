@@ -149,6 +149,18 @@ class _Input(Node):
 
 
 class Graph(Node):
+    """An explicit graph, for wiring that operators cannot express: named members,
+    several consumers of one output, ports routed to different blocks, several
+    outputs.
+
+    ``g.add(node, name=None)`` places a node and returns a :class:`Ref`;
+    ``g.connect(src, dst, slot=None)`` wires them (``slot`` names a multi-input
+    block's parameter) and checks the contracts on the spot, leaving the graph
+    unchanged when it refuses; ``g.output(*refs)`` says what the graph emits;
+    ``g.input(type)`` makes it a source-less graph that can be used as a block.
+    ``validate()`` checks the whole graph again before a run. Cycles are refused:
+    use :func:`feedback`."""
+
     transparent = False  # lowered operator trees add no provenance / stats of their own
 
     def __init__(self, name: str = "graph") -> None:

@@ -742,7 +742,15 @@ class Run:
         **options: Any,
     ) -> None:
         from .progress import Monitor
+        from .runtime import RUN_OPTIONS
 
+        takes = [o for o in RUN_OPTIONS if o != "control"]  # the run brings its own
+        unknown = sorted(set(options) - set(takes))
+        if unknown:  # here, not in the background thread where nobody would see it
+            raise TypeError(
+                f"start() got unexpected option(s) {', '.join(unknown)}; it takes "
+                f"paused, keep, name, replace, {', '.join(takes)}"
+            )
         self.name = name or graph.name
         if replace:
             for old in runs():

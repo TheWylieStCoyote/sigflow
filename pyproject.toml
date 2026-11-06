@@ -59,6 +59,7 @@ typeCheckingMode = "standard"
 include = ["src", "tests", "examples"]
 extraPaths = [
   "src",
+  "docs", # tests/test_docs.py imports docs/apiref.py
 ] # resolve sigflow from this checkout, whatever interpreter is selected
 reportMissingModuleSource = false
 

@@ -61,7 +61,7 @@ report["failed"] = [len(f.issues) for f in out]
 
 def stopped(source, blk):
     try:
-        run(source >> parallel(blk, backend="interpreter"), on_error="skip")
+        run(source >> parallel(blk, backend="interpreter"), on_error="drop")
     except RuntimeError as e:
         return [type(e.__cause__).__name__, str(e)]
     return None

@@ -580,6 +580,7 @@ if not TYPE_CHECKING:
 
 
 def is_signal_type(obj: Any) -> bool:
+    """Whether ``obj`` is a contract (:class:`SignalType` or :class:`TupleType`)."""
     return isinstance(obj, (SignalType, TupleType))
 
 
@@ -1314,6 +1315,8 @@ def slice_shape(shape: tuple | None, key: Any) -> tuple | None:
 
 
 def describe(t: Any) -> str:
+    """A contract as text, as ``describe()`` and error messages show it
+    (``Sig[float64, (N,), 48000.0Hz, 'V']``)."""
     return str(_as_type(t))
 
 

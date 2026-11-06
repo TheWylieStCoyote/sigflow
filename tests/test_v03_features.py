@@ -78,7 +78,7 @@ def test_fanout_and_zip_through_scheduler_keep_provenance():
 
 
 def test_failures_and_strict_propagate_through_scheduler():
-    out = run(ramp() >> boom >> scale, on_error="mark")
+    out = run(ramp() >> boom >> scale, on_error="propagate")
     assert sum(f.failed for f in out) == 1 and out[2].failed and out[3].ok
     with pytest.raises(ValueError, match="boom"):
         run(ramp() >> boom >> scale, on_error="raise")
@@ -167,7 +167,9 @@ def test_parallel_thread_and_process_keep_order():
 
 
 def test_parallel_errors_and_restrictions():
-    out = run(ramp() >> parallel(boom, workers=2, backend="thread"), on_error="mark")
+    out = run(
+        ramp() >> parallel(boom, workers=2, backend="thread"), on_error="propagate"
+    )
     assert out[2].failed and out[3].ok and len(out) == 6
     with pytest.raises(TypeError):
         parallel(pairs)  # stream block
@@ -204,7 +206,7 @@ def test_lineage_queries():
     g = ramp(count=8) >> (
         (scale(gain=2.0) >> boom(at=6)) | (scale(gain=5.0) >> dsp.rms)
     )
-    out = run(g, on_error="mark")
+    out = run(g, on_error="propagate")
     L = Lineage(out)
     assert len(L) == 8 and len(L.failed()) == 1 and len(L.ok()) == 7
     assert len(L.through("boom")) == 8 and len(L.through("scale", gain=5.0)) == 8

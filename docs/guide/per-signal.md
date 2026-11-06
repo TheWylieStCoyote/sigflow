@@ -94,6 +94,15 @@ of a group frame is the frames consumed since the previous group, which can
 include members of other groups when groups interleave; each part keeps its
 own exact lineage.
 
+When per-signal results arrive **late or out of order**, two more things
+matter. `ordered=True` follows the order groups *started*, the arrival of their
+first member, so a group whose fast member arrives early goes out early; sort
+the gathered frames by `meta["group"]` when you need source order. And a `ttl`
+shorter than the lateness splits a group: the early member is released alone,
+incomplete, and the late one starts a second group with the same key. Size
+`ttl` to the longest delay you expect. `examples/31_empty_and_late_detections.py`
+shows these cases, an empty scan, a failed member and a signal that comes back.
+
 ## Writing a custom gather
 
 `gather` is an ordinary stream block. When its completion rules do not match
@@ -105,7 +114,7 @@ def my_gather(frames: Stream[Framed[Sig[Any]]]) -> Iterator[Sig[Any]]:
     groups: dict[Any, list[Frame]] = {}
     for f in frames:
         groups.setdefault(f["seq"], []).append(f)
-        ...                                   # decide which groups are complete
+        ...  # decide which groups are complete
         for key in complete:
             members = groups.pop(key)
             ann = merge_annotations(members, keep_samples=False)
@@ -118,7 +127,7 @@ def my_gather(frames: Stream[Framed[Sig[Any]]]) -> Iterator[Sig[Any]]:
                 parts=tuple(members),
                 tags=ann["tags"],
             )
-    for key, members in groups.items():       # end of stream: release the rest
+    for key, members in groups.items():  # end of stream: release the rest
         ...
 ```
 
@@ -165,7 +174,9 @@ a window of frames and emit one summary per track per window:
 
 ```python
 @block(ratio="N:1")
-def per_track_window(frames: Stream[Framed[Sig[Any]]], window: int = 10) -> Iterator[Sig[Any]]:
+def per_track_window(
+    frames: Stream[Framed[Sig[Any]]], window: int = 10
+) -> Iterator[Sig[Any]]:
     by_track: dict[int, list[Frame]] = {}
     for f in frames:
         members = by_track.setdefault(f["track"], [])
@@ -180,11 +191,17 @@ more than a given time after the first, using the frames' `t0`:
 
 ```python
 @block(ratio="N:1")
-def within(frames: Stream[Framed[Sig[Any]]], seconds: float = 0.1) -> Iterator[Sig[Any]]:
+def within(
+    frames: Stream[Framed[Sig[Any]]], seconds: float = 0.1
+) -> Iterator[Sig[Any]]:
     open_groups: dict[Any, list[Frame]] = {}
     for f in frames:
         for key, members in list(open_groups.items()):
-            if f.t0 is not None and members[0].t0 is not None and f.t0 - members[0].t0 > seconds:
+            if (
+                f.t0 is not None
+                and members[0].t0 is not None
+                and f.t0 - members[0].t0 > seconds
+            ):
                 yield group_frame(open_groups.pop(key), key=key)
         open_groups.setdefault(f["seq"], []).append(f)
     for key, members in open_groups.items():
@@ -205,8 +222,11 @@ def test_marker_closes_the_group():
     out = list(until_marker.fn(iter(frames)))
     assert len(out) == 1 and len(out[0].parts) == 3
 
+
 def test_with_per_key():
-    out = run(detections() >> per_key("track", track_signal) >> until_marker, on_error="raise")
+    out = run(
+        detections() >> per_key("track", track_signal) >> until_marker, on_error="raise"
+    )
 ```
 
 Interleaving is the case to test deliberately: after `per_key`, members of

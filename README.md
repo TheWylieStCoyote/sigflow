@@ -228,7 +228,7 @@ questions you ask about a whole run:
 from sigflow import Lineage, dsp, run
 
 g = dsp.sine(n=1024, frames=20) >> dsp.scale(gain=2.0) >> dsp.to_complex >> dsp.fft
-L = Lineage(run(g, on_error="mark"))
+L = Lineage(run(g, on_error="propagate"))
 L.failed()  # frames that failed
 L.through("scale", gain=2.0)  # frames whose lineage passed through scale with that config
 L.descendants_of("sine", seq=8)  # every output that descends from source frame 8
@@ -563,7 +563,9 @@ a worker thread instead of inline through greenlet, which crashes there.
 On Python 3.14 and later, `backend="interpreter"` runs the block in
 sub-interpreters (`concurrent.futures.InterpreterPoolExecutor`): one process,
 a GIL per worker, so pure-Python work such as packet decoding or text parsing
-runs on several cores without process start-up or pickling. Sub-interpreters
+runs on several cores without starting processes. Each job still crosses to its
+worker by pickle (the function by its import path, the data by value), so it
+suits small payloads such as packets and lines of text. Sub-interpreters
 cannot load NumPy, so the block's function must live in a module of plain
 Python (wrap it with `block(fn, inputs=..., outputs=...)` where the graph is
 built), and the frames must carry plain values such as `bytes`, `str`, numbers
@@ -860,14 +862,14 @@ them.
 
 The documentation is published at
 <https://thewyliestcoyote.github.io/sigflow/>, rebuilt by the `docs` workflow
-on every push to `main`. `docs/` is an MkDocs Material site: concepts (frames,
-blocks, contracts, lineage, runs), guides (composing, time/units/slicing,
-notebooks, I/O, persistence, performance, testing), one page per example
-(generated from the scripts' docstrings and source) and the changelog.
+on every push to `main`: getting started, concepts, guides, one page per
+example with its output and figures, the API reference and the changelog.
+`CONTRIBUTING.md` says which pages are written by hand and which are
+generated, and how to build the site locally:
 
 ```
 python -m pip install -e ".[docs]"
-python docs/build_docs.py          # README -> index, CHANGELOG, examples/*.py -> docs/examples/*.md
+python docs/build_docs.py          # add --run-examples for each example's output and figures
 mkdocs serve                       # http://127.0.0.1:8000
 ```
 
@@ -904,12 +906,13 @@ checkpoints).
 
 ## Status and next steps
 
-This is version 0.3 (see `CHANGELOG.md`): 89 tests, twenty-one example scripts, two
-notebooks, a docs site. Natural extensions: stream tags (metadata aligned to a
-sample offset), back-pressure policies and a sound-card / SDR source, identity-typed
-taps so `Any` stops leaking through fan-outs, a richer set of scipy.signal
-wrappers, a `parallel()` that spans several machines over the ZeroMQ transport,
-and persisting `Lineage` indexes beside recordings.
+The version under development is the one in `pyproject.toml` (also
+`sigflow.__version__`); `CHANGELOG.md` lists what each release added. Natural
+extensions from here: a sound-card / SDR source, back-pressure policies beyond
+bounded queues, a richer set of `scipy.signal` wrappers, a `parallel()` that
+spans several machines over the ZeroMQ transport, persisting `Lineage` indexes
+beside recordings, and a worked wideband example that detects signals, then
+downconverts, filters and demodulates each one in its own `per_key` instance.
 
 ## License
 

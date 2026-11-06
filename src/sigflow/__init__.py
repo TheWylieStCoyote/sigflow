@@ -99,7 +99,18 @@ from .types import (
 from .ui import dashboard, require_widgets
 from .xarray import default_labels
 
-__version__ = "0.4.0"
+
+def _version() -> str:
+    """The installed distribution's version, so it cannot drift from pyproject.toml."""
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("sigflow")
+    except PackageNotFoundError:  # run from a source tree that was never installed
+        return "0+unknown"
+
+
+__version__ = _version()
 __all__ = [  # noqa: RUF022  (grouped by topic, not sorted)
     "Any",
     "Sig",

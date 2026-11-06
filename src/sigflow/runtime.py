@@ -25,13 +25,19 @@ import inspect
 import queue
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Callable,
+    Generator,
+    Iterator,
+)
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, NoReturn, cast
 
 import numpy as np
 
-from .block import BlockDef
+from .block import ON_ERROR, BlockDef
 from .control import live
 from .frame import MISSING, Frame, Issue, Provenance, Tags, merge_annotations
 from .graph import (
@@ -101,6 +107,10 @@ class RunOptions:
         self.strict = (
             strict  # raise when fan-out / zip branches produce different frame counts
         )
+        if on_error is not None and on_error not in ON_ERROR:
+            raise ValueError(
+                f"on_error must be one of {', '.join(map(repr, ON_ERROR))}"
+            )
         self.on_error = on_error  # overrides every block's policy when set
         self.monitor = monitor or Monitor()
         self.queue_size = queue_size
@@ -114,9 +124,14 @@ class RunOptions:
         self.labels = bool(labels)
 
 
-# every keyword ``RunOptions`` takes, so entry points that filter their options
-# (``iterate``) cannot drift from its signature
-_RUN_OPTIONS = tuple(inspect.signature(RunOptions.__init__).parameters)[1:]
+# every option run() and start() take: RunOptions' own, then what arun() adds
+RUN_OPTIONS = (
+    *tuple(inspect.signature(RunOptions.__init__).parameters)[1:],
+    "sink",
+    "collect",
+    "progress",
+    "total",
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -2465,15 +2480,20 @@ def _length_of(obj: Any) -> int | None:
 # --------------------------------------------------------------------------- #
 
 
-def iterate(graph: Node, **options: Any) -> AsyncIterator[Frame]:
-    """Async iterator over the output frames of a graph."""
+def iterate(graph: Node, **options: Any) -> AsyncGenerator[Frame, None]:
+    """Async iterator over the output frames of a graph (``async for f in graph`` is
+    ``iterate(graph)``). Takes the run options of :func:`run` except ``sink``,
+    ``collect``, ``progress`` and ``total``, which only make sense for a run that
+    collects; an unknown option is an error, as for ``run``. Leaving the loop early
+    stops the graph and closes its sources."""
     graph.validate()
-    opts = RunOptions(**{k: v for k, v in options.items() if k in _RUN_OPTIONS})
+    opts = RunOptions(**options)
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE
 
     PROVENANCE_MODE.set(opts.provenance)
-    return runner.compile(graph, None)
+    # an async generator: ``contextlib.aclosing(iterate(g))`` closes it explicitly
+    return cast(AsyncGenerator[Frame, None], runner.compile(graph, None))
 
 
 async def arun(
@@ -2532,7 +2552,42 @@ async def arun(
 
 
 def run(graph: Node, **kw: Any) -> list[Frame]:
-    """Run a graph synchronously.  Works from scripts and from Jupyter cells alike."""
+    """Run a graph to the end and return its output frames. Works from scripts and
+    from Jupyter cells alike (inside a running loop it runs on a private one).
+
+    Options (all keyword, all optional):
+
+    ``on_error``     ``"propagate"`` | ``"raise"`` | ``"drop"``: overrides every
+                     block's own policy for this run.
+    ``check``        ``"first"`` (default: each block's first output is checked
+                     against its contract), ``"all"`` or ``"none"``.
+    ``strict``       ``True``: raise instead of carrying on when fan-out / zip
+                     branches produce different numbers of frames, when a switch
+                     has no branch for a key, or when a stream block breaks its
+                     declared ratio.
+    ``provenance``   ``"full"`` (default), ``"roots"`` (only the source frames) or
+                     ``"off"``: how much lineage frames carry.
+    ``queue_size``   capacity of the queues between nodes (default 64): bounds the
+                     work in flight and applies back-pressure to sources.
+    ``labels``       whether label-aware blocks with an unset ``labels`` option get
+                     ``xarray`` payloads; default :func:`sigflow.default_labels`.
+    ``monitor``      a :class:`~sigflow.Monitor` to fill (one is made otherwise;
+                     ``graph.last_monitor`` keeps it).
+    ``resume``       a :class:`~sigflow.Checkpoint` (or its path): restore the
+                     stateful blocks and skip the source frames already emitted.
+    ``sink``         ``fn(frame)`` called for every output frame as it arrives (may
+                     be async).
+    ``collect``      ``False``: keep nothing (with ``sink``, for endless streams);
+                     the call then returns an empty list.
+    ``progress``     ``True``: show progress while running (a table in a notebook,
+                     a line on stderr elsewhere); ``"text"`` or ``"notebook"`` forces one.
+    ``total``        expected number of source frames, for the progress display.
+
+    :meth:`Node.start` takes the same options (its frames go to ``Run.frames``)
+    plus ``paused``, ``keep``, ``name`` and ``replace``; :func:`iterate` and
+    ``for f in graph`` take all but ``sink``, ``collect``, ``progress`` and
+    ``total``. An option an entry point does not take is a ``TypeError``. See the
+    docs' *Reference -> Running graphs* page."""
     coro = arun(graph, **kw)
     try:
         asyncio.get_running_loop()
@@ -2556,7 +2611,7 @@ def run(graph: Node, **kw: Any) -> list[Frame]:
     return result[0]
 
 
-def iterate_sync(graph: Node, **options: Any) -> Iterator[Frame]:
+def iterate_sync(graph: Node, **options: Any) -> Generator[Frame, None, None]:
     """Synchronous iterator over output frames (runs the loop in a helper thread).
 
     Stopping early (``close()``, a ``break``, an exception in the consumer, or

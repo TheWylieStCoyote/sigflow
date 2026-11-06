@@ -58,19 +58,29 @@ reading the signature:
 
 ```python
 from typing import Annotated
-from sigflow import clears, provides, requires
+from sigflow import clears, may_provide, provides, requires
 
 
 @block
-def vad(f: Framed[Sig[float, N]]) -> Annotated[Sig[float, N], provides("speech")]:
-    return f.tag("speech") if active(f.data) else f
+def vad(f: Framed[Sig[float, N]]) -> Annotated[Sig[float, N], may_provide("speech")]:
+    return f.tag("speech") if active(f.data) else f  # only some frames: may_provide
+
+
+@block
+def framer(f: Framed[Sig[float, N]]) -> Annotated[Sig[float, N], provides("framed")]:
+    return f.tag("framed")  # every frame: provides
 
 
 @block
 def asr(
     x: Annotated[Sig[float, N], requires("speech")],
-) -> Annotated[Sig[str, ()], clears("speech")]: ...
+) -> Annotated[Sig[str, tuple[()]], clears("speech")]: ...
 ```
+
+`vad` tags only some frames, so it declares `may_provide("speech")` and
+guarantees nothing. Wiring `vad >> asr` directly is refused when the graph is
+built (`needs tag(s) speech, producer guarantees none`); route the tagged
+frames instead with `vad >> when("speech", asr)`.
 
 - `requires(name)` on an input: frames must carry the tag. It is checked when
   the graph is built, against what the producer *guarantees*, and at run time

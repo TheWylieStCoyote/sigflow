@@ -15,12 +15,16 @@ theme:
       toggle: { icon: material/weather-sunny, name: light }
 markdown_extensions:
   - admonition
+  - attr_list
   - tables
   - toc: { permalink: true }
   - pymdownx.superfences
   - pymdownx.highlight
 nav:
   - Home: index.md
+  - Getting started:
+      - Installation: getting-started/installation.md
+      - Your first graph: getting-started/first-graph.md
   - Concepts:
       - Frames: concepts/frames.md
       - Blocks: concepts/blocks.md
@@ -29,7 +33,10 @@ nav:
       - Runs: concepts/runs.md
   - Guide:
       - Composing graphs: guide/composing.md
+      - Streams and their lifecycle: guide/streaming.md
       - A variable number of signals: guide/per-signal.md
+      - Parallel blocks: guide/parallel.md
+      - Debugging a running graph: guide/debugging.md
       - Labelled arrays (xarray): guide/xarray.md
       - Array backends and GPU: guide/array-backends.md
       - Time, units and slicing: guide/time-units-slicing.md
@@ -39,4 +46,19 @@ nav:
       - Performance: performance.md
       - Testing: guide/testing.md
   - Examples: examples/index.md
+  - Reference:
+      - Running graphs: reference/running.md
+      - Blocks: reference/api/blocks.md
+      - Composing graphs: reference/api/composing.md
+      - Runs and monitors: reference/api/running.md
+      - Frames, tags and provenance: reference/api/frames.md
+      - Contracts and tag markers: reference/api/contracts.md
+      - Live control and debugging: reference/api/control.md
+      - Persistence, replay and lineage: reference/api/persistence.md
+      - Pools, devices and labelled arrays: reference/api/backends.md
+      - sigflow.dsp: reference/api/dsp.md
+      - sigflow.linalg: reference/api/linalg.md
+      - sigflow.io: reference/api/io.md
+      - sigflow.plot: reference/api/plot.md
+      - Diagrams and reports: reference/api/drawing.md
   - Changelog: changelog.md

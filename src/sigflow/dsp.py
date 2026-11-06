@@ -140,6 +140,8 @@ def chirp(
 
 @source(refine=lambda n, **_: SignalType(float, (n,)), total=lambda frames, **_: frames)
 def impulse(n: int = 1024, frames: int = 1, at: int = 0) -> Iterator[Sig[float, N]]:
+    """``frames`` frames of ``n`` zeros; the first has a 1 at sample ``at``. Feed it
+    to a filter to see its impulse response."""
     for i in range(frames):
         x = np.zeros(n)
         if i == 0:
@@ -378,6 +380,7 @@ imag = block(np.imag, name="imag", inputs=Sig[complex, N], outputs=Sig[float, N]
 
 @block
 def to_complex(x: Sig[float, N]) -> Sig[complex, N]:
+    """The real samples as ``complex128`` (imaginary part zero)."""
     return x.astype(np.complex128)
 
 
@@ -385,11 +388,14 @@ def to_complex(x: Sig[float, N]) -> Sig[complex, N]:
 def power_db(
     x: Sig[complex, N], floor: float = 1e-12
 ) -> Sig[float, N, None, Literal["dB"]]:
+    """Power of each complex sample in dB: ``10·log10(|x|² + floor)``; ``floor``
+    keeps zeros finite. The output carries the unit ``"dB"``."""
     return 10 * np.log10(np.abs(x) ** 2 + floor)
 
 
 @block
 def scale(x: Sig[T, N], gain: float = 1.0) -> Sig[T, N]:
+    """Multiply every sample by ``gain``; the dtype is kept."""
     return x * gain
 
 
@@ -411,6 +417,7 @@ def to_units(
 
 @block
 def offset(x: Sig[float, N], value: float = 0.0) -> Sig[float, N]:
+    """Add ``value`` to every sample."""
     return x + value
 
 
@@ -451,22 +458,27 @@ def resample(f: Framed[Sig[float, N]], up: int = 1, down: int = 1) -> Sig[float,
 
 @block
 def energy(x: Sig[T, N]) -> Sig[float, tuple[()]]:
+    """The frame's energy, ``sum(|x|²)``, as one float."""
     return float(np.sum(np.abs(x) ** 2))
 
 
 @block
 def rms(x: Sig[T, N]) -> Sig[float, tuple[()]]:
+    """The frame's root-mean-square level, ``sqrt(mean(|x|²))``, as one float."""
     return float(np.sqrt(np.mean(np.abs(x) ** 2)))
 
 
 @block
 def peak(x: Sig[T, N]) -> Sig[dict]:
+    """The largest-magnitude sample: ``{"index": i, "value": x[i]}``."""
     i = int(np.argmax(np.abs(x)))
     return {"index": i, "value": x[i]}
 
 
 @block
 def clip(x: Sig[float, N], limit: float = 1.0) -> Sig[float, N]:
+    """Samples limited to ``[-limit, limit]``. :func:`detect_clipping` marks them
+    instead of changing them."""
     return np.clip(x, -limit, limit)
 
 
@@ -489,6 +501,8 @@ def detect_clipping(f: Framed[Sig[float, N]], limit: float = 1.0) -> Sig[float, 
 
 @tap
 def printer(x: Any, prefix: str = "") -> None:
+    """A tap that prints each payload (after ``prefix``) and passes the frame on
+    unchanged."""
     print(prefix, x)
 
 

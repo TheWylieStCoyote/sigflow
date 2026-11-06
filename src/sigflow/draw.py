@@ -888,6 +888,9 @@ class LiveDiagram:
 def draw(
     node: Any, types: bool = True, stats: Any = None, frame: Any = None
 ) -> Diagram:
+    """A :class:`Diagram` of a graph: SVG in a notebook, ``.svg`` / ``.save(path)``
+    elsewhere. ``types`` labels edges with their signal types, ``stats`` (a
+    monitor) adds frame counts, ``frame`` highlights the path one frame took."""
     return Diagram(node, types=types, stats=stats, frame=frame)
 
 
