@@ -2480,6 +2480,28 @@ def _length_of(obj: Any) -> int | None:
 # --------------------------------------------------------------------------- #
 
 
+def _begin(graph: Node, options: dict[str, Any]) -> RunOptions:
+    """The run's options, with the graph's state made ready: a block whose state
+    object has a ``reset()`` method starts afresh, then a checkpoint being resumed
+    (a :class:`~sigflow.persist.Checkpoint` or a path to one) puts the states it
+    recorded back."""
+    if isinstance(options.get("resume"), str):
+        from .persist import load_checkpoint
+
+        options = {**options, "resume": load_checkpoint(options["resume"])}
+    opts = RunOptions(**options)
+    for n in graph.nodes():
+        if isinstance(n, Block):
+            reset = getattr(n.defn.fn, "reset", None)
+            if callable(reset):
+                reset()
+    if opts.resume is not None:
+        from .persist import restore
+
+        restore(graph, opts.resume)
+    return opts
+
+
 def iterate(graph: Node, **options: Any) -> AsyncGenerator[Frame, None]:
     """Async iterator over the output frames of a graph (``async for f in graph`` is
     ``iterate(graph)``). Takes the run options of :func:`run` except ``sink``,
@@ -2487,7 +2509,7 @@ def iterate(graph: Node, **options: Any) -> AsyncGenerator[Frame, None]:
     collects; an unknown option is an error, as for ``run``. Leaving the loop early
     stops the graph and closes its sources."""
     graph.validate()
-    opts = RunOptions(**options)
+    opts = _begin(graph, options)
     runner = Runner(opts)
     from .frame import PROVENANCE_MODE
 
@@ -2506,15 +2528,7 @@ async def arun(
     **options: Any,
 ) -> list[Frame]:
     """Run a graph to completion inside a running event loop."""
-    if isinstance(options.get("resume"), str):
-        from .persist import load_checkpoint
-
-        options["resume"] = load_checkpoint(options["resume"])
-    opts = RunOptions(**options)
-    if opts.resume is not None:
-        from .persist import restore
-
-        restore(graph, opts.resume)
+    opts = _begin(graph, options)
     mon = opts.monitor
     mon.total = total
     graph.validate()

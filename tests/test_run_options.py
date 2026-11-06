@@ -7,7 +7,7 @@ from contextlib import closing
 
 import pytest
 
-from sigflow import block, dsp, iterate, iterate_sync, run
+from sigflow import Stateful, block, dsp, iterate, iterate_sync, run
 
 
 def graph():
@@ -45,3 +45,45 @@ def test_start_takes_keep_and_the_run_options():
 def test_iterators_close_explicitly():
     with closing(iterate_sync(graph())) as frames:
         assert next(frames).data >= 0
+
+
+class Count(Stateful):
+    """Counts frames; no reset(), so the count lives on between runs."""
+
+    def __init__(self) -> None:
+        self.n = 0
+
+    def __call__(self, x: float) -> float:
+        self.n += 1
+        return float(self.n)
+
+
+class FreshCount(Count):
+    def reset(self) -> None:
+        self.n = 0
+
+
+def test_state_lives_on_between_runs_unless_the_block_resets():
+    keeps = (
+        dsp.sine(n=8, frames=2)
+        >> dsp.rms
+        >> block(Count(), inputs=float, outputs=float)
+    )
+    fresh = (
+        dsp.sine(n=8, frames=2)
+        >> dsp.rms
+        >> block(FreshCount(), inputs=float, outputs=float)
+    )
+    assert [f.data for f in run(keeps)] == [1.0, 2.0]
+    assert [f.data for f in run(keeps)] == [3.0, 4.0]
+    assert [f.data for f in run(fresh)] == [1.0, 2.0]
+    assert [f.data for f in run(fresh)] == [1.0, 2.0]
+
+
+def test_iteration_resumes_block_state_from_a_checkpoint():
+    from sigflow.persist import Checkpoint
+
+    count = block(FreshCount(), inputs=float, outputs=float)
+    g = dsp.sine(n=8, frames=3) >> dsp.rms >> count
+    ck = Checkpoint(positions={"sine": 1}, states={count.name: {"n": 1}})
+    assert [f.data for f in iterate_sync(g, resume=ck)] == [2.0, 3.0]

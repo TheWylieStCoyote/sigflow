@@ -213,6 +213,12 @@ PAGES: list[tuple[str, str, str, list[str]]] = [
         ["sigflow.integrate.*"],
     ),
     (
+        "stats",
+        "sigflow.stats",
+        "See [Statistics across frames](../../guide/statistics.md).",
+        ["sigflow.stats.*"],
+    ),
+    (
         "io",
         "sigflow.io",
         "See [Files, sockets and GNU Radio](../../guide/io.md).",
@@ -332,7 +338,15 @@ def render_block(name: str, defn: Any) -> list[str]:
             )
             lines.append(f"| `{i.name}` | `{i.type}` | {how} |")
         lines.append("")
-    lines += [f"**Output:** `{defn.out_type}`", "", markdown(defn.__doc__), ""]
+    ports = getattr(defn, "port_names", ())
+    items = getattr(defn.out_type, "items", ())
+    if ports and len(ports) == len(items):  # named output ports: one row each
+        lines += ["| output port | contract |", "|---|---|"]
+        lines += [f"| `{p}` | `{t}` |" for p, t in zip(ports, items)]
+        lines.append("")
+    else:
+        lines += [f"**Output:** `{defn.out_type}`", ""]
+    lines += [markdown(defn.__doc__), ""]
     return lines
 
 
@@ -429,6 +443,8 @@ def covered() -> set[str]:
 
 
 def write(directory: str) -> list[str]:
+    """Write every page of the reference into ``directory``, and remove any other
+    page there: the directory holds only generated pages."""
     import os
 
     os.makedirs(directory, exist_ok=True)
@@ -438,4 +454,8 @@ def write(directory: str) -> list[str]:
         with open(target, "w", encoding="utf-8") as fh:
             fh.write(page(title, intro, paths))
         written.append(stem)
+    # pages no longer generated (a module removed, another branch's pages) go
+    for name in os.listdir(directory):
+        if name.endswith(".md") and name[:-3] not in written:
+            os.remove(os.path.join(directory, name))
     return written

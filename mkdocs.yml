@@ -42,6 +42,7 @@ nav:
       - Time, units and slicing: guide/time-units-slicing.md
       - Interpolation and resampling: guide/interpolation.md
       - Integration across frames: guide/integration.md
+      - Statistics across frames: guide/statistics.md
       - Notebooks and control: guide/notebooks.md
       - Files, sockets and GNU Radio: guide/io.md
       - Persistence and replay: guide/persistence.md
@@ -62,6 +63,7 @@ nav:
       - sigflow.linalg: reference/api/linalg.md
       - sigflow.interpolate: reference/api/interpolate.md
       - sigflow.integrate: reference/api/integrate.md
+      - sigflow.stats: reference/api/stats.md
       - sigflow.io: reference/api/io.md
       - sigflow.plot: reference/api/plot.md
       - Diagrams and reports: reference/api/drawing.md

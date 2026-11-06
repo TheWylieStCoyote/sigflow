@@ -34,6 +34,17 @@ New
   `units.quotient` and `units.simplify` build the units of computed
   quantities. With `pint` installed, symbols only pint knows (`inch`, `rpm`)
   are read in the same terms, so `inch/s` converts to `m/s`.
+- `sigflow.stats`: statistics across frames. `moments` gives count, mean,
+  variance, skewness and kurtosis over the whole stream or the last frames,
+  matching `scipy.stats.describe` (`Moments` is the mergeable summary behind
+  it); `outliers` tags outlying samples by a robust (median / MAD) score;
+  `change_point` tags the frame where the mean or spread changes (two-sided
+  CUSUM), with the likely onset. Each use of a block has its own state, every
+  run starts afresh, and checkpoints capture it. Guide: *Statistics across
+  frames*.
+- A `Stateful` block may define `reset()`: every run calls it before starting
+  (and before restoring a checkpoint), so the block starts afresh. Without it,
+  state lives on between runs as before.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on
@@ -224,6 +235,10 @@ Changed
 
 - `units.compatible` and `units.factor` no longer treat a unit the registry
   cannot read as convertible to itself; `factor` raises `UnitError` for it.
+- Iteration (`iterate`, `iterate_sync`, `for f in graph`) resumed from a
+  checkpoint now restores the states of stateful blocks, as `run` does, and
+  takes a checkpoint path as well as a `Checkpoint`; it used to skip the
+  sources' emitted frames only.
 - `on_error` must be `"propagate"`, `"raise"` or `"drop"`, in `run()` and in
   `@block(...)`; any other value is a `ValueError`. Before, a misspelt policy
   such as `"mark"` or `"skip"` silently behaved like `"propagate"`.

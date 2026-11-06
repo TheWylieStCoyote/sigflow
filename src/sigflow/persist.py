@@ -319,7 +319,11 @@ class Stateful:
         smooth = block(Smoother(0.2))
 
     ``state()`` / ``restore()`` default to the instance ``__dict__`` (override for
-    non-picklable members)."""
+    non-picklable members).
+
+    By default the state lives on between runs: running a graph again carries
+    on from where the last run ended. Define ``reset()`` to have every run start
+    afresh; a run resumed from a checkpoint is reset, then restored."""
 
     def state(self) -> Any:
         return {k: v for k, v in self.__dict__.items() if not k.startswith("_")}
