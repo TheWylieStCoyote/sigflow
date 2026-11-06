@@ -153,3 +153,78 @@ def test_bad_options_are_refused():
             run(dsp.sine(n=8, frames=1) >> ig.cumulative(**kw), on_error="raise")
     with pytest.raises(ValueError, match="rate"):
         run(dsp.from_array(np.ones(8), n=4) >> ig.cumulative, on_error="raise")
+
+
+# -- review fixes: time-true leaks, straight bridges, promoted dtypes ---------- #
+
+
+def at(values, times, dtype=float):
+    """One frame per (values, start time), at 1 Hz."""
+    return as_node(
+        iter(
+            Frame(np.asarray(v, dtype=dtype), meta={"t0": t}, stream={"rate": 1.0})
+            for v, t in zip(values, times)
+        )
+    )
+
+
+def test_a_leak_starts_at_initial_and_decays_over_real_time():
+    out = run(at([[0.0, 0.0]], [0.0]) >> ig.cumulative(initial=1.0, leak=1.0))
+    np.testing.assert_allclose(out[0].data, [1.0, math.exp(-1)])
+    out = run(at([[0.0], [0.0]], [1.0, 10.0]) >> ig.cumulative(initial=1.0, leak=1.0))
+    assert out[1].data[0] / out[0].data[0] == pytest.approx(math.exp(-9))
+
+
+def test_a_leak_over_a_reset_restarts_from_zero():
+    out = run(
+        at([[1.0, 1.0], [1.0, 1.0]], [0.0, 10.0])
+        >> ig.cumulative(leak=1.0, gaps="reset"),
+        on_error="raise",
+    )
+    assert out[1].data[0] == 0 and "integral_reset" in out[1].tags
+
+
+@pytest.mark.parametrize("method", ["trapezoid", "simpson"])
+def test_a_bridge_is_a_straight_line_whatever_the_method(method):
+    out = run(at([[0, 0], [1, 1]], [0.0, 10.0]) >> ig.cumulative(method=method))
+    np.testing.assert_allclose(out[1].data, [4.5, 5.5])
+    reset = run(
+        at([[0, 0], [1, 1]], [0.0, 10.0]) >> ig.cumulative(method=method, gaps="reset")
+    )
+    np.testing.assert_allclose(reset[1].data, [0.0, 1.0])
+
+
+@pytest.mark.parametrize(
+    "dtype, result",
+    [("int64", "float64"), ("float32", "float64"), ("complex64", "complex128")],
+)
+def test_the_contract_promotes_the_dtype_as_the_result_does(dtype, result):
+    from sigflow import Sig, from_iterable
+    from sigflow.dims import N
+    from sigflow.types import TypeMismatch, resolve
+
+    def source():
+        frame = Frame(
+            np.arange(4).astype(dtype), meta={"t0": 0.0}, stream={"rate": 1.0}
+        )
+        return from_iterable(lambda: iter([frame]), Sig[dtype, N])
+
+    for blk in (ig.cumulative, ig.definite):
+        g = source() >> blk
+        assert resolve(g.out_type, g.validate()).dtype == np.dtype(result)
+        assert np.asarray(run(g, on_error="raise")[0].data).dtype == np.dtype(result)
+
+    @block_of(np.int64)
+    def ints_only(x):
+        return x
+
+    with pytest.raises(TypeMismatch, match=f"dtype {result} cannot feed int64"):
+        _ = source() >> ig.cumulative >> ints_only
+
+
+def block_of(dtype):
+    """A one-dimensional map block taking and giving ``dtype`` only."""
+    from sigflow import Sig, block
+    from sigflow.dims import N
+
+    return lambda fn: block(fn, inputs=Sig[dtype, N], outputs=Sig[dtype, N])

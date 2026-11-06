@@ -19,8 +19,10 @@ frequency.
 Unification treats *different but convertible* units as a mismatch with a hint
 (insert ``to_units``), and *incompatible* units (V vs Hz) as a plain mismatch.
 Logarithmic units (dB, dBm, dBV, dBFS, dBc) are their own dimensions and do not
-combine with others. If ``pint`` is installed it is used for a symbol this
-registry does not know.
+combine with others. If ``pint`` is installed it reads the symbols this
+registry does not know (``inch``, ``mile``, ``rpm``), in the same terms, so
+they combine and convert with the built-in ones: ``units.factor("inch/s",
+"m/s")`` is 0.0254.
 
 :func:`product`, :func:`quotient` and :func:`simplify` build the units of a
 computed quantity: the integral of a signal in ``W`` over time is in
@@ -29,6 +31,7 @@ computed quantity: the integral of a signal in ``W`` over time is in
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 from fractions import Fraction
@@ -117,7 +120,7 @@ _ALIAS = {
     "samples": "1",
     "sample": "1",
 }
-_NOT_PREFIXED = {"min", "h", "1", "", "count", "deg", "rad"}  # "mh" is no unit
+_NOT_PREFIXED = {"min", "h", "1", "", "count"}  # "mh" is no unit; "mrad" is
 
 # names for the dimensions people talk about; the rest are spelled out
 _NAMES: dict[Dim, str] = {
@@ -218,7 +221,53 @@ def _symbol(sym: str) -> _Unit:
         if sym.startswith(p) and base in _UNITS and base not in _NOT_PREFIXED:
             dim, scale = _UNITS[base]
             return _Unit({sym: Fraction(1)}, dict(dim), s * scale)
-    raise _Unknown(sym)
+    found = _from_pint(sym)
+    if found is None:
+        raise _Unknown(sym)
+    return found
+
+
+@functools.cache
+def _pint_registry() -> Any:
+    try:
+        import pint  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    return pint.UnitRegistry()
+
+
+# pint's base quantities, in this registry's names
+_FROM_PINT = {
+    "[mass]": _M,
+    "[length]": _L,
+    "[time]": _T,
+    "[current]": _I,
+    "[temperature]": _K,
+}
+
+
+def _from_pint(text: str) -> _Unit | None:
+    """A unit ``pint`` knows and this registry does not (``inch``, ``mile``,
+    ``rpm``), in this registry's terms, so that it combines and compares with
+    the built-in units: ``inch/s`` is a velocity like ``m/s``. None without
+    pint, or if pint does not know it either."""
+    reg = _pint_registry()
+    if reg is None:
+        return None
+    try:
+        q = reg(text)
+        base = q.to_base_units()
+        scale = float(base.magnitude)
+    except Exception:
+        return None
+    dim: dict[str, Fraction] = {}
+    for name, p in dict(q.dimensionality).items():
+        key = _FROM_PINT.get(str(name), str(name).strip("[]"))  # substance...
+        dim[key] = Fraction(p).limit_denominator(1000)
+    angle = dict(base.units._units).get("radian")  # pint counts angles as 1
+    if angle:
+        dim["angle"] = Fraction(angle).limit_denominator(1000)
+    return _Unit({text: Fraction(1)}, dim, scale)
 
 
 class _Parser:
@@ -346,18 +395,14 @@ def parse(unit: str | None) -> tuple[str, float]:
         return _LEVELS[u], 1.0
     if not u:
         return "dimensionless", 1.0
+    parsed: _Unit | None
     try:
         parsed = _parse(u)
-        return _name(parsed.dimension), parsed.scale
     except (_Unknown, ZeroDivisionError, ValueError, OverflowError):
-        pass
-    try:  # symbols this registry does not know
-        import pint  # type: ignore[import-not-found]
-
-        q = pint.UnitRegistry()(u)
-        return str(q.dimensionality), float(q.to_base_units().magnitude)
-    except Exception:
+        parsed = _from_pint(u)  # spellings only pint reads, if it is installed
+    if parsed is None:
         return f"unknown:{u}", 1.0
+    return _name(parsed.dimension), parsed.scale
 
 
 def compatible(a: str | None, b: str | None) -> bool:

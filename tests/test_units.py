@@ -23,6 +23,9 @@ from sigflow import units
         ("dBm", "level_dBm", 1.0),
         ("kg", "mass", 1.0),
         ("min", "time", 60.0),
+        ("mrad", "angle", 1e-3),
+        ("mdeg", "angle", 1e-3 * math.pi / 180),
+        ("urad", "angle", 1e-6),
     ],
 )
 def test_simple_units_read_as_before(unit, dimension, scale):
@@ -49,6 +52,7 @@ def test_simple_units_read_as_before(unit, dimension, scale):
         ("V*s", "m^2*kg/(A*s^2)", 1.0),
         ("V/Hz^(1/2)", "m^2*kg/(A*s^(5/2))", 1.0),
         ("deg/s", "rad/s", math.pi / 180),
+        ("mrad/s", "rad/s", 1e-3),
     ],
 )
 def test_compound_units_measure_what_they_are_made_of(unit, dimension, scale):
@@ -61,6 +65,8 @@ def test_units_of_one_quantity_are_compatible_however_written():
     assert units.compatible("Hz", "1/s")
     assert units.factor("W*s", "kJ") == pytest.approx(1e-3)
     assert units.factor("km/h", "m/s") == pytest.approx(1 / 3.6)
+    assert units.factor("mrad", "rad") == pytest.approx(1e-3)
+    assert units.factor("mdeg", "deg") == pytest.approx(1e-3)
     assert not units.compatible("V", "s")
     assert not units.compatible("rad", "1")  # angles stay their own quantity
     assert not units.compatible("b", "B")
@@ -68,10 +74,21 @@ def test_units_of_one_quantity_are_compatible_however_written():
 
 def test_levels_and_unknown_symbols_do_not_combine():
     assert units.parse("dB*s")[0] == "unknown:dB*s"
-    assert units.parse("furlong")[0].startswith("unknown:")
-    assert not units.compatible("furlong", "furlong/1")
+    # a symbol no registry has, pint included
+    assert units.parse("zorkmid")[0].startswith("unknown:")
+    assert not units.compatible("zorkmid", "zorkmid/1")
     with pytest.raises(units.UnitError):
-        units.factor("furlong", "m")
+        units.factor("zorkmid", "m")
+
+
+def test_pint_units_combine_with_the_built_in_ones():
+    pytest.importorskip("pint")
+    assert units.parse("inch/s") == (units.parse("m/s")[0], pytest.approx(0.0254))
+    assert units.factor("inch/s", "m/s") == pytest.approx(0.0254)
+    assert units.factor("mile/h", "km/h") == pytest.approx(1.609344)
+    assert units.compatible("inch*V", "m*V")
+    assert units.factor("rpm", "rad/s") == pytest.approx(2 * math.pi / 60)
+    assert units.parse("furlong")[0] == "length"
 
 
 @pytest.mark.parametrize(
@@ -86,12 +103,12 @@ def test_levels_and_unknown_symbols_do_not_combine():
         ("(rad/s)*s", "rad"),
         ("V*s", "V*s"),
         ("mV*s", "mV*s"),
-        ("furlong*s", "furlong*s"),  # not readable: unchanged
+        ("zorkmid*s", "zorkmid*s"),  # not readable: unchanged
     ],
 )
 def test_simplify_tidies_without_changing_the_value(unit, simple):
     assert units.simplify(unit) == simple
-    if not simple.startswith("furlong"):
+    if not simple.startswith("zorkmid"):
         assert units.factor(unit, simple) == pytest.approx(1.0)
 
 

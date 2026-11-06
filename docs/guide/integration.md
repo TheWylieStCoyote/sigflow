@@ -58,7 +58,9 @@ arithmetic and still gives nonsense on a real sensor without one of these:
 - **A leak.** `cumulative(leak=tau)` integrates `y' = x - y / tau`: it
   forgets what happened more than a few `tau` seconds ago, follows changes
   faster than `tau`, and a constant bias settles at `bias * tau` instead of
-  growing.
+  growing. It decays over the time that actually passes: the output starts at
+  `initial`, and across a hole of 9 s it decays by `exp(-9 / tau)`, not by one
+  sample period's worth.
 - **Resets from what else is known.** `cumulative(reset_on="still")` holds
   the integral at zero on the samples a `still` tag covers (the whole frame,
   or a span of it) and integrates afresh after them. These are zero-velocity
@@ -77,9 +79,21 @@ a hole:
 - `gaps="reset"` restarts the integral after it, and tags that frame
   `integral_reset`.
 
+A bridge is a straight line whichever `method` is chosen: Simpson's rule
+would fit a curve through samples on both sides of the hole and invent its
+shape. Within each stretch of samples without holes, the method applies as
+usual.
+
 Frames that overlap in time are treated as following on, with a warning. To
 fill a hole with an interpolated signal instead, use
 `interpolate.fill_gaps` before integrating, where that module is available.
+
+## Output dtype
+
+The integral is computed in floating point, so an integer or `float32` input
+gives `float64`, and `complex64` gives `complex128`. The output contract says
+so (`Sig[promoted(T), N]`, see `sigflow.promoted`), so a block downstream that
+takes only integers is refused when the graph is built.
 
 ## Per-frame integrals
 

@@ -22,7 +22,13 @@ error).
 The input needs a ``rate`` stream annotation. Frame start times (``t0``) are
 used when present, so a frame that starts late is a hole in the time axis: by
 default the integral bridges it (a straight line from the sample before to the
-sample after, with a warning issue), or restarts after it (``gaps="reset"``).
+sample after, whichever ``method``, with a warning issue), or restarts after it
+(``gaps="reset"``). A leak decays over the time that actually passes, holes
+included.
+
+The output is the input computed in floating point: an integer or float32
+input gives float64, complex64 gives complex128, and the output contract says
+so.
 
 Units: the integral of a quantity is in its units times seconds, and the
 output's ``units`` annotation says so, as simply as it can: ``W`` gives ``J``,
@@ -38,7 +44,7 @@ import itertools
 import math
 from collections import deque
 from collections.abc import Iterator
-from typing import Annotated, Any
+from typing import Any
 
 import numpy as np
 from scipy import integrate as si
@@ -47,7 +53,7 @@ from scipy.signal import lfilter
 from .block import Framed, block
 from .dims import N, T
 from .frame import Frame
-from .types import Sig, Stream, may_provide
+from .types import Sig, SignalType, Stream, promoted
 
 __all__ = ["METHODS", "cumulative", "definite"]
 
@@ -118,7 +124,7 @@ class _Integrator:
         self.pos += len(x)
         t = t0 + np.arange(len(x)) * dx
         notes: list[str] = []
-        restarted = False
+        restarted = bridged = False
         if self.ctx_x is not None:
             width = t[0] - self.ctx_t[-1]
             if width > 1.5 * dx:  # whole samples missing
@@ -126,15 +132,18 @@ class _Integrator:
                     self._restart()
                     restarted = True
                 else:
+                    bridged = True
                     notes.append(f"integral bridged a gap of {width - dx:.6g} s")
             elif width < 0.5 * dx:  # overlapping or repeated times
                 notes.append(
                     "frames overlap in time: the integral assumes they follow on"
                 )
                 t = self.ctx_t[-1] + dx * (1 + np.arange(len(x)))
-        rel = self._relative(t, x)  # integral from the previous sample (or 0)
+        # time from the last sample before the frame to its first: 0 at a start
+        first = 0.0 if self.ctx_x is None else float(t[0] - self.ctx_t[-1])
+        rel = self._relative(t, x, bridged)  # integral from the previous sample
         start = self.total if self.total is not None else self._zero(x, self.initial)
-        out = self._accumulate(f, rel, start, dx)
+        out = self._accumulate(f, rel, start, dx, first)
         self.total = out[-1]
         self.ctx_t = np.concatenate([self.ctx_t, t])[-self.keep :]
         self.ctx_x = (
@@ -151,13 +160,23 @@ class _Integrator:
     def _zero(x: np.ndarray, value: float) -> Any:
         return np.full(x.shape[1:], value, dtype=np.result_type(x, float))
 
-    def _relative(self, t: np.ndarray, x: np.ndarray) -> np.ndarray:
+    def _within(self, t: np.ndarray, x: np.ndarray) -> np.ndarray:
+        """The integral from the frame's first sample to each of its samples."""
+        if len(x) == 1:
+            return np.zeros_like(x, dtype=np.result_type(x, float))
+        return self.rule(x, x=t, axis=0, initial=0)
+
+    def _relative(self, t: np.ndarray, x: np.ndarray, bridged: bool) -> np.ndarray:
         """At each sample of the frame, the integral since the sample before the
-        frame (0 at the first sample of the stream)."""
+        frame (from the frame's first sample at the start of the stream). A hole
+        being bridged is a straight line between the samples on either side,
+        whatever the method; the method resumes within the frame."""
         if self.ctx_x is None:
-            if len(x) == 1:
-                return np.zeros_like(x, dtype=np.result_type(x, float))
-            return self.rule(x, x=t, axis=0, initial=0)
+            return self._within(t, x)
+        if bridged:
+            assert self.ctx_x is not None
+            gap = (self.ctx_x[-1] + x[0]) / 2 * (t[0] - self.ctx_t[-1])
+            return gap + self._within(t, x)
         zt = np.concatenate([self.ctx_t, t])
         zx = np.concatenate([self.ctx_x, x])
         c = self.rule(zx, x=zt, axis=0, initial=0)
@@ -165,10 +184,11 @@ class _Integrator:
         return c[b + 1 :] - c[b]
 
     def _accumulate(
-        self, f: Frame, rel: np.ndarray, start: Any, dx: float
+        self, f: Frame, rel: np.ndarray, start: Any, dx: float, first: float
     ) -> np.ndarray:
         """Running values from ``start``: plain, leaky, and zero where the
-        ``reset_on`` tag applies."""
+        ``reset_on`` tag applies. ``first`` is the time from the sample before
+        the frame to its first sample (0 at the start of the stream)."""
         inc = np.diff(rel, axis=0, prepend=np.zeros((1, *rel.shape[1:])))
         if self.ctx_x is None:  # no interval before the first sample
             inc[0] = 0
@@ -184,20 +204,34 @@ class _Integrator:
                 out[a:b] = 0
                 level = self._zero(rel, 0.0)
                 continue
-            out[a:b] = self._run(level, inc[a:b], dx)
+            # elapsed time before the run's first sample: the frame's own gap, or
+            # one sample after a held stretch
+            out[a:b] = self._run(level, inc[a:b], dx, first if a == 0 else dx)
             level = out[b - 1]
         return out
 
-    def _run(self, level: Any, inc: np.ndarray, dx: float) -> np.ndarray:
+    def _run(self, level: Any, inc: np.ndarray, dx: float, first: float) -> np.ndarray:
+        """``level`` carried on by the increments ``inc``; with a leak, decayed
+        over the time that actually passes: ``first`` before the first
+        increment, ``dx`` between samples."""
         if self.leak is None:
             return level + np.cumsum(inc, axis=0)
+        y0 = math.exp(-first / self.leak) * np.asarray(level) + inc[0]
+        if len(inc) == 1:
+            return np.expand_dims(y0, 0)
         a = math.exp(-dx / self.leak)  # decay per sample: y' = x - y / leak
-        zi = np.expand_dims(a * np.asarray(level), 0)
-        y, _ = lfilter([1.0], [1.0, -a], inc, axis=0, zi=zi)
-        return y
+        rest, _ = lfilter(
+            [1.0], [1.0, -a], inc[1:], axis=0, zi=np.expand_dims(a * y0, 0)
+        )
+        return np.concatenate([np.expand_dims(y0, 0), rest])
 
 
-@block(ratio="1:1")
+# the output is the input computed in floating point: int64 in, float64 out
+_RUNNING = SignalType(promoted(T), (N,)).may_provide(RESET)
+_PER_FRAME = SignalType(promoted(T), ()).may_provide(RESET)
+
+
+@block(ratio="1:1", outputs=_RUNNING)
 def cumulative(
     xs: Stream[Framed[Sig[T, N]]],
     method: str = "trapezoid",
@@ -205,7 +239,7 @@ def cumulative(
     reset_on: str | None = None,
     gaps: str = "bridge",
     initial: float = 0.0,
-) -> Iterator[Annotated[Sig[T, N], may_provide(RESET)]]:
+) -> Iterator[Frame]:
     """The running integral of a stream over time, at every sample.
 
     The output has the input's shape and sample grid: sample ``i`` is the
@@ -248,13 +282,13 @@ def _scalar_frame(f: Frame, value: Any, notes: list[str], restarted: bool) -> Fr
     return out.tag(RESET) if restarted else out
 
 
-@block(ratio="1:1")
+@block(ratio="1:1", outputs=_PER_FRAME)
 def definite(
     xs: Stream[Framed[Sig[T, N]]],
     method: str = "trapezoid",
     window: int | None = None,
     gaps: str = "bridge",
-) -> Iterator[Annotated[Sig[T, tuple[()]], may_provide(RESET)]]:
+) -> Iterator[Frame]:
     """The integral over each frame, as one value per frame.
 
     A frame's value covers its samples *and* the interval before its first

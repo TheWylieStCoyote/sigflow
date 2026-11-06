@@ -22,15 +22,21 @@ New
   signal, or Simpson), with a leak (`leak=tau`) and tag-driven resets
   (`reset_on=`) against drift; `definite` gives the integral over each frame
   (or the last few), and the values add up to the integral of the stream.
-  Holes in the time axis are bridged with a warning or restart the integral;
-  the output's units are the input's times seconds (`W` gives `J`). Guide:
+  Holes in the time axis are bridged with a straight line (whatever the
+  method) and a warning, or restart the integral; a leak decays over the time
+  that actually passes. The output is promoted to floating point, as its
+  contract says, and its units are the input's times seconds (`W` gives `J`). Guide:
   *Integration across frames*.
 - Compound units: `sigflow.units` reads products, quotients and powers of its
   symbols (`V*s`, `m/s^2`, `kg*m^2/s^2`, `V/Hz^0.5`), and units measuring the
   same quantity are convertible however they are written (`J`, `W*s`, `N*m`;
   `Hz`, `1/s`). New symbols: J, N, C, ohm, min and h. `units.product`,
   `units.quotient` and `units.simplify` build the units of computed
-  quantities.
+  quantities. With `pint` installed, symbols only pint knows (`inch`, `rpm`)
+  are read in the same terms, so `inch/s` converts to `m/s`.
+- `promoted(T)`: a dtype in an output contract that is the input's promoted to
+  floating point (int64 and float32 give float64, complex64 gives
+  complex128), for blocks that compute in floating point.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on

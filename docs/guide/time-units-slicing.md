@@ -32,8 +32,14 @@ units.compatible("Hz", "1/s")  # True
 ```
 
 Angles, bits, bytes and symbols are quantities of their own (`rad` is not
-dimensionless here, and `b` does not convert to `B`). Levels in dB do not
-combine with other units.
+dimensionless here, and `b` does not convert to `B`); they take SI prefixes
+like the others (`mrad`, `mdeg`, `kb`). Levels in dB do not combine with other
+units.
+
+With `pint` installed, a symbol this registry does not know (`inch`, `mile`,
+`rpm`) is looked up there and translated into the same terms, so it combines
+and converts with the built-in units: `units.factor("inch/s", "m/s")` is
+0.0254, and `rpm` converts to `rad/s`.
 
 `units.product`, `units.quotient` and `units.simplify` build the units of a
 computed quantity. `simplify` combines repeated symbols and names a compound
