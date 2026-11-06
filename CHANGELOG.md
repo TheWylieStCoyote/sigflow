@@ -34,9 +34,6 @@ New
   `units.quotient` and `units.simplify` build the units of computed
   quantities. With `pint` installed, symbols only pint knows (`inch`, `rpm`)
   are read in the same terms, so `inch/s` converts to `m/s`.
-- `promoted(T)`: a dtype in an output contract that is the input's promoted to
-  floating point (int64 and float32 give float64, complex64 gives
-  complex128), for blocks that compute in floating point.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on

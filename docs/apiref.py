@@ -205,6 +205,8 @@ PAGES: list[tuple[str, str, str, list[str]]] = [
         "sigflow.interpolate",
         "See [Interpolation and resampling](../../guide/interpolation.md).",
         ["sigflow.interpolate.*"],
+    ),
+    (
         "integrate",
         "sigflow.integrate",
         "See [Integration across frames](../../guide/integration.md).",
