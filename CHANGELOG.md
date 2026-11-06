@@ -4,6 +4,13 @@
 
 New
 
+- `sigflow.interpolate`: interpolation that works across frame boundaries,
+  with the methods of `scipy.interpolate` (linear, PCHIP, Akima, modified
+  Akima, cubic spline, B-spline). `resample(rate=)` resamples a stream to any
+  rate, matching interpolation of the whole signal (exactly for the local
+  methods); `fill_gaps()` inserts interpolated frames where frames are
+  missing. Invented samples carry an `interpolated` tag. Guide:
+  *Interpolation and resampling*.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on

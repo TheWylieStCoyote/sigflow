@@ -40,6 +40,7 @@ nav:
       - Labelled arrays (xarray): guide/xarray.md
       - Array backends and GPU: guide/array-backends.md
       - Time, units and slicing: guide/time-units-slicing.md
+      - Interpolation and resampling: guide/interpolation.md
       - Notebooks and control: guide/notebooks.md
       - Files, sockets and GNU Radio: guide/io.md
       - Persistence and replay: guide/persistence.md
@@ -58,6 +59,7 @@ nav:
       - Pools, devices and labelled arrays: reference/api/backends.md
       - sigflow.dsp: reference/api/dsp.md
       - sigflow.linalg: reference/api/linalg.md
+      - sigflow.interpolate: reference/api/interpolate.md
       - sigflow.io: reference/api/io.md
       - sigflow.plot: reference/api/plot.md
       - Diagrams and reports: reference/api/drawing.md

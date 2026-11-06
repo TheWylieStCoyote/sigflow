@@ -448,7 +448,11 @@ def fir(xs: Stream[Sig[float, N]], taps: Any = (1.0,)) -> Iterator[Sig[float, N]
 
 @block
 def resample(f: Framed[Sig[float, N]], up: int = 1, down: int = 1) -> Sig[float, M]:
-    """Rational resampling; the stream's ``rate`` annotation is scaled (time kept)."""
+    """Rational resampling; the stream's ``rate`` annotation is scaled (time kept).
+
+    Each frame is resampled on its own, so the filter sees the frame's edges as
+    the signal's ends and the output has seams there.
+    :func:`sigflow.interpolate.resample` carries samples across frames."""
     rate = f.stream.get("rate")
     return f.evolve(
         data=ss.resample_poly(f.data, up, down),

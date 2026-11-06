@@ -200,6 +200,12 @@ PAGES: list[tuple[str, str, str, list[str]]] = [
     ("dsp", "sigflow.dsp", "", ["sigflow.dsp.*"]),
     ("linalg", "sigflow.linalg", "", ["sigflow.linalg.*"]),
     (
+        "interpolate",
+        "sigflow.interpolate",
+        "See [Interpolation and resampling](../../guide/interpolation.md).",
+        ["sigflow.interpolate.*"],
+    ),
+    (
         "io",
         "sigflow.io",
         "See [Files, sockets and GNU Radio](../../guide/io.md).",
