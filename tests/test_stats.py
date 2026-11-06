@@ -406,3 +406,137 @@ def test_fits_checkpoint_to_a_file_and_resume(tmp_path, make_block):
     full = run(make())
     np.testing.assert_array_equal(rest[-1].data, full[-1].data)
     assert rest[-1].meta.get("threshold") == full[-1].meta.get("threshold")
+
+
+# -- review fixes: run-local state, calibration, support ends, zero spread ---- #
+
+
+def test_a_reused_node_keeps_a_state_of_its_own():
+    count = stats.moments["count"]
+    out = run(dsp.sine(n=4, frames=2) >> [count, count], on_error="raise")
+    assert [f.data for f in out] == [(4, 4), (8, 8)]
+
+
+def test_runs_of_one_graph_side_by_side_do_not_disturb_each_other():
+    import asyncio
+
+    from sigflow import iterate
+
+    g = dsp.sine(n=4, frames=4) >> stats.moments["count"]
+
+    async def two():
+        first = iterate(g)
+        a = await first.__anext__()
+        second = iterate(g)  # started, never consumed
+        b = await first.__anext__()
+        await first.aclose()
+        await second.aclose()
+        return a.data, b.data
+
+    assert asyncio.run(two()) == (4, 8)
+
+
+def test_a_bound_block_stays_run_local_and_checkpointed():
+    bound = stats.moments.bind(window=2)
+    g = dsp.sine(n=4, frames=3) >> bound["count"]
+    assert [f.data for f in run(g)] == [f.data for f in run(g)] == [4, 8, 8]
+
+    def make():
+        return dsp.sine(n=4, frames=30) >> stats.moments.bind(window=50)["count"]
+
+    h = make().start(paused=True)
+    h.step(5)
+    deadline = time.time() + 10
+    while h.monitor.produced < 5 and time.time() < deadline:
+        time.sleep(0.01)
+    ck = h.checkpoint()
+    h.stop()
+    assert "moments" in ck.states
+    assert run(make(), resume=ck)[0].data == 24
+
+
+@pytest.mark.parametrize("backend", ["thread", "process", "loky"])
+def test_statistics_are_refused_by_every_parallel_backend(backend):
+    from sigflow import parallel
+
+    with pytest.raises(TypeError, match="keeps state across frames"):
+        parallel(stats.moments, backend=backend)
+
+
+@pytest.mark.parametrize("pfa", [1e-1, 1e-2])
+def test_noise_alone_keeps_the_false_alarm_rate_when_targets_are_excluded(pfa):
+    alarms = tested = 0
+    for seed in range(6):
+        x = rvs(ss.rayleigh, size=256 * 60, random_state=seed)
+        out = run(timed(x) >> stats.threshold(pfa=pfa, window=20), on_error="raise")
+        for f in out[5:]:
+            tested += len(f.data)
+            alarms += int(f.mask("detection").sum())
+    assert 0.85 < alarms / tested / pfa < 1.15  # leaving out every detection: 2.3x
+
+
+def test_a_strong_target_is_still_kept_out_of_the_noise_fit():
+    x = rvs(ss.rayleigh, size=256 * 30, random_state=1)
+    x[256 * 12 : 256 * 12 + 60] += 25.0
+    kept = run(timed(x) >> stats.threshold(pfa=1e-4, window=3), on_error="raise")
+    raw = run(timed(x) >> stats.threshold(pfa=1e-4, window=3, exclude=None))
+    assert kept[14].meta["threshold"] < 1.1 * kept[12].meta["threshold"]
+    assert raw[14].meta["threshold"] > 3 * raw[12].meta["threshold"]
+
+
+def test_samples_at_the_end_of_the_support_count_where_scipy_counts_them():
+    zeros = np.array([0.0, 0.0, 1.0, 1.0])
+    out = run(stream(zeros, n=4) >> stats.fit(dist="expon"), on_error="raise")
+    np.testing.assert_allclose(
+        out[0].data, np.asarray(ss.expon.fit(zeros, floc=0), dtype=float)
+    )
+    assert out[0].meta["fit_samples"] == 4 and not out[0].warnings
+    x = np.r_[0.0, 0.0, np.random.default_rng(0).gamma(2, 1.5, 62)]
+    out = run(stream(x) >> stats.fit(dist="weibull_min", window=1), on_error="raise")
+    expected = np.asarray(ss.weibull_min.fit(x, floc=0), dtype=float)
+    np.testing.assert_allclose(out[0].data, expected, rtol=1e-6)
+    out = run(stream(x) >> stats.fit(dist="rayleigh"), on_error="raise")
+    assert out[0].meta["fit_samples"] == 62  # no likelihood at 0, as scipy says
+    assert any("lower end" in i.message for i in out[0].warnings)
+
+
+def test_spread_vanishing_or_appearing_is_a_change():
+    rng = np.random.default_rng(0)
+
+    def found(x, **kw):
+        out = run(stream(x) >> stats.change_point(**kw), on_error="raise")
+        return [
+            (i, f.tags["changed"]) for i, f in enumerate(out) if "changed" in f.tags
+        ]
+
+    assert found(np.r_[rng.normal(size=640), np.zeros(1280)]) == [(10, "down")]
+    assert found(np.r_[np.zeros(640), rng.normal(size=1280)]) == [(10, "up")]
+    assert found(np.zeros(1920)) == []
+    assert found(np.r_[np.full(640, 2.0), np.full(640, 3.0)], on="mean") == [(10, "up")]
+
+
+def test_a_goodness_of_fit_that_cannot_run_says_why(monkeypatch):
+    from sigflow import stats as module
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no simulation today")
+
+    monkeypatch.setattr(module._scipy_stats, "goodness_of_fit", broken)
+    x = np.random.default_rng(1).gamma(2, 1.5, 64 * 3)
+    out = run(stream(x) >> stats.fit(dist="gamma", window=2, gof_every=1))
+    assert math.isnan(out[-1].meta["fit_pvalue"])
+    assert any("no simulation today" in i.message for i in out[-1].warnings)
+
+
+def test_scipy_calls_use_forms_every_supported_version_takes():
+    import inspect
+
+    from sigflow import stats as module
+
+    params = inspect.signature(ss.goodness_of_fit).parameters
+    assert module._GOF_SEED in params
+    x = np.random.default_rng(2).normal(size=50)
+    m = Moments.of(x)
+    np.testing.assert_allclose(
+        [m.m2, m.m3, m.m4], [ss.moment(x, k) * len(x) for k in (2, 3, 4)]
+    )

@@ -78,6 +78,11 @@ default) or its mean (`on="mean"`) changes, with a two-sided CUSUM test.
    `t0`), which is the likely start of the change. The test then learns the
    new normal from the next `reference` frames.
 
+A spread of exactly zero on one side only is a change beyond doubt: a signal
+stopping to a constant (`"down"`) or starting from silence (`"up"`) alarms on
+the first frame. With `on="mean"`, a constant reference makes any other mean
+a change.
+
 Why a sequential test rather than testing each frame? On frames of 64
 normal samples with a 1.6-fold step in standard deviation (200 trials of 100
 frames, step at frame 60):
@@ -117,7 +122,10 @@ fitting it. A distribution bounded below (`rayleigh`, `gamma`, `weibull_min`,
 `lognorm` and so on) has `loc` fixed at 0 by default, because amplitudes and
 powers start at zero. Fitting `loc` as well is up to 100 times slower and much
 less stable on small samples. Pass `fixed={}` to fit everything. Samples
-outside the support (a negative amplitude) are ignored, with a warning.
+outside the support (a negative amplitude) are ignored, with a warning. A
+sample exactly at the lower end counts where scipy counts it: zeros are valid
+for `expon` and `weibull_min`, while `rayleigh`, `gamma` and `lognorm` have no
+likelihood at 0 and leave such samples out, with a warning.
 
 **Exact running fits.** For `norm`, `expon`, `rayleigh`, `lognorm` and `gamma`
 (`stats.EXACT_FITS`, with the default `fixed`), the fit depends only on a few
@@ -141,7 +149,9 @@ against the fitted distribution would be wrong: the parameters came from the
 same data, so it almost never rejects (0 rejections in 200 correct fits at
 α=5%, where 5% is expected). `goodness_of_fit` corrects for that by
 simulation, at tens of milliseconds a test; its smallest p-value is
-`1 / (draws + 1)`, so `alpha` must be above that.
+`1 / (draws + 1)`, so `alpha` must be above that. A test that cannot run (no
+fit yet, too few samples, or a failure in scipy) leaves `fit_pvalue` NaN and
+adds a warning issue saying why.
 
 ## Thresholds from a noise model
 
@@ -156,8 +166,14 @@ for f in run(g):
 
 - Each frame is tested against the fit of the frames **before** it, at
   `dist.isf(pfa, *params)`. The first `learn` frames (5) only train the fit.
-- **Detected samples are kept out of the fit** (`exclude=True`), so a strong
-  target does not raise the threshold meant to find it.
+- **Samples no noise would reach are kept out of the fit**, so a strong
+  target does not raise the threshold meant to find it. "No noise would
+  reach" is beyond the level noise exceeds with probability `exclude`
+  (1e-6), not the detection threshold itself: leaving out every detection
+  would also leave out the noise above the threshold, and a fit to the
+  truncated noise underestimates it. At `pfa=0.1` that more than doubled the
+  false-alarm rate; leaving out only what lies beyond the 1e-6 level moves it
+  by under 1%. `exclude=None` keeps every sample.
 - Each run of detected samples gets a `detection` tag over its time span,
   with its largest sample as the value, and the frame's `threshold`
   annotation is the level used. Frames without a time axis get a whole-frame
@@ -182,8 +198,12 @@ parameters fit: test it first with `fit(..., gof_every=)`.
 
 ## State, checkpoints and reuse
 
-- **Each use has its own state.** Two graphs using `stats.moments`, or one
-  graph using it twice, do not share a summary.
+- **Each run, and each use, has its own state.** Every run makes its own
+  copy of each statistics block's state for each place the block is used, so
+  two graphs, one graph using a block (or a sub-graph) twice, and two runs of
+  one graph at the same time do not share a summary. The block itself never
+  changes. `stats.moments.bind(window=5)` presets configuration and keeps
+  this.
 - **Every run starts afresh.** Running a graph again, or `replay`, starts
   each statistic from nothing, unless the run resumes from a checkpoint.
 - **Checkpoints capture the state.** These are `Stateful` blocks, so
@@ -193,7 +213,8 @@ parameters fit: test it first with `fit(..., gof_every=)`.
   graph with two `moments`, name one:
   `stats.moments.node(window=5).named("recent")`.
 - **Not in `parallel()`.** Each worker would keep part of the state, so
-  `parallel(stats.moments)` is refused. `per_key` gives each key its own
+  `parallel(stats.moments)` is refused when the graph is built, whatever the
+  backend. `per_key` gives each key its own
   copy, which is usually what is wanted: `per_key("channel", stats.moments)`.
 - **Replay.** A cumulative statistic depends on every frame before it, so
   `replay` of one output reruns the graph from the start up to it.

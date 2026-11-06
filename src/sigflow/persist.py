@@ -370,6 +370,11 @@ def checkpoint(graph: Any, monitor: Any, path: str | None = None) -> Checkpoint:
             ck.positions[key] = st.out
         if isinstance(n, Block):
             fn = n.defn.fn
+            if getattr(n.defn, "run_local", False):  # the run's own copy holds it
+                own = monitor.local_states.get(n.id)
+                if own is not None:
+                    ck.states[key] = own.fn.state()
+                continue
             state, restore_ = getattr(fn, "state", None), getattr(fn, "restore", None)
             if callable(state) and callable(restore_):
                 ck.states[key] = state()
@@ -387,5 +392,9 @@ def restore(graph: Any, ck: Checkpoint) -> None:
     from .graph import Block
 
     for n in graph.nodes():
-        if isinstance(n, Block) and n.name in ck.states:
+        if (
+            isinstance(n, Block)
+            and n.name in ck.states
+            and not getattr(n.defn, "run_local", False)  # restored by the run
+        ):
             n.defn.fn.restore(ck.states[n.name])  # type: ignore[attr-defined]

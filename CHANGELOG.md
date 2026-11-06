@@ -44,8 +44,11 @@ New
   expon, rayleigh, lognorm and gamma; over a window of frames for the rest),
   with an optional `goodness_of_fit` test; `threshold` tags samples above a
   level set by a fitted noise distribution for a chosen false-alarm
-  probability. Each use of a block has its own state, every run starts
-  afresh, and checkpoints capture it. Guide: *Statistics across
+  probability (samples beyond what noise reaches with probability 1e-6 are
+  kept out of its fit). Each run gives each use of a block a state of its
+  own, so reused sub-graphs and runs side by side do not share it; every run
+  starts afresh, checkpoints capture it, and `parallel()` refuses these
+  blocks. Guide: *Statistics across
   frames*.
 - A `Stateful` block may define `reset()`: every run calls it before starting
   (and before restoring a checkpoint), so the block starts afresh. Without it,

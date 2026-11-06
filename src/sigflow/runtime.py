@@ -206,6 +206,28 @@ class Runner:
         self.opts = opts
         self.mon = opts.monitor
 
+    def _call(self, node: Block) -> Callable[..., Any]:
+        """The callable this run invokes for ``node``. A block whose definition is
+        ``run_local`` (a stateful block that must not share state) gets a copy
+        of its state object of its own for this run and this node: reset, then
+        restored from the checkpoint being resumed. The run's monitor keeps it,
+        where checkpoints find it."""
+        d = node.defn
+        if not getattr(d, "run_local", False):
+            return d.resolve_call(self.opts.labels)
+        key = getattr(node, "id", id(node))
+        own = self.mon.local_states.get(key)
+        if own is None:
+            own = _local_copy(d)
+            reset = getattr(own.fn, "reset", None)
+            if callable(reset):
+                reset()
+            ck = self.opts.resume
+            if ck is not None and node.name in ck.states:
+                own.fn.restore(ck.states[node.name])
+            self.mon.local_states[key] = own
+        return own.resolve_call(self.opts.labels)  # type: ignore[no-any-return]
+
     # -- dispatch ---------------------------------------------------------- #
     def compile(
         self, node: Node, upstream: AsyncIterator[Frame] | None
@@ -379,7 +401,7 @@ class Runner:
         Provenance still gets one node per block; annotations are merged once."""
         stats_ = [self.mon.stats(n.name, n) for n in nodes]
         policies = [self._policy(n) for n in nodes]
-        calls = [n.defn.resolve_call(self.opts.labels) for n in nodes]
+        calls = [self._call(n) for n in nodes]
         needs = [bool(tag_names(n.in_type)) for n in nodes]  # input tag requirements
         control = self.opts.control
         seqs = [0] * len(nodes)
@@ -1098,7 +1120,7 @@ class Runner:
         stats = self.mon.stats(node.name, node)
         d = node.defn
         try:
-            produced = d.resolve_call(self.opts.labels)(
+            produced = self._call(node)(
                 **node.given
             )  # sources get Knob objects and read .value per frame
         except Exception as e:
@@ -1173,7 +1195,7 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
-        call = d.resolve_call(self.opts.labels)
+        call = self._call(node)
         policy = self._policy(node)
         seq = 0
         needs = bool(tag_names(node.in_type))  # input tag requirements
@@ -1268,7 +1290,7 @@ class Runner:
     ) -> AsyncIterator[Frame]:
         stats = self.mon.stats(node.name, node)
         d = node.defn
-        call = d.resolve_call(self.opts.labels)
+        call = self._call(node)
         spec = d.inputs[0]
         needs = bool(tag_names(node.in_type))  # input tag requirements
         if len(d.inputs) != 1:
@@ -1496,7 +1518,7 @@ class Runner:
 
         inner = node.inner
         d = inner.defn
-        call = d.resolve_call(self.opts.labels)
+        call = self._call(inner)
         needs = bool(tag_names(inner.in_type))  # input tag requirements
         stats = self.mon.stats(node.name, node)
         policy = self._policy(inner)
@@ -1850,6 +1872,19 @@ class _SubPipe:
             await self.task
         except (asyncio.CancelledError, Exception):
             pass
+
+
+def _local_copy(defn: Any) -> Any:
+    """A copy of a block definition with a deep copy of its function (its state)."""
+    import copy
+
+    from .xarray import adapt
+
+    own = object.__new__(type(defn))  # not copy(): a BlockDef pickles by re-import
+    own.__dict__.update(defn.__dict__)
+    own.fn = copy.deepcopy(defn.fn)
+    own.adapted = adapt(own)
+    return own
 
 
 def _own_instance(body: Node) -> Node:
@@ -2491,7 +2526,7 @@ def _begin(graph: Node, options: dict[str, Any]) -> RunOptions:
         options = {**options, "resume": load_checkpoint(options["resume"])}
     opts = RunOptions(**options)
     for n in graph.nodes():
-        if isinstance(n, Block):
+        if isinstance(n, Block) and not getattr(n.defn, "run_local", False):
             reset = getattr(n.defn.fn, "reset", None)
             if callable(reset):
                 reset()

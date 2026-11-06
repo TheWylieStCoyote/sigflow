@@ -18,16 +18,18 @@ a test has enough data to tell a change from noise.
 - :func:`threshold` tags the samples a fitted noise distribution makes
   improbable, for a chosen false-alarm probability.
 
-The stateful blocks keep their state in an object of their own for each place
-they are used in a graph, so two graphs, or one graph using a block twice, do
-not share it. Every run starts afresh, unless it resumes from a checkpoint,
-which captures their state. Name a second use of the same block
+The stateful blocks keep their state in a copy of their own for each run and
+each place they are used in a graph, so two graphs, one graph using a block (or
+a sub-graph) twice, and two runs of one graph at the same time do not share it.
+Every run starts afresh, unless it resumes from a checkpoint, which captures
+their state. They cannot run in ``parallel()``, which would split their state
+between workers. Name a second use of the same block
 (``stats.moments.node().named("moments_b")``) so a checkpoint keeps both.
 """
 
 from __future__ import annotations
 
-import copy
+import inspect
 import math
 from collections import deque
 from collections.abc import Callable, Mapping
@@ -90,11 +92,9 @@ class Moments:
         if x.min() == x.max():  # constant (silence, DC): scipy warns needlessly
             return cls(n, float(x[0]))
         mu = float(np.mean(x))
-        c2, c3, c4 = _scipy_stats.moment(  # an order list is accepted at run time
-            x,
-            order=[2, 3, 4],  # pyright: ignore[reportArgumentType]
-            center=mu,
-        )
+        # central moments, about the mean; the order is passed by position, as
+        # it is named ``moment`` before scipy 1.12 and ``order`` after
+        c2, c3, c4 = _scipy_stats.moment(x, [2, 3, 4])  # pyright: ignore[reportArgumentType]
         return cls(n, mu, float(c2) * n, float(c3) * n, float(c4) * n)
 
     def merge(self, other: Moments) -> Moments:
@@ -148,17 +148,30 @@ class Moments:
 
 
 class _OwnState(BlockDef):
-    """A block definition whose function is a stateful object: each node made
-    from it gets a copy of that object, so uses of the block do not share state."""
+    """A block definition whose function is a stateful object that no two uses
+    may share: each run makes its own copy for each node using it (see
+    ``Runner._call``), so clones of a node, reuses of a sub-graph, and runs side
+    by side each keep their own statistics, and the definition itself is never
+    changed by a run."""
+
+    run_local = True
+
+    def __init__(self, fn: Any, **options: Any) -> None:
+        super().__init__(fn, **options)
+        self._preset: dict[str, Any] = {}
 
     def node(self, **config: Any) -> Block:
-        from .xarray import adapt
+        return Block(self, {**self._preset, **config})
 
-        own = object.__new__(type(self))
-        own.__dict__.update(self.__dict__)
-        own.fn = copy.deepcopy(self.fn)
-        own.adapted = adapt(own)
-        return Block(own, config)
+    def bind(self, **config: Any) -> BlockDef:
+        """This block with some configuration preset, still run-local and still
+        checkpointed (a plain ``BlockDef.bind`` would wrap the function and lose
+        both)."""
+        self.check_config(config)
+        new = object.__new__(type(self))
+        new.__dict__.update(self.__dict__)
+        new._preset = {**self._preset, **config}
+        return new
 
     def __reduce__(self) -> Any:
         raise TypeError(
@@ -340,6 +353,10 @@ class _ChangePoint(Stateful):
     with the defaults detected every change, typically within 2 frames, with a
     false alarm in about 1 run in 25 of 50 frames. The scores assume
     independent samples; correlated noise needs a larger ``threshold``.
+
+    A spread of exactly zero on one side only (signal stopping to a constant,
+    or starting from silence) is a change beyond doubt and alarms at once; a
+    constant reference makes any other mean a change, under ``on="mean"``.
     """
 
     def __init__(self) -> None:
@@ -391,17 +408,25 @@ class _ChangePoint(Stateful):
         return f.tag(changed=direction).annotate(change_onset=onset)  # type: ignore[return-value]
 
     def _score(self, part: Moments, on: str) -> float:
+        """About standard normal while nothing changes. NaN when there are too
+        few samples to say; infinite when the spread is zero on one side only
+        (silence after noise, or the reverse), which is a change beyond doubt."""
         n = part.n
         if on == "mean":
-            sd = math.sqrt(self.ref.variance())
-            if n < 1 or not sd > 0:
+            v0 = self.ref.variance()
+            if n < 1 or math.isnan(v0):
                 return math.nan
-            return (part.mean - self.ref.mean) / (sd / math.sqrt(n))
+            if v0 == 0:  # a constant reference: any other mean is a change
+                d = part.mean - self.ref.mean
+                return 0.0 if d == 0 else math.copysign(math.inf, d)
+            return (part.mean - self.ref.mean) / (math.sqrt(v0) / math.sqrt(n))
         if n < 3:
             return math.nan
         v, v0 = part.variance(), self.ref.variance()
-        if not (v > 0 and v0 > 0):
+        if math.isnan(v) or math.isnan(v0):
             return math.nan
+        if v == 0 or v0 == 0:
+            return 0.0 if v == v0 else (math.inf if v > 0 else -math.inf)
         return math.log(v / v0) / math.sqrt(2.0 / (n - 1))
 
 
@@ -470,6 +495,11 @@ _EXACT: dict[str, tuple[dict[str, float], tuple[Callable[..., Any], ...], Any]] 
     "gamma": (_LOC0, (np.asarray, np.log), _gamma),
 }
 
+# exact families whose density is positive at the lower end of the support, so
+# samples there (zeros, for loc=0) count; the others' likelihood is 0 or
+# undefined there, and scipy refuses such samples
+_CLOSED_AT_LOWER = frozenset({"expon"})
+
 #: Distributions :func:`fit` fits exactly from running sums, without keeping
 #: samples (with ``loc`` fixed at 0, except ``"norm"``).
 EXACT_FITS = frozenset(_EXACT)
@@ -514,11 +544,16 @@ class _Fitter:
                 + ", ".join(sorted(EXACT_FITS))
             )
         self.window, self.every = window, every
-        # values at or below the support's lower end have no likelihood
+        # values below the support's lower end have no likelihood; at the end
+        # itself it depends on the distribution, so keep them where scipy would
         loc, scale = self.fixed.get("loc"), self.fixed.get("scale", 1.0)
         self.lower = (
             loc + self.d.a * scale if loc is not None and self.d.a > -np.inf else None
         )
+        self.closed = (
+            self.d.name in _CLOSED_AT_LOWER if self.exact is not None else True
+        )
+        self.note = ""  # a warning from the last refit
         self.total: tuple[Moments, ...] | None = None
         self.recent: deque[tuple[tuple[Moments, ...] | None, np.ndarray | None]] = (
             deque()
@@ -542,7 +577,7 @@ class _Fitter:
         x = x[~np.isnan(x)]
         dropped = 0
         if self.lower is not None:
-            inside = x > self.lower
+            inside = x >= self.lower if self.closed else x > self.lower
             dropped = int(len(x) - inside.sum())
             x = x[inside]
         st = (
@@ -573,7 +608,7 @@ class _Fitter:
         return np.concatenate(parts) if parts else np.empty(0)
 
     def _refit(self) -> None:
-        self.error = ""
+        self.error = self.note = ""
         params: Any = None
         if self.exact is not None:
             if self.window is None:
@@ -592,7 +627,7 @@ class _Fitter:
             if self.n > len(self.names) - len(self.fixed):
                 kw = {f"f{k}": v for k, v in self.fixed.items()}  # floc, fa...
                 try:
-                    params = self.d.fit(x, **kw)
+                    params = self._fit(x, kw)
                 except Exception as e:  # an optimiser that fails gives no fit
                     self.error = f"{type(e).__name__}: {e}"
         self.params = (
@@ -600,6 +635,23 @@ class _Fitter:
             if params is not None
             else np.full(len(self.names), np.nan)
         )
+
+    def _fit(self, x: np.ndarray, kw: dict[str, float]) -> Any:
+        """``dist.fit``, passing samples at the lower end of the support; if the
+        distribution has no likelihood there (scipy refuses them), again
+        without them, with a note."""
+        try:
+            return self.d.fit(x, **kw)
+        except Exception as e:  # FitDataError on samples at the end, and others
+            if self.lower is None or not np.any(x == self.lower):
+                raise
+            at_end = int(np.sum(x == self.lower))
+            params = self.d.fit(x[x > self.lower], **kw)
+            self.note = (
+                f"{at_end} samples at {self.lower:g}, where {self.d.name} has no "
+                f"likelihood, ignored ({type(e).__name__})"
+            )
+            return params
 
     def frozen(self) -> Any:
         """The fitted distribution, or None while there is no fit."""
@@ -668,6 +720,7 @@ class _Fit(Stateful):
         self.key: tuple[Any, ...] | None = None
         self.tests = 0
         self.pvalue = math.nan
+        self.untested = ""  # why the last test gave no p-value
 
     def __call__(
         self,
@@ -689,11 +742,11 @@ class _Fit(Stateful):
         if self.fitter is None or key != self.key:
             self.fitter = _Fitter(dist, window, fixed, every, gof_every > 0)
             self.key = key
-            self.tests, self.pvalue = 0, math.nan
+            self.tests, self.pvalue, self.untested = 0, math.nan, ""
         fitter = self.fitter
         dropped = fitter.update(f.data)
         if gof_every > 0 and fitter.refitted and (fitter.refits - 1) % gof_every == 0:
-            self.pvalue = self._test(fitter, draws)
+            self.pvalue, self.untested = self._test(fitter, draws)
         meta: dict[str, Any] = {"fit_samples": fitter.n}
         if gof_every > 0:
             meta["fit_pvalue"] = self.pvalue
@@ -702,30 +755,49 @@ class _Fit(Stateful):
             out = out.tag("poor_fit")
         if dropped:
             out = out.with_issue(
-                f"{dropped} samples outside the support of {fitter.d.name} ignored",
+                f"{dropped} samples outside the support of {fitter.d.name} (or at its "
+                "lower end, where it has no likelihood) ignored",
                 "warning",
                 "fit",
             )
         if fitter.error:
             out = out.with_issue(f"fit failed: {fitter.error}", "warning", "fit")
+        if fitter.note:
+            out = out.with_issue(fitter.note, "warning", "fit")
+        if gof_every > 0 and self.untested and fitter.refitted:
+            out = out.with_issue(self.untested, "warning", "fit")
         return out  # type: ignore[return-value]
 
-    def _test(self, fitter: _Fitter, draws: int) -> float:
+    def _test(self, fitter: _Fitter, draws: int) -> tuple[float, str]:
+        """The p-value of a goodness-of-fit test of the current fit, and why there
+        is none when it is NaN."""
         x = fitter.samples()
-        if not np.all(np.isfinite(fitter.params)) or len(x) < 3:
-            return math.nan
+        if not np.all(np.isfinite(fitter.params)):
+            return math.nan, "no fit to test"
+        if len(x) < 3:
+            return math.nan, "too few samples to test the fit"
         self.tests += 1
+        seed: dict[str, Any] = {_GOF_SEED: np.random.default_rng(self.tests)}
         try:
             res = _scipy_stats.goodness_of_fit(
                 fitter.d,
                 x,
                 known_params=fitter.fixed or None,
                 n_mc_samples=draws,
-                rng=np.random.default_rng(self.tests),
+                **seed,
             )
-        except Exception:
-            return math.nan
-        return float(res.pvalue)
+        except Exception as e:
+            return math.nan, f"goodness of fit failed: {type(e).__name__}: {e}"
+        return float(res.pvalue), ""
+
+
+# goodness_of_fit takes its generator as ``rng`` from scipy 1.15, ``random_state``
+# before
+_GOF_SEED = (
+    "rng"
+    if "rng" in inspect.signature(_scipy_stats.goodness_of_fit).parameters
+    else "random_state"
+)
 
 
 def _params_frame(f: Any, fitter: _Fitter, meta: Mapping[str, Any]) -> Any:
@@ -763,14 +835,20 @@ class _Threshold(Stateful):
     for the amplitude of complex Gaussian noise, exponential for its power,
     Weibull or lognormal for clutter with heavier tails).
 
-    The first ``learn`` frames only train the fit. With ``exclude=True`` (the
-    default) detected samples are left out of the fit, so strong targets do not
-    raise the threshold that should find them.
+    The first ``learn`` frames only train the fit. Samples beyond the level
+    noise exceeds with probability ``exclude`` (1e-6) are left out of it, so a
+    strong target does not raise the threshold meant to find it. That level is
+    far beyond the detection threshold on purpose: leaving out every detection
+    would also leave out the noise above the threshold, and a fit to the
+    truncated noise underestimates it (at ``pfa=0.1`` the false-alarm rate
+    rose more than twofold). Leaving out what lies beyond the 1e-6 level moves
+    the rate by under 1%. ``exclude=None`` keeps every sample.
 
     Each run of samples above the threshold gets a ``detection`` tag over its
     time span, with its largest sample as the value (a frame without a time axis
     gets one whole-frame tag and a sample-level ``detection`` annotation marking
-    them), and the frame's ``threshold`` annotation is the level used. The data and its contract pass through unchanged.
+    them), and the frame's ``threshold`` annotation is the level used. The data
+    and its contract pass through unchanged.
     """
 
     def __init__(self) -> None:
@@ -789,10 +867,12 @@ class _Threshold(Stateful):
         fixed: Mapping[str, float] | None = None,
         every: int = 1,
         learn: int = 5,
-        exclude: bool = True,
+        exclude: float | None = 1e-6,
     ) -> Annotated[Sig[float, N], may_provide("detection")]:
         if not 0 < pfa < 1:
             raise ValueError("pfa must be between 0 and 1")
+        if exclude is not None and not 0 < exclude < 1:
+            raise ValueError("exclude is a probability between 0 and 1, or None")
         key = _config_key(dist, window, fixed, every)
         if self.fitter is None or key != self.key:
             self.fitter = _Fitter(dist, window, fixed, every, keep_samples=False)
@@ -800,15 +880,17 @@ class _Threshold(Stateful):
         fitter = self.fitter
         x = np.asarray(f.data, dtype=float)
         out: Any = f
-        flagged = np.zeros(x.shape, dtype=bool)
         model = fitter.frozen() if fitter.frames >= learn else None
+        fit_x = x
         if model is not None:
             level = float(model.isf(pfa))
             flagged = x > level
             out = f.annotate(threshold=level)
             if flagged.any():
                 out = _tag_runs(out, "detection", flagged, x)
-        fitter.update(x[~flagged] if exclude else x)
+            if exclude is not None:  # beyond what noise reaches: not noise
+                fit_x = x[x <= float(model.isf(exclude))]
+        fitter.update(fit_x)
         return out  # type: ignore[return-value]
 
 

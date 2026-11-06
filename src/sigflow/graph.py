@@ -1109,6 +1109,11 @@ class Parallel(Node):
             or inner.defn.framed
         ):
             raise TypeError("parallel() wraps a single-input, data-only map block")
+        if getattr(inner.defn, "run_local", False):
+            raise TypeError(
+                f"{inner.name} keeps state across frames, which parallel workers "
+                "would split between them: use it in the graph itself"
+            )
         from .pools import check
 
         check(backend, inner.defn)

@@ -68,6 +68,8 @@ class Monitor:
     _pending_holds: dict[str, list[Any]] = field(default_factory=dict)
     _edges: dict[tuple[Any, Any], EdgeQueue] = field(default_factory=dict)
     _pending_hold_nodes: dict[Any, list[Any]] = field(default_factory=dict)
+    # the run's own copies of run-local stateful blocks, by node id
+    local_states: dict[Any, Any] = field(default_factory=dict)
 
     def stats(self, name: str, node: Any = None) -> Stats:
         """Stats for a node; nodes sharing a name get distinct rows (``fft``, ``fft#2``)."""
