@@ -1389,7 +1389,9 @@ def _unscope(t: Any) -> Any:
     if not isinstance(t, SignalType):
         return t
     dtype = (
-        DVar(t.dtype.name.split("#", 1)[0]) if isinstance(t.dtype, DVar) else t.dtype
+        t.dtype.renamed(t.dtype.name.split("#", 1)[0])
+        if isinstance(t.dtype, DVar)
+        else t.dtype
     )
     shape = (
         None

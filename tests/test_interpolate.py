@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 from scipy import interpolate as si
 
-from sigflow import Frame, Sig, dsp, run, source
+from sigflow import Frame, Sig, as_node, dsp, run, source
 from sigflow import interpolate as ip
 from sigflow.dims import N
 
@@ -177,3 +177,138 @@ def test_the_contract_says_the_tag_may_appear():
     from sigflow.types import maybe_names
 
     assert "interpolated" in maybe_names(ip.resample.out_type)
+
+
+# -- review fixes: contracts, untimed frames, context after holes, memory ----- #
+
+
+def framed(specs, rate=RATE):
+    """Frames from (values, t0 or None)."""
+    return as_node(
+        iter(
+            Frame(
+                np.asarray(v),
+                meta={} if t is None else {"t0": t},
+                stream={"rate": rate},
+            )
+            for v, t in specs
+        )
+    )
+
+
+@pytest.mark.parametrize("make", [lambda: ip.resample(rate=2400.0), ip.fill_gaps])
+def test_outputs_of_varying_length_pass_a_full_contract_check(make):
+    x = signal(np.arange(640) / RATE)
+    out = run(
+        dsp.from_array(x, n=64, rate=RATE) >> make(), check="all", on_error="raise"
+    )
+    assert len({len(f.data) for f in out}) > 1 or make is ip.fill_gaps
+    partial = framed([(np.zeros(10), 0.0), (np.zeros(10), 0.010), (np.ones(10), 0.025)])
+    out = run(partial >> ip.fill_gaps(kind="linear"), check="all", on_error="raise")
+    assert [len(f.data) for f in out] == [10, 10, 5, 10]
+
+
+@pytest.mark.parametrize(
+    "dtype, result",
+    [("int64", "float64"), ("float32", "float64"), ("complex64", "complex128")],
+)
+@pytest.mark.parametrize("make", [lambda: ip.resample(rate=2.0), ip.fill_gaps])
+def test_the_contract_promotes_the_dtype_as_the_output_does(make, dtype, result):
+    from sigflow import Sig, from_iterable
+    from sigflow.dims import N
+    from sigflow.types import resolve
+
+    frame = Frame(np.arange(8).astype(dtype), meta={"t0": 0.0}, stream={"rate": 1.0})
+    g = from_iterable(lambda: iter([frame]), Sig[dtype, N]) >> make()
+    assert resolve(g.out_type, g.validate()).dtype == np.dtype(result)
+    out = run(g, check="all", on_error="raise")
+    assert all(f.data.dtype == np.dtype(result) for f in out)
+
+
+def test_a_frame_without_a_start_time_follows_on():
+    out = run(
+        framed([(np.arange(4.0), 10.0), (np.arange(4.0, 8.0), None)], rate=1.0)
+        >> ip.resample(rate=1.0, kind="linear"),
+        on_error="raise",
+    )
+    np.testing.assert_allclose(np.concatenate([f.data for f in out]), np.arange(8.0))
+    out = run(
+        framed(
+            [
+                (np.arange(4.0), 0.0),
+                (np.arange(4.0, 8.0), None),
+                (np.arange(8.0, 12.0), 8.0),
+            ],
+            rate=1.0,
+        )
+        >> ip.fill_gaps(kind="linear"),
+        on_error="raise",
+    )
+    assert sum(len(f.data) for f in out) == 12 and not any(
+        "interpolated" in f.tags for f in out
+    )
+
+
+def test_a_hole_waits_for_context_from_later_frames():
+    t = np.array([0, 1, 3, 4, 5.0])
+    one_sample_frames = [([v], ti) for v, ti in zip(t**2, t)]
+    out = run(framed(one_sample_frames, rate=1.0) >> ip.fill_gaps(), on_error="raise")
+    filled = [f for f in out if "interpolated" in f.tags]
+    assert filled[0].data[0] == pytest.approx(ip.interpolator(t, t**2)(np.array(2.0)))
+    assert [f.t0 for f in out] == [0, 1, 2, 3, 4, 5]
+    spline = run(
+        framed(one_sample_frames, rate=1.0) >> ip.fill_gaps(kind="spline", context=2),
+        on_error="raise",
+    )
+    assert [f.t0 for f in spline] == [0, 1, 2, 3, 4, 5]
+
+
+def test_too_few_samples_at_the_end_leave_the_hole_with_a_warning():
+    out = run(
+        framed([([0.0], 0.0), ([1.0], 1.0), ([9.0], 3.0)], rate=1.0)
+        >> ip.fill_gaps(kind="spline"),
+        on_error="raise",
+    )
+    assert [f.t0 for f in out] == [0, 1, 3]
+    assert any("could not fill" in i.message for i in out[-1].warnings)
+
+
+def test_history_stays_bounded_when_outputs_are_far_apart(monkeypatch):
+    peak = []
+    forget = ip._History.forget
+
+    def spy(self, before, context):
+        forget(self, before, context)
+        peak.append(len(self.t))
+
+    monkeypatch.setattr(ip._History, "forget", spy)
+    x = np.random.default_rng(0).normal(size=3200)
+    run(
+        dsp.from_array(x, n=64, rate=RATE) >> ip.resample(rate=0.1, kind="linear"),
+        on_error="raise",
+    )
+    assert max(peak) <= 64 + 1  # one frame and the context, not everything since
+
+
+def test_inherited_tags_keep_their_origin():
+    from sigflow import Tag, Tags
+
+    def frame(t0):
+        return Frame(
+            np.zeros(64),
+            meta={"t0": t0},
+            stream={"rate": RATE},
+            tags=Tags([Tag("calibrated", None, None, "detector")]),
+        )
+
+    out = run(as_node(iter([frame(0.0), frame(0.128)])) >> ip.resample(rate=2000.0))
+    origins = {(t.name, t.origin) for f in out for t in f.tags}
+    assert ("calibrated", "detector") in origins
+    assert ("interpolated", "resample") in origins
+    assert ("calibrated", "resample") not in origins
+
+
+def test_makima_says_which_scipy_it_needs(monkeypatch):
+    monkeypatch.setattr(ip, "_HAS_MAKIMA", False)
+    with pytest.raises(ValueError, match="needs scipy 1.13"):
+        ip.interpolator([0, 1, 2], [0, 1, 4], kind="makima")

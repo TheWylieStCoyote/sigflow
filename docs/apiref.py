@@ -132,6 +132,7 @@ PAGES: list[tuple[str, str, str, list[str]]] = [
             "sigflow.accepts",
             "sigflow.provides",
             "sigflow.may_provide",
+            "sigflow.promoted",
             "sigflow.clears",
             "sigflow.keep",
             "sigflow.drop",

@@ -9,8 +9,14 @@ New
   Akima, cubic spline, B-spline). `resample(rate=)` resamples a stream to any
   rate, matching interpolation of the whole signal (exactly for the local
   methods); `fill_gaps()` inserts interpolated frames where frames are
-  missing. Invented samples carry an `interpolated` tag. Guide:
+  missing, waiting for samples after a hole when frames are short. Invented
+  samples carry an `interpolated` tag; inherited tags keep their origin. The
+  output is promoted to floating point and varies in length, as its contract
+  says; memory stays bounded at any rate. `makima` needs SciPy 1.13. Guide:
   *Interpolation and resampling*.
+- `promoted(T)`: a dtype in an output contract that is the input's promoted to
+  floating point (int64 and float32 give float64, complex64 gives
+  complex128), for blocks that compute in floating point.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on

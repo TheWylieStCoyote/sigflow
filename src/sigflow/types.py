@@ -62,6 +62,7 @@ __all__ = [
     "may_provide",
     "maybe_names",
     "narrow",
+    "promoted",
     "provides",
     "requires",
     "resolve",
@@ -85,12 +86,39 @@ class TypeMismatch(TypeError):
 
 @dataclass(frozen=True)
 class DVar:
-    """A dtype variable: ``Sig[T, N] -> Sig[T, N]`` preserves the input dtype."""
+    """A dtype variable: ``Sig[T, N] -> Sig[T, N]`` preserves the input dtype.
+
+    With ``promote=True`` it stands for that dtype promoted to floating point,
+    ``numpy.result_type(T, float64)``: an output that is ``T`` computed in
+    floating point (int64 and float32 give float64, complex64 gives complex128).
+    Write it with :func:`promoted`."""
 
     name: str
+    promote: bool = False
 
     def __str__(self) -> str:
-        return self.name
+        return f"promoted({self.name})" if self.promote else self.name
+
+    def renamed(self, name: str) -> DVar:
+        return DVar(name, self.promote)
+
+    def of(self, bound: Any) -> Any:
+        """The dtype this variable stands for once its name is bound to ``bound``."""
+        if not self.promote or bound is Any:
+            return bound
+        try:
+            return np.result_type(bound, np.float64)
+        except TypeError:  # a Python class (dict, ...): nothing to promote
+            return Any
+
+
+def promoted(var: Any) -> DVar:
+    """The dtype of ``var`` promoted to floating point: for the output contract
+    of a block that computes in floating point, ``outputs=Sig[promoted(T), N]``
+    for an input ``Sig[T, N]``. An int64 input gives float64, float32 gives
+    float64, complex64 gives complex128."""
+    name = var.name if isinstance(var, DVar) else getattr(var, "__name__", var)
+    return DVar(str(name), promote=True)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +231,7 @@ def scoped(t: Any, scope: str) -> Any:
         return t
     dtype = t.dtype
     if isinstance(dtype, DVar) and "#" not in dtype.name:
-        dtype = DVar(f"{dtype.name}#{scope}")
+        dtype = dtype.renamed(f"{dtype.name}#{scope}")
     shape = t.shape
     if shape is not None:
         shape = tuple(
@@ -393,7 +421,7 @@ class SignalType:
         """Substitute bound symbolic dimensions with their integers."""
         t = self
         if isinstance(self.dtype, DVar) and env.value(self.dtype.name) is not None:
-            t = t.with_(dtype=env.value(self.dtype.name))
+            t = t.with_(dtype=self.dtype.of(env.value(self.dtype.name)))
         if self.shape is None:
             return t
         shape = tuple(
@@ -412,6 +440,17 @@ class SignalType:
             return env
         if isinstance(self.dtype, DVar):
             dtype, _ = _array_metadata(value)
+            if self.dtype.promote:  # the value's dtype is T's promoted, not T's
+                bound = env.value(self.dtype.name)
+                expected = self.dtype.of(bound) if bound is not None else None
+                if expected not in (None, Any) and dtype != expected:
+                    raise TypeMismatch(
+                        f"{where}: dtype {_dn(dtype)} produced, {_dn(expected)} "
+                        f"promised ({self.dtype})"
+                    )
+                if self.shape is not None:
+                    self.with_(dtype=dtype).check(value, env, where)
+                return env
             env.bind_dtype(self.dtype.name, dtype, where)
             if self.shape is not None:
                 self.with_(dtype=dtype).check(value, env, where)
@@ -805,6 +844,15 @@ as_type = _as_type
 def _unify_dtype(produced: Any, required: Any, env: Env, where: str) -> None:
     if produced is Any or required is Any:
         return  # gradual dtype information must not bind a variable to Any
+    if isinstance(produced, DVar) and produced.promote:
+        bound = env.value(produced.name)
+        if bound is None:
+            return  # promotion cannot be run backwards: nothing to bind
+        produced = produced.of(bound)
+        if produced is Any:
+            return
+    if isinstance(required, DVar) and required.promote:
+        return  # only outputs are promoted; as a requirement it says nothing
     if isinstance(produced, DVar) and isinstance(required, DVar):
         env.union_dtype(produced.name, required.name, where)
         return
@@ -947,7 +995,11 @@ def narrow(produced: Any, required: Any, where: str = "") -> Any:
         dtype = r.dtype if p.dtype is Any else p.dtype
         if isinstance(dtype, DVar):
             bound = env.value(dtype.name)
-            dtype = bound if bound is not None else DVar(env.find(dtype.name))
+            dtype = (
+                dtype.of(bound)
+                if bound is not None
+                else dtype.renamed(env.find(dtype.name))
+            )
         if p.shape is None:
             shape = r.shape
         elif r.shape is None:
@@ -981,7 +1033,7 @@ def resolve(t: Any, env: Env) -> Any:
     if isinstance(dtype, DVar):
         bound = env.value(dtype.name)
         if bound is not None:
-            dtype = bound
+            dtype = dtype.of(bound)
     shape = t.shape
     if shape is not None:
         shape = tuple(
@@ -1247,8 +1299,11 @@ def _unify_dim(p: Dim, r: Dim, env: Env, where: str) -> None:
 def _dn(dt: Any) -> str:
     if dt is Any:
         return "Any"
-    if isinstance(dt, (np.dtype, DVar)):
-        return _plain(dt.name) if isinstance(dt, DVar) else dt.name
+    if isinstance(dt, DVar):
+        name = _plain(dt.name)
+        return f"promoted({name})" if dt.promote else name
+    if isinstance(dt, np.dtype):
+        return dt.name
     return dt.__name__
 
 

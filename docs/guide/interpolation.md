@@ -31,8 +31,8 @@ length, down to frames of one sample.
 |---|---|---|
 | `"linear"` | straight lines between samples | exactly |
 | `"pchip"` (default) | a cubic that does not overshoot: monotone data stays monotone | exactly |
-| `"akima"`, `"makima"` | cubics that follow the local shape, with little overshoot | exactly |
-| `"cubic"` | a natural cubic spline, smoothest | to about 1e-11 |
+| `"akima"`, `"makima"` | cubics that follow the local shape, with little overshoot (`makima` needs SciPy 1.13 or later) | exactly |
+| `"cubic"` | a cubic spline with "not-a-knot" ends (scipy's `CubicSpline` default), smoothest | to about 1e-11 |
 | `"spline"` | a cubic B-spline through the samples | to about 1e-11 |
 
 The **local** methods (linear, pchip, akima, makima) depend only on a few
@@ -55,14 +55,22 @@ unwrapped phase separately can be more faithful; do that with two branches.
 Output samples fall on an exact grid, `first input time + k / rate`, and the
 `rate` stream annotation is rewritten.
 
-- **Frame lengths change.** Output frames are not one per input frame. Follow
-  with `dsp.chunk(n=256)` for frames of a fixed length.
+- **Frame lengths change.** Output frames are not one per input frame, and
+  their lengths vary; the output contract says so (any length). Follow with
+  `dsp.chunk(n=256)` for frames of a fixed length.
+- **The output is floating point.** An integer or `float32` input gives
+  `float64`, `complex64` gives `complex128`, and the output contract says so
+  (`Sig[promoted(T), ...]`), so a block downstream that takes only integers is
+  refused when the graph is built.
 - **Interpolation does not filter.** Resampling *down* without a low-pass
   filter first lets content above the new Nyquist frequency alias. Filter
   first (`dsp.fir`), or use `dsp.resample` for integer ratios, where the
   polyphase filter does it.
 - **Jittered frames are fine.** Each input frame's `t0` is used when present,
-  so frames that start at uneven times are placed where they belong.
+  so frames that start at uneven times are placed where they belong. A frame
+  without `t0` follows on from the frame before it.
+- **Memory stays bounded.** Only the samples the next output needs are kept,
+  so resampling a fast stream to a very low rate does not accumulate input.
 - **Holes are bridged.** Where whole samples are missing between frames, the
   output interpolates across them and tags those samples `interpolated` over
   their time span.
@@ -89,8 +97,15 @@ g = source >> decode >> ip.fill_gaps(max_gap=0.5)
 
 - `max_gap=` (seconds) leaves longer holes alone: past some length, an
   invented signal is worse than none.
-- The stream needs `t0` annotations to have holes at all; frames without them
-  pass through.
+- After a hole, the frames that follow are **held back** until there are
+  `context` samples after it, so the interpolation sees both sides even when
+  frames are shorter than `context`. If the stream ends (or another hole
+  comes) before there are enough for `kind`, the hole is left as it is and
+  the frame after it carries a warning issue saying so.
+- A frame without `t0` follows on from the frame before it. A stream that
+  never had times has no holes to find, and passes through.
+- Frames that pass through are promoted to floating point, like the
+  inserted ones, so the whole output has one dtype.
 - Failed frames pass *around* stream blocks, so a frame that failed with the
   default `on_error="propagate"` reaches the output as a failed frame, and its
   time is not filled. Drop it (`on_error="drop"`) to have it filled.
@@ -105,7 +120,9 @@ from `resample`.
   checkpoint cannot save: they are listed in `Checkpoint.skipped` and start
   fresh on resume, with a seam at the resume point.
 - **Sample-level annotations** (`samples=`) are dropped: they belong to the
-  old sample grid.
+  old sample grid. Tags are carried over by time, and keep their origin.
+- **One channel.** The blocks' contracts are for one-dimensional frames.
+  `ip.interpolator` takes channels after the time axis, for whole arrays.
 - **One stream.** Interpolating one stream at another's sample times (for
   sensor fusion) needs a join across two streams, which these blocks do not
   do yet; `align()` pairs frames by nearest time instead.
