@@ -16,6 +16,8 @@ count, mean, var, skew, kurt = run(g)[-1].data  # over all 6400 samples
 | `moments` | count, mean, variance, skewness, kurtosis | a summary of every sample so far, or of the last `window` frames |
 | `outliers` | the frame, with `outlier` tags on the outlying samples | the last `window` frames, if `window` is set |
 | `change_point` | the frame, with a `changed` tag where the mean or spread changes | a reference summary and two running sums |
+| `fit` | the parameters of a fitted `scipy.stats` distribution | running sums, or the last `window` frames' samples |
+| `threshold` | the frame, with `detection` tags on samples above a level set by a fitted noise distribution | as `fit` |
 
 ## Moments
 
@@ -94,6 +96,89 @@ deviations of the score. `threshold` trades false alarms for delay: raise it
 for fewer false alarms and later detection. The scores assume independent
 samples, so correlated noise (filtered, or oversampled) needs a larger
 `threshold`.
+
+## Fitting distributions
+
+`fit` fits a continuous distribution of `scipy.stats` to the stream's samples
+by maximum likelihood:
+
+```python
+last = run(source >> stats.fit(dist="gamma"))[-1]
+a, loc, scale = last.data
+model = scipy.stats.gamma(*last.data)  # the fitted distribution
+```
+
+The output is a vector of the parameters in scipy's order: the shapes, then
+`loc`, then `scale`. `stats.param_names("gamma")` gives `("a", "loc",
+"scale")`, and the frame's `params` annotation names them too.
+
+**Fixed parameters.** `fixed={"loc": 0}` holds a parameter instead of
+fitting it. A distribution bounded below (`rayleigh`, `gamma`, `weibull_min`,
+`lognorm` and so on) has `loc` fixed at 0 by default, because amplitudes and
+powers start at zero. Fitting `loc` as well is up to 100 times slower and much
+less stable on small samples. Pass `fixed={}` to fit everything. Samples
+outside the support (a negative amplitude) are ignored, with a warning.
+
+**Exact running fits.** For `norm`, `expon`, `rayleigh`, `lognorm` and `gamma`
+(`stats.EXACT_FITS`, with the default `fixed`), the fit depends only on a few
+running sums, which merge across frames like `Moments`. These fits match
+`dist.fit` on every sample, keep no samples, and with the default
+`window=None` cover the whole stream so far.
+
+**Windowed fits.** Any other distribution (`weibull_min`, `rice`, ...) is
+fitted to the samples of the last `window` frames, and needs `window`. Its fit
+takes milliseconds (Weibull about 2.5 ms and Rice about 4 ms on 640 samples),
+so `every=k` refits only every `k` frames and repeats the last fit between.
+
+**How much data.** One frame is seldom enough: a gamma shape of 2 fitted to
+64 samples lands between 1.6 and 2.7 nine times in ten; over 20 frames (1280
+samples), between 1.9 and 2.1.
+
+**Is the fit any good?** `gof_every=m` tests the fit every `m` refits with
+`scipy.stats.goodness_of_fit`, tags `poor_fit` while the p-value (the
+`fit_pvalue` annotation) is below `alpha`, and needs `window`. A plain KS test
+against the fitted distribution would be wrong: the parameters came from the
+same data, so it almost never rejects (0 rejections in 200 correct fits at
+α=5%, where 5% is expected). `goodness_of_fit` corrects for that by
+simulation, at tens of milliseconds a test; its smallest p-value is
+`1 / (draws + 1)`, so `alpha` must be above that.
+
+## Thresholds from a noise model
+
+`threshold` sets a detection threshold from a fitted noise distribution, for a
+false-alarm probability you choose, and tags the samples above it:
+
+```python
+g = amplitude >> stats.threshold(dist="rayleigh", pfa=1e-6, window=8)
+for f in run(g):
+    hits = f.mask("detection")
+```
+
+- Each frame is tested against the fit of the frames **before** it, at
+  `dist.isf(pfa, *params)`. The first `learn` frames (5) only train the fit.
+- **Detected samples are kept out of the fit** (`exclude=True`), so a strong
+  target does not raise the threshold meant to find it.
+- Each run of detected samples gets a `detection` tag over its time span,
+  with its largest sample as the value, and the frame's `threshold`
+  annotation is the level used. Frames without a time axis get a whole-frame
+  tag and a sample-level `detection` annotation.
+
+**The false-alarm rate stays where it was set** while the noise follows the
+distribution. On Rayleigh noise, `pfa=1e-3` measured 1.01e-3 with the whole
+stream fitted, 1.04e-3 with a 4-frame window, and 1.14e-3 with a 1-frame
+window of 256 samples (a small fit adds a little). A fixed level does not
+adapt: set for the starting noise, it gave 4.9e-2 over a run in which the
+noise level rose threefold.
+
+**Rising noise raises the rate.** The fit trails the noise. With the noise
+level rising threefold over 100 frames, `pfa=1e-3` measured 1.5e-3 with a
+4-frame window and 4.2e-3 with a 20-frame window. Use a window as short as
+the fit allows when the noise changes.
+
+**Pick the distribution to suit the data:** Rayleigh for the amplitude of
+complex Gaussian noise, exponential for its power, Weibull or lognormal for
+clutter with heavier tails. A wrong family gives a wrong rate however well its
+parameters fit: test it first with `fit(..., gof_every=)`.
 
 ## State, checkpoints and reuse
 

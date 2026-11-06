@@ -29,6 +29,11 @@ from sigflow.stats import Moments
 RATE = 1000.0
 
 
+def rvs(dist, *args, **kwargs) -> np.ndarray:
+    """Random samples as a float array (scipy's stubs allow a scalar)."""
+    return np.asarray(dist.rvs(*args, **kwargs), dtype=float)
+
+
 def stream(x: np.ndarray, n: int = 64):
     # from_array called with an array runs at once: as_node makes it a graph node
     return as_node(dsp.from_array(np.asarray(x, dtype=float), n=n, rate=RATE))
@@ -228,3 +233,176 @@ def test_bad_options_are_refused():
         run(steps(1) >> stats.change_point(on="median"), on_error="raise")
     with pytest.raises(ValueError, match="window"):
         run(steps(1) >> stats.moments(window=0), on_error="raise")
+
+
+# -- fit ---------------------------------------------------------------------- #
+
+
+def timed(x: np.ndarray, n: int = 256):
+    """Frames of ``x`` with start times, so tags have time spans."""
+    frames = [
+        Frame(x[i : i + n], meta={"t0": i / RATE}, stream={"rate": RATE})
+        for i in range(0, len(x) - n + 1, n)
+    ]
+    return as_node(iter(frames))
+
+
+SAMPLES = {
+    "norm": lambda r: r.normal(3, 2, 3200),
+    "expon": lambda r: r.exponential(2, 3200),
+    "rayleigh": lambda r: rvs(ss.rayleigh, scale=2, size=3200, random_state=r),
+    "lognorm": lambda r: r.lognormal(0.5, 0.4, 3200),
+    "gamma": lambda r: r.gamma(2, 1.5, 3200),
+}
+
+
+@pytest.mark.parametrize("name", sorted(stats.EXACT_FITS))
+def test_running_fits_match_fitting_every_sample(name):
+    x = SAMPLES[name](np.random.default_rng(1))
+    out = run(stream(x) >> stats.fit(dist=name), on_error="raise")
+    expected = np.asarray(
+        getattr(ss, name).fit(x, **({} if name == "norm" else {"floc": 0})), dtype=float
+    )
+    np.testing.assert_allclose(out[-1].data, expected, rtol=1e-9, atol=1e-12)
+    assert out[-1].stream["params"] == stats.param_names(name)
+    assert out[-1].stream["dist"] == name
+    assert out[-1].meta["fit_samples"] == 3200
+    assert "rate" not in out[-1].stream  # parameters are not samples
+
+
+def test_a_window_fits_the_last_frames_and_every_spaces_the_refits():
+    x = rvs(ss.weibull_min, 1.5, scale=2, size=64 * 30, random_state=2)
+    out = run(
+        stream(x) >> stats.fit(dist="weibull_min", window=10, every=5),
+        on_error="raise",
+    )
+    assert len(out) == 30
+    np.testing.assert_array_equal(out[25].data, out[29].data)  # one refit in 5
+    expected = np.asarray(ss.weibull_min.fit(x[64 * 16 : 64 * 26], floc=0), dtype=float)
+    np.testing.assert_allclose(out[25].data, expected, rtol=1e-6)
+
+
+def test_the_output_contract_has_one_value_per_parameter():
+    assert (dsp.sine(n=8, frames=1) >> stats.fit(dist="gamma")).out_type.shape == (3,)
+    assert (dsp.sine(n=8, frames=1) >> stats.fit).out_type.shape == (2,)
+
+
+def test_samples_outside_the_support_are_ignored_with_a_warning():
+    x = np.r_[np.full(10, -1.0), rvs(ss.rayleigh, size=54, random_state=3)]
+    out = run(stream(x) >> stats.fit(dist="rayleigh"), on_error="raise")
+    assert out[0].meta["fit_samples"] == 54
+    assert any("10 samples outside" in i.message for i in out[0].warnings)
+
+
+def test_a_distribution_without_running_sums_needs_a_window():
+    with pytest.raises(ValueError, match="needs the samples: give window="):
+        run(stream(np.ones(64)) >> stats.fit(dist="weibull_min"), on_error="raise")
+    with pytest.raises(ValueError, match="no continuous distribution"):
+        run(stream(np.ones(64)) >> stats.fit(dist="nonsense"), on_error="raise")
+    with pytest.raises(ValueError, match="no parameter c"):
+        run(
+            stream(np.ones(64)) >> stats.fit(dist="gamma", fixed={"c": 1}),
+            on_error="raise",
+        )
+
+
+def test_goodness_of_fit_tells_a_wrong_family():
+    rng = np.random.default_rng(4)
+    for x, poor in [
+        (rng.gamma(2, 1.5, 64 * 12), False),
+        (rng.lognormal(0.5, 0.6, 64 * 12), True),
+    ]:
+        out = run(
+            stream(x) >> stats.fit(dist="gamma", window=10, gof_every=11),
+            on_error="raise",
+        )
+        assert (
+            "poor_fit" in out[-1].tags
+        ) == poor  # tests at refits 1 and 12: frame 11, 640 samples
+    with pytest.raises(ValueError, match="can never reject"):
+        run(
+            stream(np.ones(64))
+            >> stats.fit(dist="gamma", window=2, gof_every=1, alpha=0.01),
+            on_error="raise",
+        )
+
+
+def test_a_fit_starts_afresh_each_run():
+    g = dsp.noise(n=64, frames=10, seed=5) >> stats.fit
+    first, second = run(g), run(g)
+    assert first[-1].meta["fit_samples"] == second[-1].meta["fit_samples"] == 640
+    np.testing.assert_array_equal(first[-1].data, second[-1].data)
+
+
+# -- threshold ---------------------------------------------------------------- #
+
+
+def test_the_false_alarm_rate_is_what_was_set():
+    alarms = tested = 0
+    for seed in range(8):
+        x = rvs(ss.rayleigh, scale=1.7, size=256 * 60, random_state=seed)
+        out = run(timed(x) >> stats.threshold(pfa=1e-2), on_error="raise")
+        for f in out[5:]:
+            tested += len(f.data)
+            alarms += int(f.mask("detection").sum())
+    assert 0.8e-2 < alarms / tested < 1.2e-2
+
+
+def test_a_target_is_found_and_kept_out_of_the_noise_fit():
+    x = rvs(ss.rayleigh, size=256 * 20, random_state=3)
+    x[256 * 12 + 100 : 256 * 12 + 103] += 12.0
+    out = run(timed(x) >> stats.threshold(pfa=1e-6), on_error="raise")
+    found = [i for i, f in enumerate(out) if "detection" in f.tags]
+    assert found == [12]
+    assert np.flatnonzero(out[12].mask("detection")).tolist() == [100, 101, 102]
+    assert out[12].tags["detection"] == pytest.approx(
+        x[256 * 12 + 100 : 256 * 12 + 103].max()
+    )
+    assert out[13].meta["threshold"] == pytest.approx(
+        out[12].meta["threshold"], rel=0.02
+    )
+    assert "threshold" not in out[4].meta  # the first 5 frames only learn
+
+
+def test_the_threshold_follows_the_noise():
+    level = np.repeat([1.0, 4.0], 256 * 10)
+    x = level * rvs(ss.rayleigh, size=level.size, random_state=6)
+    out = run(timed(x) >> stats.threshold(pfa=1e-3, window=3), on_error="raise")
+    assert out[19].meta["threshold"] > 3 * out[9].meta["threshold"]
+
+
+def test_frames_without_time_mark_detections_per_sample():
+    x = rvs(ss.rayleigh, size=256 * 8, random_state=7)
+    x[256 * 6 + 40] = 50.0
+    frames = [
+        Frame(x[i : i + 256], stream={"rate": RATE}) for i in range(0, len(x), 256)
+    ]
+    out = run(as_node(iter(frames)) >> stats.threshold(pfa=1e-6), on_error="raise")
+    assert np.flatnonzero(out[6].samples["detection"]).tolist() == [40]
+
+
+@pytest.mark.parametrize(
+    "make_block",
+    [
+        lambda: stats.fit(dist="gamma"),
+        lambda: stats.fit(dist="weibull_min", window=3),
+        lambda: stats.threshold(dist="norm"),
+    ],
+)
+def test_fits_checkpoint_to_a_file_and_resume(tmp_path, make_block):
+    def make():
+        return (
+            dsp.noise(n=64, frames=30, seed=1) >> dsp.offset(value=10.0) >> make_block()
+        )
+
+    h = make().start(paused=True)
+    h.step(8)
+    deadline = time.time() + 10
+    while h.monitor.produced < 8 and time.time() < deadline:
+        time.sleep(0.01)
+    h.checkpoint(str(tmp_path / "ck.pkl"))
+    h.stop()
+    rest = run(make(), resume=str(tmp_path / "ck.pkl"))
+    full = run(make())
+    np.testing.assert_array_equal(rest[-1].data, full[-1].data)
+    assert rest[-1].meta.get("threshold") == full[-1].meta.get("threshold")

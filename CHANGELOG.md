@@ -39,8 +39,13 @@ New
   matching `scipy.stats.describe` (`Moments` is the mergeable summary behind
   it); `outliers` tags outlying samples by a robust (median / MAD) score;
   `change_point` tags the frame where the mean or spread changes (two-sided
-  CUSUM), with the likely onset. Each use of a block has its own state, every
-  run starts afresh, and checkpoints capture it. Guide: *Statistics across
+  CUSUM), with the likely onset. `fit` fits a `scipy.stats` distribution to
+  the samples by maximum likelihood (exactly from running sums for norm,
+  expon, rayleigh, lognorm and gamma; over a window of frames for the rest),
+  with an optional `goodness_of_fit` test; `threshold` tags samples above a
+  level set by a fitted noise distribution for a chosen false-alarm
+  probability. Each use of a block has its own state, every run starts
+  afresh, and checkpoints capture it. Guide: *Statistics across
   frames*.
 - A `Stateful` block may define `reset()`: every run calls it before starting
   (and before restoring a checkpoint), so the block starts afresh. Without it,
