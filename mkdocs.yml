@@ -41,6 +41,7 @@ nav:
       - Array backends and GPU: guide/array-backends.md
       - Time, units and slicing: guide/time-units-slicing.md
       - Interpolation and resampling: guide/interpolation.md
+      - Integration across frames: guide/integration.md
       - Notebooks and control: guide/notebooks.md
       - Files, sockets and GNU Radio: guide/io.md
       - Persistence and replay: guide/persistence.md
@@ -60,6 +61,7 @@ nav:
       - sigflow.dsp: reference/api/dsp.md
       - sigflow.linalg: reference/api/linalg.md
       - sigflow.interpolate: reference/api/interpolate.md
+      - sigflow.integrate: reference/api/integrate.md
       - sigflow.io: reference/api/io.md
       - sigflow.plot: reference/api/plot.md
       - Diagrams and reports: reference/api/drawing.md

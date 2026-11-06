@@ -1,0 +1,138 @@
+"""Integration across frame boundaries: a stream integrated in frames matches the
+whole signal integrated at once, and holes, resets and leaks do what they say."""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pytest
+from scipy import integrate as si
+
+from sigflow import Frame, as_node, dsp, run
+from sigflow import integrate as ig
+
+RATE = 1000.0
+T = np.arange(640) / RATE
+X = np.cos(2 * np.pi * 7 * T) + 0.5
+TRUTH = np.sin(2 * np.pi * 7 * T) / (2 * np.pi * 7) + 0.5 * T
+
+
+def stream(x: np.ndarray, n: int = 64):
+    # from_array called with an array runs at once: as_node makes it a graph node
+    return as_node(dsp.from_array(np.asarray(x), n=n, rate=RATE))
+
+
+def frames(x, starts, n=64, units: str | None = "V", tag=None):
+    """Frames ``starts`` (indices of n-sample slots) of ``x``, with times and units;
+    ``tag`` maps a position in ``starts`` to a function tagging that frame."""
+    out = []
+    for k, s in enumerate(starts):
+        f = Frame(
+            x[s * n : (s + 1) * n],
+            meta={"t0": s * n / RATE},
+            stream={"rate": RATE, **({"units": units} if units else {})},
+        )
+        if tag and k in tag:
+            f = tag[k](f)
+        out.append(f)
+    return as_node(iter(out))
+
+
+def joined(out: list[Frame]) -> np.ndarray:
+    return np.concatenate([f.data for f in out])
+
+
+@pytest.mark.parametrize("n", [1, 7, 64])
+def test_a_running_trapezoid_matches_the_whole_signal(n):
+    x = X[: n * (640 // n)]
+    out = run(stream(x, n) >> ig.cumulative, on_error="raise")
+    whole = si.cumulative_trapezoid(x, dx=1 / RATE, initial=0)
+    np.testing.assert_allclose(joined(out), whole, atol=1e-14)
+
+
+def test_simpson_is_as_accurate_as_on_the_whole_signal():
+    out = joined(run(stream(X) >> ig.cumulative(method="simpson"), on_error="raise"))
+    whole = si.cumulative_simpson(X, dx=1 / RATE, initial=0)
+    assert np.abs(out - TRUTH).max() < 3 * np.abs(whole - TRUTH).max()
+    assert (
+        np.abs(out - TRUTH).max()
+        < 1e-7
+        < np.abs(joined(run(stream(X) >> ig.cumulative)) - TRUTH).max()
+    )
+
+
+def test_frame_integrals_add_up_to_the_whole():
+    out = run(stream(X) >> ig.definite, on_error="raise")
+    assert sum(f.data for f in out) == pytest.approx(
+        si.trapezoid(X, dx=1 / RATE), rel=1e-13
+    )
+    win = run(stream(X) >> ig.definite(window=3), on_error="raise")
+    assert win[-1].data == pytest.approx(sum(f.data for f in out[-3:]))
+    assert "rate" not in out[0].stream  # one value per frame, not samples
+
+
+def test_initial_is_the_starting_value():
+    out = run(stream(np.zeros(128)) >> ig.cumulative(initial=2.5), on_error="raise")
+    assert np.all(joined(out) == 2.5)
+
+
+def test_a_hole_is_bridged_with_a_warning_or_restarts_the_integral():
+    ones = np.ones(64 * 6)
+    bridged = run(frames(ones, [0, 1, 3, 4]) >> ig.cumulative, on_error="raise")
+    assert bridged[-1].data[-1] == pytest.approx((5 * 64 - 1) / RATE)  # as if no hole
+    assert any("bridged a gap of 0.064" in i.message for i in bridged[2].warnings)
+    reset = run(
+        frames(ones, [0, 1, 3, 4]) >> ig.cumulative(gaps="reset"), on_error="raise"
+    )
+    assert [sorted(f.tags.names) for f in reset] == [[], [], ["integral_reset"], []]
+    assert reset[2].data[0] == 0 and reset[3].data[-1] == pytest.approx(127 / RATE)
+
+
+def test_reset_on_holds_the_integral_at_zero_where_the_tag_applies():
+    still = {1: lambda f: f.tag("still", span=(0.074, 0.084))}  # samples 74-83
+    out = run(
+        frames(np.ones(64 * 3), [0, 1, 2], tag=still)
+        >> ig.cumulative(reset_on="still"),
+        on_error="raise",
+    )
+    y = joined(out)
+    assert y[73] == pytest.approx(0.073)
+    assert np.all(y[74:84] == 0)
+    assert y[84] == pytest.approx(0.001) and y[-1] == pytest.approx((191 - 83) / RATE)
+
+
+def test_a_leak_stops_a_bias_from_growing_without_bound():
+    bias = np.full(64 * 200, 0.001)
+    out = run(
+        frames(bias, range(200), units=None) >> ig.cumulative(leak=2.0),
+        on_error="raise",
+    )
+    t_end = len(bias) / RATE
+    assert out[-1].data[-1] == pytest.approx(
+        0.001 * 2.0 * (1 - math.exp(-t_end / 2.0)), rel=1e-3
+    )
+
+
+def test_the_output_is_in_units_times_seconds():
+    out = run(frames(np.ones(128), [0, 1]) >> ig.cumulative, on_error="raise")
+    assert out[0].stream["units"] == "V*s"
+    d = run(frames(np.ones(128), [0, 1]) >> ig.definite, on_error="raise")
+    assert d[0].stream["units"] == "V*s"
+
+
+def test_each_run_starts_from_zero():
+    g = dsp.sine(n=64, frames=4) >> ig.cumulative
+    assert np.array_equal(run(g)[-1].data, run(g)[-1].data)
+
+
+def test_bad_options_are_refused():
+    for kw, match in [
+        ({"method": "romberg"}, "method must be one of"),
+        ({"leak": 0}, "positive"),
+        ({"gaps": "skip"}, "gaps must be"),
+    ]:
+        with pytest.raises(ValueError, match=match):
+            run(dsp.sine(n=8, frames=1) >> ig.cumulative(**kw), on_error="raise")
+    with pytest.raises(ValueError, match="rate"):
+        run(dsp.from_array(np.ones(8), n=4) >> ig.cumulative, on_error="raise")

@@ -17,6 +17,14 @@ New
 - `promoted(T)`: a dtype in an output contract that is the input's promoted to
   floating point (int64 and float32 give float64, complex64 gives
   complex128), for blocks that compute in floating point.
+- `sigflow.integrate`: integration across frame boundaries. `cumulative` gives
+  the running integral at every sample (trapezoid, exactly as on the whole
+  signal, or Simpson), with a leak (`leak=tau`) and tag-driven resets
+  (`reset_on=`) against drift; `definite` gives the integral over each frame
+  (or the last few), and the values add up to the integral of the stream.
+  Holes in the time axis are bridged with a warning or restart the integral;
+  the output's units are the input's times seconds. Guide: *Integration
+  across frames*.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on
