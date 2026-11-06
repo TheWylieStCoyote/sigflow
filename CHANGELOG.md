@@ -23,8 +23,14 @@ New
   (`reset_on=`) against drift; `definite` gives the integral over each frame
   (or the last few), and the values add up to the integral of the stream.
   Holes in the time axis are bridged with a warning or restart the integral;
-  the output's units are the input's times seconds. Guide: *Integration
-  across frames*.
+  the output's units are the input's times seconds (`W` gives `J`). Guide:
+  *Integration across frames*.
+- Compound units: `sigflow.units` reads products, quotients and powers of its
+  symbols (`V*s`, `m/s^2`, `kg*m^2/s^2`, `V/Hz^0.5`), and units measuring the
+  same quantity are convertible however they are written (`J`, `W*s`, `N*m`;
+  `Hz`, `1/s`). New symbols: J, N, C, ohm, min and h. `units.product`,
+  `units.quotient` and `units.simplify` build the units of computed
+  quantities.
 - Documentation: a Getting started section (installation with a table of the
   optional extras, a first graph); an API reference generated from the code;
   a *Running graphs* page with every option of every entry point; guides on
@@ -213,6 +219,8 @@ New
 
 Changed
 
+- `units.compatible` and `units.factor` no longer treat a unit the registry
+  cannot read as convertible to itself; `factor` raises `UnitError` for it.
 - `on_error` must be `"propagate"`, `"raise"` or `"drop"`, in `run()` and in
   `@block(...)`; any other value is a `ValueError`. Before, a misspelt policy
   such as `"mark"` or `"skip"` silently behaved like `"propagate"`.

@@ -91,11 +91,16 @@ value per frame, not samples.
 
 ## Units
 
-The integral of a quantity in `V` is in `V*s`, and the output's `units`
-annotation says so. The unit registry does not know compound units yet, so
-`dsp.to_units` cannot convert `V*s`. Downstream blocks that require `V` are
-not stopped by the type checker, because the output contract leaves the unit
-open; check the annotation.
+The integral of a quantity is in its units times seconds, and the output's
+`units` annotation says so, as simply as it can: `W` gives `J`, `A` gives
+`C`, `m/s^2` gives `m/s`, `m/s` gives `m`, `V` gives `V*s` (see
+[compound units](time-units-slicing.md#units)). It converts like any other
+unit: `cumulative >> dsp.to_units("kJ")` on a power in `W`.
+
+The output *contract* leaves the unit open, because a block's contract cannot
+depend on its input's: downstream blocks that require `V` are not stopped by
+the type checker on an integral of volts. The annotation is right; check it, or
+convert with `to_units`, which reads it.
 
 ## Limitations
 

@@ -24,9 +24,9 @@ used when present, so a frame that starts late is a hole in the time axis: by
 default the integral bridges it (a straight line from the sample before to the
 sample after, with a warning issue), or restarts after it (``gaps="reset"``).
 
-Units: the integral of a quantity in ``V`` is in ``V*s``. The output's
-``units`` annotation says so, but the unit registry does not know compound
-units yet, so ``dsp.to_units`` cannot convert it.
+Units: the integral of a quantity is in its units times seconds, and the
+output's ``units`` annotation says so, as simply as it can: ``W`` gives ``J``,
+``m/s^2`` gives ``m/s``, ``A`` gives ``C``, ``V`` gives ``V*s``.
 
 The blocks keep their state in a generator, so a checkpoint cannot capture it:
 they are listed in ``Checkpoint.skipped`` and start from zero on resume.
@@ -59,8 +59,12 @@ METHODS = {"trapezoid": 1, "simpson": 2}
 
 
 def _units(f: Frame) -> dict[str, Any]:
+    """The units of the integral: the input's times seconds, tidied
+    (``W`` -> ``J``, ``m/s`` -> ``m``, ``V`` -> ``V*s``)."""
+    from .units import product, simplify
+
     u = f.stream.get("units")
-    return {"units": f"{u}*s"} if u else {}
+    return {"units": simplify(product(u, "s"))} if u else {}
 
 
 def _runs(mask: np.ndarray) -> list[tuple[int, int, bool]]:

@@ -336,10 +336,13 @@ sensors with different rates and jitter — recording the `skew` of each pair.
 ### Units
 
 The fourth slot of `Sig` is a unit. `sigflow.units` knows SI prefixes on the
-usual bases (V, A, W, Hz, s, m, rad, deg, dB, dBm, dBV, dBFS …; `pint` is used
-for anything else when installed). Unification rejects different units; when
-they are *convertible* the error says which `dsp.to_units("V")` to insert, and
-that block converts the data, the stream annotation and the type.
+usual symbols (V, A, W, J, N, C, Pa, ohm, Hz, s, min, h, m, g, rad, deg, dB, dBm,
+dBV, dBFS …; `pint` is used for any other symbol when installed), and compound
+units made of them: `V*s`, `m/s^2`, `kg*m^2/s^2`, `V/Hz^0.5`. Units measuring
+the same quantity are convertible however they are written (`J`, `W*s` and
+`N*m`). Unification rejects different units; when they are *convertible* the
+error says which `dsp.to_units("V")` to insert, and that block converts the
+data, the stream annotation and the type.
 
 ### Saving, replaying, checkpointing
 

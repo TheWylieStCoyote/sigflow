@@ -114,11 +114,28 @@ def test_a_leak_stops_a_bias_from_growing_without_bound():
     )
 
 
-def test_the_output_is_in_units_times_seconds():
-    out = run(frames(np.ones(128), [0, 1]) >> ig.cumulative, on_error="raise")
-    assert out[0].stream["units"] == "V*s"
-    d = run(frames(np.ones(128), [0, 1]) >> ig.definite, on_error="raise")
-    assert d[0].stream["units"] == "V*s"
+@pytest.mark.parametrize(
+    "units, integral",
+    [("V", "V*s"), ("W", "J"), ("m/s^2", "m/s"), ("m/s", "m"), ("mA", "mA*s")],
+)
+def test_the_output_is_in_units_times_seconds(units, integral):
+    out = run(
+        frames(np.ones(128), [0, 1], units=units) >> ig.cumulative, on_error="raise"
+    )
+    assert out[0].stream["units"] == integral
+    d = run(frames(np.ones(128), [0, 1], units=units) >> ig.definite, on_error="raise")
+    assert d[0].stream["units"] == integral
+
+
+def test_the_integral_converts_like_any_unit():
+    g = (
+        frames(np.ones(64 * 3), [0, 1, 2], units="W")
+        >> ig.cumulative
+        >> dsp.to_units("kJ")
+    )
+    out = run(g, on_error="raise")
+    assert out[-1].stream["units"] == "kJ"
+    assert out[-1].data[-1] == pytest.approx((3 * 64 - 1) / RATE / 1000)
 
 
 def test_each_run_starts_from_zero():
